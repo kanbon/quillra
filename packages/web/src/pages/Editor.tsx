@@ -1,6 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { Button } from "@/components/atoms/Button";
+import { Modal } from "@/components/atoms/Modal";
+import { Spinner } from "@/components/atoms/Spinner";
 import { ChatComposer } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
 import { EditorToolbar } from "@/components/organisms/EditorToolbar";
@@ -20,8 +23,8 @@ export function EditorPage() {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [previewLabel, setPreviewLabel] = useState<string>("");
   const [split, setSplit] = useState(42);
-  const [publishMessage, setPublishMessage] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [showPublishModal, setShowPublishModal] = useState(false);
 
   const { data: project } = useQuery({
     queryKey: ["project", id],
@@ -47,12 +50,6 @@ export function EditorPage() {
   const publishMut = useMutation({
     mutationFn: () =>
       apiJson<{ ok: boolean; message: string }>(`/api/projects/${id}/publish`, { method: "POST" }),
-    onSuccess: (res) => {
-      setPublishMessage(res.message);
-    },
-    onError: (e: Error) => {
-      setPublishMessage(e.message);
-    },
   });
 
   const refreshPreview = useCallback(() => {
@@ -89,15 +86,10 @@ export function EditorPage() {
         canPublish={Boolean(canPublish)}
         publishing={publishMut.isPending}
         onPublish={() => {
-          setPublishMessage(null);
-          publishMut.mutate();
+          publishMut.reset();
+          setShowPublishModal(true);
         }}
       />
-      {publishMessage && (
-        <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-center text-xs text-neutral-700">
-          {publishMessage}
-        </div>
-      )}
       {error && (
         <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{error}</div>
       )}
@@ -147,6 +139,60 @@ export function EditorPage() {
           />
         </section>
       </div>
+
+      <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>
+        <h3 className="mb-1 text-lg font-semibold text-neutral-900">Publish changes</h3>
+
+        {publishMut.isIdle && (
+          <>
+            <p className="mb-6 text-sm text-neutral-500">
+              This will commit any pending edits and push to GitHub.
+            </p>
+            <Button
+              type="button"
+              className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
+              onClick={() => publishMut.mutate()}
+            >
+              Publish to GitHub
+            </Button>
+          </>
+        )}
+
+        {publishMut.isPending && (
+          <div className="flex flex-col items-center py-6">
+            <Spinner className="mb-3 size-6" />
+            <p className="text-sm text-neutral-500">Publishing…</p>
+          </div>
+        )}
+
+        {publishMut.isSuccess && (
+          <>
+            <p className="mb-6 text-sm text-neutral-600">{publishMut.data?.message}</p>
+            <Button
+              type="button"
+              className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
+              onClick={() => setShowPublishModal(false)}
+            >
+              Done
+            </Button>
+          </>
+        )}
+
+        {publishMut.isError && (
+          <>
+            <p className="mb-6 text-sm text-red-600">
+              {publishMut.error instanceof Error ? publishMut.error.message : "Publish failed"}
+            </p>
+            <Button
+              type="button"
+              className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
+              onClick={() => publishMut.mutate()}
+            >
+              Retry
+            </Button>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

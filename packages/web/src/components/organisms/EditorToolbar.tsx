@@ -69,8 +69,7 @@ export function EditorToolbar({
           {canPublish && (
             <Button
               type="button"
-              className="shrink-0 rounded-lg border border-brand/30 bg-white text-brand hover:bg-red-50"
-              variant="outline"
+              className="shrink-0 rounded-lg bg-brand text-white hover:bg-brand/90"
               disabled={publishing}
               onClick={onPublish}
             >
