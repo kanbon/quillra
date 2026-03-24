@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/index.js";
+import { account } from "../db/auth-schema.js";
 import { messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
@@ -175,8 +176,13 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
+      const [acct] = await db
+        .select()
+        .from(account)
+        .where(and(eq(account.userId, r.user.id), eq(account.providerId, "github")))
+        .limit(1);
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const result = await pushToGitHub(repoPath, p.defaultBranch, p.githubRepoFullName);
+      const result = await pushToGitHub(repoPath, p.defaultBranch, p.githubRepoFullName, acct?.accessToken);
       return c.json(result);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Publish failed" }, 400);

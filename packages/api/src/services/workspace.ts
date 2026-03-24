@@ -219,10 +219,11 @@ export async function pushToGitHub(
   repoPath: string,
   branch: string,
   githubRepoFullName: string,
+  userToken?: string | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = userToken?.trim() || process.env.GITHUB_TOKEN?.trim();
   if (!token) {
-    throw new Error("Set GITHUB_TOKEN on the server to publish (push) to GitHub.");
+    throw new Error("GitHub access denied. Try signing out and back in to refresh your token.");
   }
 
   const g = simpleGit(repoPath);
