@@ -136,7 +136,7 @@ export function PreviewPane({
               ref={iframeRef}
               title="Site preview"
               src={src!}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              sandbox="allow-scripts allow-same-origin allow-forms"
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
             />
