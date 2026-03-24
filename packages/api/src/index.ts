@@ -8,8 +8,10 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { db } from "./db/index.js";
+import { user } from "./db/auth-schema.js";
 import { messages, projectMembers, projects } from "./db/schema.js";
 import { auth, type Session, type SessionUser } from "./lib/auth.js";
+import { adminRouter } from "./routes/admin.js";
 import { githubRouter } from "./routes/github.js";
 import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
@@ -69,11 +71,14 @@ app.get("/api/caddy-check", (c) => {
   return c.text("denied", 403);
 });
 
-app.get("/api/session", (c) => {
-  const user = c.get("user");
-  return c.json({ user });
+app.get("/api/session", async (c) => {
+  const sessionUser = c.get("user");
+  if (!sessionUser) return c.json({ user: null });
+  const [row] = await db.select({ instanceRole: user.instanceRole }).from(user).where(eq(user.id, sessionUser.id)).limit(1);
+  return c.json({ user: { ...sessionUser, instanceRole: row?.instanceRole ?? null } });
 });
 
+app.route("/api/admin", adminRouter);
 app.route("/api/projects", projectsRouter);
 app.route("/api/github", githubRouter);
 app.route("/api/team", teamRouter);

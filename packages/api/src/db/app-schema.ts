@@ -57,6 +57,17 @@ export const projectInvites = sqliteTable("project_invites", {
   acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
 });
 
+export const instanceInvites = sqliteTable("instance_invites", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  invitedByUserId: text("invited_by_user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
+});
+
 export const messages = sqliteTable(
   "messages",
   {

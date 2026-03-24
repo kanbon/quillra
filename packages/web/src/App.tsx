@@ -5,6 +5,7 @@ import { AcceptInvitePage } from "@/pages/AcceptInvite";
 import { DashboardPage } from "@/pages/Dashboard";
 import { EditorPage } from "@/pages/Editor";
 import { LoginPage } from "@/pages/Login";
+import { InstanceSettingsPage } from "@/pages/InstanceSettings";
 import { ProjectSettingsPage } from "@/pages/ProjectSettings";
 
 const qc = new QueryClient({
@@ -39,6 +40,14 @@ export function App() {
             element={
               <RequireAuth>
                 <ProjectSettingsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <RequireAuth>
+                <InstanceSettingsPage />
               </RequireAuth>
             }
           />

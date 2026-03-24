@@ -1,7 +1,10 @@
-import { betterAuth } from "better-auth";
+import { betterAuth, APIError } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { sql, eq, isNull, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
+import { user, type InstanceRole } from "../db/auth-schema.js";
+import { instanceInvites } from "../db/app-schema.js";
 
 function trustedOrigins(): string[] {
   const raw =
@@ -27,6 +30,45 @@ export const auth = betterAuth({
       clientId: process.env.GITHUB_CLIENT_ID ?? "",
       clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
       scope: (process.env.GITHUB_OAUTH_SCOPES ?? "read:user,user:email,repo").split(","),
+    },
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        async before(userData) {
+          const [{ count }] = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(user);
+
+          if (count === 0) {
+            return { data: { ...userData, instanceRole: "owner" as InstanceRole } };
+          }
+
+          const email = userData.email;
+          if (email) {
+            const [invite] = await db
+              .select()
+              .from(instanceInvites)
+              .where(
+                and(
+                  eq(instanceInvites.email, email),
+                  isNull(instanceInvites.acceptedAt),
+                ),
+              )
+              .limit(1);
+
+            if (invite) {
+              await db
+                .update(instanceInvites)
+                .set({ acceptedAt: new Date() })
+                .where(eq(instanceInvites.id, invite.id));
+              return { data: { ...userData, instanceRole: "member" as InstanceRole } };
+            }
+          }
+
+          return false;
+        },
+      },
     },
   },
 });
