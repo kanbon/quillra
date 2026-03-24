@@ -75,6 +75,8 @@ export function subscribe(projectId: string, conversationId: string | null, list
 }
 
 export function getSnapshot(projectId: string, conversationId: string | null): ChatSnapshot {
+  // null conversationId = new chat, always empty
+  if (!conversationId) return { ...EMPTY };
   return getSnap(key(projectId, conversationId));
 }
 
