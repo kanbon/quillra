@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 
@@ -18,6 +18,59 @@ const startSteps = [
   "Starting dev server…",
 ];
 
+function usePreviewReady(src: string | null) {
+  const [ready, setReady] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const prevSrc = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!src) {
+      setReady(false);
+      setProgress(0);
+      prevSrc.current = null;
+      return;
+    }
+
+    // If src changed (refresh), check immediately
+    const baseUrl = src.split("?")[0];
+    const prevBase = prevSrc.current?.split("?")[0];
+    if (baseUrl === prevBase && ready) return;
+    prevSrc.current = src;
+
+    setReady(false);
+    setProgress(0);
+    let attempt = 0;
+    const maxAttempts = 30;
+    let cancelled = false;
+
+    const poll = async () => {
+      while (attempt < maxAttempts && !cancelled) {
+        attempt++;
+        setProgress(Math.min(90, (attempt / maxAttempts) * 100));
+        try {
+          const res = await fetch(src.split("?")[0], { method: "HEAD", cache: "no-store" });
+          if (res.ok) {
+            setProgress(100);
+            setTimeout(() => { if (!cancelled) setReady(true); }, 300);
+            return;
+          }
+        } catch { /* not ready yet */ }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      // After max attempts, show it anyway (might work)
+      if (!cancelled) {
+        setProgress(100);
+        setReady(true);
+      }
+    };
+
+    void poll();
+    return () => { cancelled = true; };
+  }, [src]);
+
+  return { ready, progress };
+}
+
 export function PreviewPane({
   src,
   onRefresh,
@@ -30,10 +83,10 @@ export function PreviewPane({
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const { ready, progress } = usePreviewReady(src);
   const basePreviewPath = src?.split("?")[0] ?? "";
 
   const handleIframeLoad = useCallback(() => {
-    // Safeguard: if the iframe navigates outside the preview URL, reset it
     try {
       const frame = iframeRef.current;
       if (!frame || !basePreviewPath) return;
@@ -41,9 +94,7 @@ export function PreviewPane({
       if (currentSrc && !currentSrc.includes("/__preview/")) {
         frame.src = src!;
       }
-    } catch {
-      // Cross-origin — can't read location, which is fine (means it's the preview)
-    }
+    } catch { /* cross-origin */ }
   }, [src, basePreviewPath]);
 
   return (
@@ -61,13 +112,13 @@ export function PreviewPane({
             <p className="mt-0.5 text-[11px] text-neutral-400">Local dev server in your repo</p>
           )}
         </div>
-        <Button variant="outline" type="button" onClick={onRefresh} disabled={starting || !hasFrame}>
+        <Button variant="outline" type="button" onClick={onRefresh} disabled={starting || !hasFrame || !ready}>
           Refresh
         </Button>
       </div>
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
-        {hasFrame ? (
+        {hasFrame && ready ? (
           <>
             {!bannerDismissed && (
               <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-amber-50/95 px-3 py-1.5 text-xs text-amber-700 backdrop-blur-sm">
@@ -77,7 +128,7 @@ export function PreviewPane({
                   className="ml-2 rounded px-1.5 py-0.5 text-amber-500 hover:bg-amber-100 hover:text-amber-700"
                   onClick={() => setBannerDismissed(true)}
                 >
-                  ✕
+                  &#10005;
                 </button>
               </div>
             )}
@@ -86,10 +137,50 @@ export function PreviewPane({
               title="Site preview"
               src={src!}
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-              className="h-full w-full border-0 bg-white shadow-inner"
+              className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
             />
           </>
+        ) : hasFrame && !ready ? (
+          /* Waiting for preview server to be ready */
+          <div className="flex h-full flex-col items-center justify-center px-8 py-12">
+            <div className="relative mb-8 h-16 w-16">
+              {/* Outer ring */}
+              <svg className="h-16 w-16" viewBox="0 0 64 64">
+                <circle
+                  cx="32" cy="32" r="28"
+                  fill="none"
+                  stroke="#e5e5e5"
+                  strokeWidth="3"
+                />
+                <circle
+                  cx="32" cy="32" r="28"
+                  fill="none"
+                  stroke="#c1121f"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeDasharray={`${progress * 1.76} 176`}
+                  className="transition-all duration-500 ease-out"
+                  style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
+                />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-neutral-500">
+                {Math.round(progress)}%
+              </span>
+            </div>
+            <p className="mb-2 text-center text-sm font-medium text-neutral-700">
+              Starting your preview
+            </p>
+            <p className="text-center text-xs text-neutral-400">
+              Setting up the dev server — this usually takes a few seconds
+            </p>
+            <div className="mt-6 h-1 w-48 max-w-full overflow-hidden rounded-full bg-neutral-200/80">
+              <div
+                className="h-full rounded-full bg-brand/40 transition-all duration-500 ease-out"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
         ) : starting ? (
           <div className="flex h-full flex-col items-center justify-center px-8 py-12">
             <div
