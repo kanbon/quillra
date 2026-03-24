@@ -17,7 +17,6 @@ type ProjectDetail = {
 export function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
-  const { lines, busy, error, send } = useProjectChat(id || undefined);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [previewLabel, setPreviewLabel] = useState<string>("");
   const [split, setSplit] = useState(42);
@@ -57,10 +56,10 @@ export function EditorPage() {
   });
 
   const refreshPreview = useCallback(() => {
-    if (previewSrc) {
-      setPreviewSrc((u) => (u ? `${u.split("?")[0]}?t=${Date.now()}` : null));
-    }
-  }, [previewSrc]);
+    setPreviewSrc((u) => (u ? `${u.split("?")[0]}?t=${Date.now()}` : null));
+  }, []);
+
+  const { lines, busy, error, send } = useProjectChat(id || undefined, refreshPreview);
 
   useEffect(() => {
     if (!id) return;

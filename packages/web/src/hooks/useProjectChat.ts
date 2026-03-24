@@ -10,14 +10,15 @@ type WsPayload =
   | { type: "stream"; text?: string }
   | { type: "tool"; detail?: string }
   | { type: "done"; result?: string }
-  | { type: "error"; message?: string };
+  | { type: "error"; message?: string }
+  | { type: "refresh_preview" };
 
 function wsBaseUrl() {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${window.location.host}`;
 }
 
-export function useProjectChat(projectId: string | undefined) {
+export function useProjectChat(projectId: string | undefined, onRefreshPreview?: () => void) {
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +114,10 @@ export function useProjectChat(projectId: string | undefined) {
           });
           setBusy(false);
           ws.close();
+        }
+
+        if (data.type === "refresh_preview") {
+          onRefreshPreview?.();
         }
 
         if (data.type === "error") {

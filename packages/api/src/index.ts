@@ -172,6 +172,8 @@ app.get(
               createdAt: new Date(),
             });
           }
+
+          ws.send(JSON.stringify({ type: "refresh_preview" }));
         } catch (e) {
           ws.send(
             JSON.stringify({
