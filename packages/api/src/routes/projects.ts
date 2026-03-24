@@ -208,7 +208,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
                 max_tokens: 150,
                 messages: [{
                   role: "user",
-                  content: `Summarize these website changes in 1-2 short sentences for a non-technical person. Be specific about what changed (e.g. "Updated the homepage title" not "Modified files"). No technical jargon.\n\nChanged files:\n${dirty.join("\n")}\n\nDiff summary:\n${diffOutput.slice(0, 1000)}`,
+                  content: `Summarize these website changes in a brief bullet list for a non-technical person. Be specific about what changed (e.g. "Updated the homepage title"). No headings, no technical jargon, no filenames. Use markdown bullet points only. Max 3 bullets.\n\nChanged files:\n${dirty.join("\n")}\n\nDiff summary:\n${diffOutput.slice(0, 1000)}`,
                 }],
               }),
             });

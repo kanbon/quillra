@@ -8,6 +8,7 @@ import { ChatComposer } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
 import { EditorToolbar } from "@/components/organisms/EditorToolbar";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
+import ReactMarkdown from "react-markdown";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
 
@@ -185,9 +186,9 @@ export function EditorPage() {
             {publishStatus.hasChanges ? (
               <>
                 {publishStatus.summary ? (
-                  <p className="mb-4 mt-2 text-sm leading-relaxed text-neutral-600">
-                    {publishStatus.summary}
-                  </p>
+                  <div className="mb-4 mt-2 text-sm leading-relaxed text-neutral-600 [&_ul]:list-disc [&_ul]:pl-4 [&_li]:mb-0.5 [&_p]:mb-1 [&_p:last-child]:mb-0">
+                    <ReactMarkdown>{publishStatus.summary}</ReactMarkdown>
+                  </div>
                 ) : (
                   <p className="mb-4 mt-1 text-sm text-neutral-500">
                     Your recent edits are ready to go live.
