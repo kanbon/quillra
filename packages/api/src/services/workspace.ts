@@ -139,6 +139,15 @@ export function resolveDevCommand(
   };
 }
 
+/** Remove cloned workspace so the next ensureRepoCloned does a fresh clone (repo or branch change). */
+export function clearProjectRepoClone(projectId: string): void {
+  stopPreview(projectId);
+  const dir = projectRepoPath(projectId);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export async function ensureRepoCloned(
   projectId: string,
   githubRepoFullName: string,

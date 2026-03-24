@@ -22,6 +22,7 @@ export function EditorPage() {
   const [previewLabel, setPreviewLabel] = useState<string>("");
   const [split, setSplit] = useState(42);
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const { data: project } = useQuery({
     queryKey: ["project", id],
@@ -36,10 +37,12 @@ export function EditorPage() {
       });
       return res;
     },
+    onMutate: () => setPreviewError(null),
     onSuccess: (res) => {
       setPreviewSrc(res.url);
       setPreviewLabel(res.previewLabel);
     },
+    onError: (e: Error) => setPreviewError(e.message),
   });
 
   const publishMut = useMutation({
@@ -66,7 +69,6 @@ export function EditorPage() {
         const meta = await apiJson<{ url: string; previewLabel: string }>(
           `/api/projects/${id}/preview-meta`,
         );
-        setPreviewSrc(meta.url);
         setPreviewLabel(meta.previewLabel);
       } catch {
         /* ignore */
@@ -77,7 +79,8 @@ export function EditorPage() {
   if (!id) return null;
 
   const canPublish = project?.role === "admin" || project?.role === "editor";
-  const startLabel = previewLabel && previewLabel !== "—" ? `Start ${previewLabel}` : "Start preview";
+  const startLabel =
+    previewLabel && previewLabel !== "—" ? `Start ${previewLabel} preview` : "Start live preview";
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-white">
@@ -137,24 +140,13 @@ export function EditorPage() {
           <PreviewPane
             src={previewSrc}
             onRefresh={refreshPreview}
+            onStartPreview={() => previewMut.mutate()}
             starting={previewMut.isPending}
             engineLabel={previewLabel || undefined}
+            startLabel={startLabel}
+            errorMessage={previewError}
           />
-          <div className="border-t border-neutral-200 bg-white p-2 md:hidden">
-            <button
-              type="button"
-              className="w-full rounded-md border border-neutral-300 py-2 text-sm"
-              onClick={() => previewMut.mutate()}
-            >
-              {startLabel}
-            </button>
-          </div>
         </section>
-      </div>
-      <div className="hidden border-t border-neutral-200 bg-neutral-50 px-4 py-2 text-center md:block">
-        <button type="button" className="text-xs text-brand" onClick={() => previewMut.mutate()}>
-          {startLabel}
-        </button>
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import { cors } from "hono/cors";
 import { db } from "./db/index.js";
 import { messages, projectMembers, projects } from "./db/schema.js";
 import { auth, type Session, type SessionUser } from "./lib/auth.js";
+import { githubRouter } from "./routes/github.js";
 import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
 import { runProjectAgent } from "./services/agent.js";
@@ -68,6 +69,7 @@ app.get("/api/session", (c) => {
 });
 
 app.route("/api/projects", projectsRouter);
+app.route("/api/github", githubRouter);
 app.route("/api/team", teamRouter);
 
 app.get(

@@ -7,6 +7,7 @@ import { messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
 import {
+  clearProjectRepoClone,
   ensureRepoCloned,
   getPreviewUrl,
   previewPortForProject,
@@ -119,18 +120,37 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+    const [existing] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!existing) return c.json({ error: "Not found" }, 404);
     const body = await c.req.json().catch(() => null);
     const schema = z.object({
       name: z.string().min(1).max(200).optional(),
       previewDevCommand: z.string().max(2000).nullable().optional(),
+      githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
+      defaultBranch: z.string().min(1).max(255).optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
-    const patch: { name?: string; previewDevCommand?: string | null; updatedAt: Date } = {
-      updatedAt: new Date(),
-    };
+    const patch: {
+      name?: string;
+      previewDevCommand?: string | null;
+      githubRepoFullName?: string;
+      defaultBranch?: string;
+      updatedAt: Date;
+    } = { updatedAt: new Date() };
     if (parsed.data.name !== undefined) patch.name = parsed.data.name;
     if (parsed.data.previewDevCommand !== undefined) patch.previewDevCommand = parsed.data.previewDevCommand;
+    if (parsed.data.githubRepoFullName !== undefined) patch.githubRepoFullName = parsed.data.githubRepoFullName;
+    if (parsed.data.defaultBranch !== undefined) patch.defaultBranch = parsed.data.defaultBranch;
+
+    const repoChanged =
+      patch.githubRepoFullName !== undefined && patch.githubRepoFullName !== existing.githubRepoFullName;
+    const branchChanged =
+      patch.defaultBranch !== undefined && patch.defaultBranch !== existing.defaultBranch;
+    if (repoChanged || branchChanged) {
+      clearProjectRepoClone(projectId);
+    }
+
     await db.update(projects).set(patch).where(eq(projects.id, projectId));
     return c.json({ ok: true });
   })

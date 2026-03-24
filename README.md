@@ -32,11 +32,9 @@ An optional **GitHub App** (`GITHUB_APP_*` in `.env.example`) can be wired later
 - **Members** — Per project: `admin`, `editor`, or `translator` (agent tooling respects role).
 - **Invites** — Admins invite by email; invitees sign in with GitHub. Users only see projects they belong to.
 
-### Single-project UX (“client” mode)
+### Dashboard
 
-If a user has **exactly one** project (typical agency client with one site), the app should **skip the multi-project shell**: land them straight in the **Replit-like** experience—**chat + preview** full focus, minimal chrome—same as their only homepage/workspace.
-
-Users with **multiple** projects get the normal dashboard and picker.
+The **Sites** dashboard lists every project you belong to and lets you connect more repositories. From the editor, use **All sites** (or the logo) to return there.
 
 ## Typical flow
 
@@ -50,7 +48,7 @@ Users with **multiple** projects get the normal dashboard and picker.
 - **GitHub OAuth** — Sign-in; configure in env.
 - **`GITHUB_TOKEN`** — Clone / fetch / push for connected repos on this instance.
 - **Framework-aware dev preview** — Auto `dev` command or custom command with `{port}`.
-- **Roles + invites** — Per-project; single-project users skip the dashboard.
+- **Roles + invites** — Per-project; open **All sites** to switch or add projects.
 - **Role-aware agent** — Tooling rules in the agent layer.
 - **Monorepo** — `packages/api` (Hono, REST, WebSocket, auth, static SPA) and `packages/web` (React + Vite).
 - **SQLite + workspaces** — VPS-friendly; mount `data` in Docker.

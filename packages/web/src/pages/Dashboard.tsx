@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
 import { AppHeader } from "@/components/organisms/AppHeader";
 import { ConnectProjectForm } from "@/components/organisms/ConnectProjectForm";
@@ -16,23 +15,14 @@ type ProjectRow = {
 };
 
 export function DashboardPage() {
-  const nav = useNavigate();
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiJson<{ projects: ProjectRow[] }>("/api/projects"),
   });
 
-  useEffect(() => {
-    const list = data?.projects;
-    if (!list || isLoading) return;
-    if (list.length === 1) {
-      nav(`/p/${list[0].id}`, { replace: true });
-    }
-  }, [data?.projects, isLoading, nav]);
-
-  if (isLoading || data?.projects.length === 1) {
+  if (isLoading) {
     return (
-      <div className="min-h-screen bg-white">
+      <div className="min-h-screen bg-neutral-50">
         <AppHeader />
         <div className="flex justify-center p-12 text-sm text-neutral-500">Loading…</div>
       </div>
