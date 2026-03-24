@@ -97,6 +97,15 @@ export function ChatTranscript({ lines, busy }: Props) {
             </ChatBubble>
           );
         }
+        if (entry.kind === "tool_active") {
+          return (
+            <div key={entry.id} className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs text-blue-600">
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-400" />
+              <span className="font-medium">{entry.toolName}</span>
+              {entry.elapsed > 0 && <span className="text-blue-400">{Math.round(entry.elapsed)}s</span>}
+            </div>
+          );
+        }
         if (entry.kind === "thinking") {
           return (
             <ThinkingCard

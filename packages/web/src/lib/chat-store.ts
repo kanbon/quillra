@@ -10,7 +10,8 @@ export type ChatLine =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "assistant"; text: string; streaming?: boolean }
   | { id: string; kind: "tool"; detail: string }
-  | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean };
+  | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean }
+  | { id: string; kind: "tool_active"; toolName: string; elapsed: number };
 
 type Listener = () => void;
 
@@ -115,12 +116,17 @@ export function sendMessage(
     const type = data.type as string;
 
     if (type === "thinking_start") {
-      chat.thinkingStart = Date.now();
-      const last = chat.lines[chat.lines.length - 1];
       const updated = [...chat.lines];
+      const last = updated[updated.length - 1];
+      // Finalize any previous streaming bubble
       if (last?.kind === "assistant" && last.streaming) {
         updated[updated.length - 1] = { ...last, streaming: false };
       }
+      if (last?.kind === "thinking" && last.streaming) {
+        const duration = chat.thinkingStart ? Date.now() - chat.thinkingStart : 0;
+        updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
+      }
+      chat.thinkingStart = Date.now();
       updated.push({ id: crypto.randomUUID(), kind: "thinking", text: "", streaming: true });
       chat.lines = updated;
       notify(projectId);
@@ -161,8 +167,27 @@ export function sendMessage(
       notify(projectId);
     }
 
+    // Live tool activity indicator — replace previous tool_active with updated one
+    if (type === "tool_progress") {
+      const updated = [...chat.lines];
+      // Remove previous tool_active entry if any
+      const activeIdx = updated.findLastIndex((l) => l.kind === "tool_active");
+      if (activeIdx >= 0) updated.splice(activeIdx, 1);
+      updated.push({
+        id: crypto.randomUUID(),
+        kind: "tool_active",
+        toolName: data.toolName as string,
+        elapsed: data.elapsed as number,
+      });
+      chat.lines = updated;
+      notify(projectId);
+    }
+
     if (type === "tool" && data.detail) {
       const updated = [...chat.lines];
+      // Remove tool_active indicator since we now have the summary
+      const activeIdx = updated.findLastIndex((l) => l.kind === "tool_active");
+      if (activeIdx >= 0) updated.splice(activeIdx, 1);
       const last = updated[updated.length - 1];
       if (last?.kind === "assistant" && last.streaming) {
         updated[updated.length - 1] = { ...last, streaming: false };

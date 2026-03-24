@@ -139,6 +139,8 @@ export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> 
   switch (msg.type) {
     case "tool_use_summary":
       return { type: "tool", detail: msg.summary };
+    case "tool_progress":
+      return { type: "tool_progress", toolName: msg.tool_name, elapsed: msg.elapsed_time_seconds };
     case "stream_event": {
       const ex = extractFromStreamEvent(msg.event);
       if (!ex) return null;
@@ -147,11 +149,10 @@ export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> 
       if (ex.kind === "thinking_start") return { type: "thinking_start" };
       return null;
     }
-    case "assistant": {
-      const t = textFromAssistantMessage(msg.message);
-      if (t) return { type: "stream", text: t };
+    case "assistant":
+      // Full message arrives after streaming — skip to avoid duplicate text.
+      // The stream_event deltas already sent the text incrementally.
       return null;
-    }
     case "result": {
       if (msg.subtype === "success") {
         return { type: "done", result: msg.result, costUsd: msg.total_cost_usd };
