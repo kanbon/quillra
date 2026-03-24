@@ -79,12 +79,16 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
 export function ChatTranscript({ lines, busy }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Derive a scroll key that changes when content grows (not just line count)
+  const lastLine = lines[lines.length - 1];
+  const scrollKey = `${lines.length}-${busy}-${lastLine && "text" in lastLine ? (lastLine as { text: string }).text.length : 0}`;
+
   useEffect(() => {
     const el = bottomRef.current;
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "end" });
     }
-  }, [lines.length, busy]);
+  }, [scrollKey]);
 
   // Group consecutive tool events together
   const grouped: (ChatLine | { kind: "tool-group"; items: ChatLine[] })[] = [];
