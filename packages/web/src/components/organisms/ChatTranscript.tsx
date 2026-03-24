@@ -28,8 +28,8 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
   useEffect(() => {
     if (streaming && !prevStreaming.current) setExpanded(true);
     if (!streaming && prevStreaming.current) {
-      // Collapse after a short delay so user can see final thought
-      const t = setTimeout(() => setExpanded(false), 600);
+      // Collapse after a delay so user can see the final thought
+      const t = setTimeout(() => setExpanded(false), 1500);
       return () => clearTimeout(t);
     }
     prevStreaming.current = streaming;
