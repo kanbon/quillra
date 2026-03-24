@@ -4,82 +4,56 @@
 
 # Quillra
 
-**Quillra** is an open-source, AI-assisted CMS for sites whose **source of truth is a GitHub repository**. You work in a chat-first editor; the app clones the repo, runs a dev preview, and uses an AI agent to read and edit files—**without embedding CMS code in the public site**.
+## What it is
 
-**First-class target:** [Astro](https://astro.build/) and other static/SSR stacks—dev preview is **auto-detected** from `package.json` (Next.js, Vite, etc.) or you can set a custom command per project.
+Quillra is an open-source **editor for websites that already live in GitHub**. Your clients and partners describe what they want in plain language; an AI assistant updates the real files in the repository, and **Publish** sends those changes to GitHub so your normal hosting (Cloudflare Pages, Vercel, Netlify, or anything that deploys from Git) picks them up.
 
-This repository is the **CMS control plane** you run on **your** host (VPS, internal server, etc.). The public site stays a normal repo with **no Quillra runtime** for visitors; production traffic still goes to Pages, Vercel, Netlify, or your own server after **`git push`**.
+Nothing from Quillra ships in the public site. Visitors see the same static or SSR app you already built. Quillra is only the **control room** you host yourself.
 
-## Self-hosted deployment
+## The problem it solves
 
-Quillra is **not** a multi-tenant SaaS product: you deploy **one instance** for yourself or your team. There are no organizations or billing tiers—only **projects** (each linked to a GitHub repo) and **per-project** members.
+Shipping a modern site with today’s tools—Astro, Next.js, Vite, vibe-coding in Cursor or Lovable—is straightforward. What stays hard is the **handoff**: giving **clients, marketing, or partners** a safe way to change copy, images, and structure **without** turning the project into WordPress, a headless CMS subscription maze, or a second codebase they cannot touch.
+
+Legacy-style products solved “non-dev editing” by owning the stack or the database. Quillra takes a different path: **Git stays the source of truth**, and the **AI layer** turns natural language into real commits in that repo. Editors work in a **chat-first UI** with a **live dev preview**, so updating the site feels closer to “explain the change” than “learn the repo.”
+
+## Who it’s for
+
+- **Studios and freelancers** who ship Git-based sites and want collaborators to edit content without file trees and pull requests.
+- **Teams** who outgrown “only engineers touch the site” but refuse to bolt a traditional CMS onto an otherwise clean codebase.
+- **Anyone self-hosting** who wants one instance for their org, not a multi-tenant SaaS product.
+
+## How it works (in practice)
+
+1. Connect a **GitHub repository** and branch; Quillra clones it on your server.
+2. Invite people by email; they sign in with **GitHub** and only see projects they belong to.
+3. They **chat** with the assistant; it reads and edits files in the workspace under **role-aware** rules (admins, editors, translators).
+4. **Publish** runs `git push` so your existing pipeline deploys—same as if a developer pushed.
+
+Dev servers for preview are **detected from `package.json`** (Astro, Next.js, Vite, and common `dev` scripts) or you can set a **custom command** per project.
+
+---
+
+## Run your own (self-hosted)
+
+You deploy **one Quillra instance** (VPS, internal server, Docker). There are no org tiers—only **projects** (one repo each) and **per-project** members.
 
 | Variable | Purpose |
 |----------|---------|
-| `BETTER_AUTH_URL` | Public URL of the API (used for OAuth callbacks and cookies). |
-| `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies (include your Vite dev URL and your real site URL if the SPA is on another host). |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for **Sign in with GitHub** (minimal scopes). |
-| `GITHUB_TOKEN` | Server-side token for **clone, fetch, and push** on repos you connect. One token for the whole instance is typical. |
-| `ANTHROPIC_API_KEY` | Claude Agent SDK on the server. |
+| `BETTER_AUTH_URL` | Public URL of the API (OAuth callbacks and cookies). |
+| `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies. |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for sign-in. |
+| `GITHUB_TOKEN` | Server-side token to clone, fetch, push, and list repos/branches in the UI. |
+| `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server. |
 
-In your GitHub OAuth app, set the callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
+Copy `packages/api/.env.example` to `.env`, fill the values, and run `yarn db:push` in `packages/api` after schema changes. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
 
-An optional **GitHub App** (`GITHUB_APP_*` in `.env.example`) can be wired later for installation-scoped tokens; **`GITHUB_TOKEN`** is the supported path for self-hosted setups today.
+**Server prerequisites:** Node.js, `git`, and a package manager on `PATH` so installs and previews work inside cloned workspaces.
 
-## Projects, invites, and roles
+The **Sites** dashboard lists every project you can access; from the editor, use **All sites** (or the logo) to return and connect more repositories.
 
-- **Projects** — One GitHub repo + branch + workspace + dev preview + publish (`git push`).
-- **Members** — Per project: `admin`, `editor`, or `translator` (agent tooling respects role).
-- **Invites** — Admins invite by email; invitees sign in with GitHub. Users only see projects they belong to.
+---
 
-### Dashboard
-
-The **Sites** dashboard lists every project you belong to and lets you connect more repositories. From the editor, use **All sites** (or the logo) to return there.
-
-## Typical flow
-
-1. **Repo on GitHub** — Your site’s source lives in a repo the server can access with `GITHUB_TOKEN`.
-2. **Connect in Quillra** — Create a project (repo + branch); the server clones it and can install dependencies.
-3. **Edit in chat** — The agent commits in the workspace; **Publish** pushes to GitHub so your host deploys.
-4. **Collaborators** — Optional per-project invites (still not “org SaaS”—just access control).
-
-## What you get
-
-- **GitHub OAuth** — Sign-in; configure in env.
-- **`GITHUB_TOKEN`** — Clone / fetch / push for connected repos on this instance.
-- **Framework-aware dev preview** — Auto `dev` command or custom command with `{port}`.
-- **Roles + invites** — Per-project; open **All sites** to switch or add projects.
-- **Role-aware agent** — Tooling rules in the agent layer.
-- **Monorepo** — `packages/api` (Hono, REST, WebSocket, auth, static SPA) and `packages/web` (React + Vite).
-- **SQLite + workspaces** — VPS-friendly; mount `data` in Docker.
-
-## Stack (planned)
-
-| Layer | Choice |
-|--------|--------|
-| API | Hono, Better Auth, Drizzle + SQLite, **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`), sharp |
-| Web | React, Vite, React Router, TanStack Query, Tailwind + shadcn/ui |
-| Repo tooling | Turborepo, Yarn workspaces |
-
-## Design direction (UI)
-
-- **Mode:** Light UI, mostly white and black.
-- **Accent:** `#C1121F` — use sparingly (links, focus, key actions).
-- **Chrome:** Flat surfaces; avoid drop shadows and heavy elevation.
-
-## AI runtime (MVP)
-
-The editor chat uses the **official Claude Agent SDK** (`query()` from [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)), with tooling scoped to the project workspace and **role-aware** `canUseTool` / path rules.
-
-Requires **`ANTHROPIC_API_KEY`** and a host that can run the SDK’s Claude Code subprocess (e.g. your VPS).
-
-## Configuration
-
-Copy `packages/api/.env.example` → `.env` and set at least **`BETTER_AUTH_*`**, **`GITHUB_CLIENT_*`**, **`GITHUB_TOKEN`**, and **`ANTHROPIC_API_KEY`**. Run **`yarn db:push`** in `packages/api` after schema changes.
-
-**Server prerequisites:** Node.js, `git`, and a package manager (`yarn` / `npm` / `pnpm`) available on `PATH` so dependency installs and dev previews work inside workspaces.
-
-## Development
+## For developers
 
 ```bash
 yarn install
@@ -88,27 +62,24 @@ cd packages/api && DATABASE_URL=file:./data/cms.sqlite yarn db:push && cd ../..
 yarn dev    # API :3000 + Vite :5173 (Turbo)
 ```
 
-Production build (SPA → `packages/api/public`, API → `packages/api/dist`):
+Production build (SPA is copied into `packages/api/public`):
 
 ```bash
 yarn build
 node packages/api/dist/index.js
 ```
 
-Docker: see `Dockerfile` and `docker-compose.yml`. Mount `packages/api/data` for SQLite and workspaces.
+Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` for SQLite and workspaces.
 
-## Frontend structure
+**Stack:** Hono, Better Auth, Drizzle + SQLite, Claude Agent SDK, sharp (API); React, Vite, React Router, TanStack Query, Tailwind (web). Yarn workspaces and Turborepo.
 
-Atomic layout under `packages/web/src/components/`:
+**UI:** Light, minimal chrome; accent `#C1121F` used sparingly.
 
-- `atoms/` — buttons, inputs, typography, spinner, logo mark  
-- `molecules/` — chat bubble (markdown), tool row  
-- `organisms/` — transcript, composer (react-hook-form), preview pane, project card, header, connect-repo form  
-- `templates/` — `RequireAuth`
+**Status (MVP):** GitHub OAuth, projects, team invites, chat with the agent, framework-aware preview, publish via `GITHUB_TOKEN`, role-aware tooling, image upload (WebP). Version history in the UI and rollback are planned later.
 
-## Status
+Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms, templates (`RequireAuth`).
 
-MVP: GitHub OAuth, projects, team invites, chat via **Claude Agent SDK**, framework-aware dev preview, **Publish** (`git push` with `GITHUB_TOKEN`), role-aware tooling, image upload (WebP). Version history UI / rollback is planned later.
+---
 
 ## Contributing
 
