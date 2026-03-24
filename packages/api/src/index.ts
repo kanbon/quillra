@@ -209,6 +209,7 @@ app.get(
             cwd: repoPath,
             prompt: parsed.content,
             role,
+            projectId,
           })) {
             ws.send(JSON.stringify(ev));
             if (ev.type === "stream" && typeof ev.text === "string") {

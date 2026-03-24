@@ -168,10 +168,22 @@ export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> 
   }
 }
 
+/** Track active session IDs per project for conversation continuity */
+const projectSessions = new Map<string, string>();
+
+export function getProjectSessionId(projectId: string): string | undefined {
+  return projectSessions.get(projectId);
+}
+
+export function clearProjectSession(projectId: string): void {
+  projectSessions.delete(projectId);
+}
+
 export async function* runProjectAgent(params: {
   cwd: string;
   prompt: string;
   role: ProjectRole;
+  projectId: string;
   abortSignal?: AbortSignal;
 }): AsyncGenerator<Record<string, unknown>> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
@@ -184,12 +196,15 @@ export async function* runProjectAgent(params: {
   const abortController = new AbortController();
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
+  const existingSessionId = projectSessions.get(params.projectId);
+
   const q = query({
     prompt: params.prompt,
     options: {
       cwd: params.cwd,
       model,
       abortController,
+      ...(existingSessionId ? { resume: existingSessionId } : {}),
       env: {
         ...process.env,
         ANTHROPIC_API_KEY: apiKey,
@@ -197,7 +212,7 @@ export async function* runProjectAgent(params: {
       },
       tools: { type: "preset", preset: "claude_code" },
       includePartialMessages: true,
-      persistSession: false,
+      persistSession: true,
       canUseTool: buildCanUseTool(params.role),
       permissionMode: "acceptEdits",
     },
@@ -205,6 +220,10 @@ export async function* runProjectAgent(params: {
 
   try {
     for await (const msg of q) {
+      // Capture session ID from any message that has one
+      if ("session_id" in msg && typeof msg.session_id === "string" && msg.session_id) {
+        projectSessions.set(params.projectId, msg.session_id);
+      }
       const out = mapSdkMessageToClient(msg);
       if (out) yield out;
     }
