@@ -237,6 +237,44 @@ app.all("/__preview/:port{[0-9]+}", async (c) => {
   return c.redirect(`/__preview/${port}/`, 302);
 });
 
+/* ── Referer-based preview proxy ──────────────────────────────────────
+ * When the iframe navigates to an absolute path like /about/, the Referer
+ * header still points to /__preview/:port/. We detect this and proxy the
+ * request to the correct dev server port, so subpage navigation works.
+ */
+app.all("*", async (c, next) => {
+  const p = c.req.path;
+  // Skip if already a preview path, API, WS, or static asset
+  if (p.startsWith("/__preview/") || p.startsWith("/api") || p.startsWith("/ws")) {
+    return next();
+  }
+  const referer = c.req.header("referer") ?? "";
+  const match = referer.match(/\/__preview\/(\d+)(\/|$)/);
+  if (!match) return next();
+
+  const port = match[1];
+  const target = `http://127.0.0.1:${port}${p}`;
+  const url = new URL(target);
+  url.search = new URL(c.req.url).search;
+
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("host");
+
+  try {
+    const upstream = await fetch(url.toString(), {
+      method: c.req.method,
+      headers,
+      body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
+      redirect: "manual",
+    });
+    const respHeaders = new Headers(upstream.headers);
+    respHeaders.delete("transfer-encoding");
+    return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
+  } catch {
+    return next();
+  }
+});
+
 app.use(
   "/assets/*",
   serveStatic({

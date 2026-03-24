@@ -112,9 +112,25 @@ export function PreviewPane({
             <p className="mt-0.5 text-[11px] text-neutral-400">Local dev server in your repo</p>
           )}
         </div>
-        <Button variant="outline" type="button" onClick={onRefresh} disabled={starting || !hasFrame || !ready}>
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {hasFrame && ready && src && (
+            <a
+              href={src.split("?")[0]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-600 no-underline transition-colors hover:bg-neutral-50 hover:text-neutral-900"
+              title="Open in new tab"
+            >
+              <svg className="mr-1.5 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              New tab
+            </a>
+          )}
+          <Button variant="outline" type="button" onClick={onRefresh} disabled={starting || !hasFrame || !ready}>
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
@@ -136,7 +152,7 @@ export function PreviewPane({
               ref={iframeRef}
               title="Site preview"
               src={src!}
-              sandbox="allow-scripts allow-same-origin allow-forms"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups-to-escape-sandbox"
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
             />
