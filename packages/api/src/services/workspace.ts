@@ -231,9 +231,8 @@ export async function pushToGitHub(
 
   const status = await g.status();
   if (!status.isClean()) {
-    throw new Error(
-      "Working tree is not clean. Ask the assistant to commit your changes, then publish again.",
-    );
+    await g.add("-A");
+    await g.commit("Update via Quillra CMS");
   }
 
   const branches = await g.branch(["-r"]);
