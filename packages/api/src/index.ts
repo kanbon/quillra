@@ -185,6 +185,45 @@ app.get(
   }),
 );
 
+/* ── Preview reverse proxy ────────────────────────────────────────────
+ * Proxies /__preview/:port/* → localhost:port/* so the preview iframe
+ * loads over the same HTTPS origin — no mixed-content, no extra DNS.
+ */
+app.all("/__preview/:port{[0-9]+}/*", async (c) => {
+  const port = c.req.param("port");
+  const rest = c.req.path.replace(`/__preview/${port}`, "") || "/";
+  const target = `http://127.0.0.1:${port}${rest}`;
+  const url = new URL(target);
+  url.search = new URL(c.req.url).search;
+
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("host");
+
+  try {
+    const upstream = await fetch(url.toString(), {
+      method: c.req.method,
+      headers,
+      body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
+      redirect: "manual",
+    });
+
+    const respHeaders = new Headers(upstream.headers);
+    respHeaders.delete("transfer-encoding");
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: respHeaders,
+    });
+  } catch {
+    return c.text("Preview server not ready", 502);
+  }
+});
+
+app.all("/__preview/:port{[0-9]+}", async (c) => {
+  const port = c.req.param("port");
+  return c.redirect(`/__preview/${port}/`, 302);
+});
+
 app.use(
   "/assets/*",
   serveStatic({

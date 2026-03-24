@@ -210,13 +210,9 @@ export async function startDevPreview(
 }
 
 export function getPreviewUrl(projectId: string, port: number): string {
-  const host = process.env.PREVIEW_PUBLIC_HOST ?? "localhost";
-  const proto = process.env.PREVIEW_PUBLIC_PROTO ?? "http";
-  // Subdomain mode: p{port}.host (e.g. p5453.cms.kanbon.at) — avoids mixed content
-  if (process.env.PREVIEW_SUBDOMAIN === "true") {
-    return `${proto}://p${port}.${host}`;
-  }
-  return `${proto}://${host}:${port}`;
+  // Default: same-origin proxy through /__preview/:port/ (works everywhere, no DNS config)
+  const base = process.env.BETTER_AUTH_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
+  return `${base}/__preview/${port}/`;
 }
 
 export async function pushToGitHub(
