@@ -1,0 +1,259 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { simpleGit } from "simple-git";
+
+const previewChildren = new Map<string, ChildProcess>();
+
+export function workspaceRoot(): string {
+  const dir = process.env.WORKSPACE_DIR ?? path.join(process.cwd(), "data", "workspaces");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function projectRepoPath(projectId: string): string {
+  return path.join(workspaceRoot(), projectId, "repo");
+}
+
+export function previewPortForProject(projectId: string): number {
+  const base = Number(process.env.PREVIEW_PORT_BASE ?? 4321);
+  let h = 0;
+  for (let i = 0; i < projectId.length; i++) h = (h * 31 + projectId.charCodeAt(i)) >>> 0;
+  return base + (h % 2000);
+}
+
+function runCommand(cmd: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      stdio: "pipe",
+      shell: process.platform === "win32",
+    });
+    let stderr = "";
+    child.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${cmd} ${args.join(" ")} exited ${code}: ${stderr.slice(-400)}`));
+    });
+  });
+}
+
+function getPackageManager(repoPath: string): "yarn" | "pnpm" | "npm" {
+  if (fs.existsSync(path.join(repoPath, "yarn.lock"))) return "yarn";
+  if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) return "pnpm";
+  return "npm";
+}
+
+export async function installDependenciesIfNeeded(repoPath: string): Promise<void> {
+  const pkg = path.join(repoPath, "package.json");
+  if (!fs.existsSync(pkg)) return;
+  if (fs.existsSync(path.join(repoPath, "node_modules"))) return;
+
+  const pm = getPackageManager(repoPath);
+  if (pm === "yarn") {
+    await runCommand("yarn", ["install", "--non-interactive"], repoPath);
+  } else if (pm === "pnpm") {
+    await runCommand("pnpm", ["install"], repoPath);
+  } else {
+    await runCommand("npm", ["install"], repoPath);
+  }
+}
+
+type DevCmd = { command: string; args: string[]; label: string };
+
+export function resolveDevCommand(
+  repoPath: string,
+  port: number,
+  override: string | null | undefined,
+): DevCmd {
+  const interpolated = (override?.trim() ?? "")
+    .replace(/\{port\}/g, String(port))
+    .replace(/\$PORT/g, String(port));
+
+  if (interpolated) {
+    if (process.platform === "win32") {
+      return {
+        command: process.env.ComSpec || "cmd.exe",
+        args: ["/d", "/s", "/c", interpolated],
+        label: "Custom",
+      };
+    }
+    return { command: "sh", args: ["-c", interpolated], label: "Custom" };
+  }
+
+  const pkgPath = path.join(repoPath, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    return {
+      command: "npx",
+      args: ["astro", "dev", "--host", "0.0.0.0", "--port", String(port)],
+      label: "Astro (default)",
+    };
+  }
+
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    scripts?: Record<string, string>;
+  };
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+  if (deps["astro"]) {
+    return {
+      command: "npx",
+      args: ["astro", "dev", "--host", "0.0.0.0", "--port", String(port)],
+      label: "Astro",
+    };
+  }
+  if (deps["next"]) {
+    return {
+      command: "npx",
+      args: ["next", "dev", "-H", "0.0.0.0", "-p", String(port)],
+      label: "Next.js",
+    };
+  }
+  if (deps["vite"] || deps["@vitejs/plugin-react"] || deps["@vitejs/plugin-vue"]) {
+    return {
+      command: "npx",
+      args: ["vite", "--host", "0.0.0.0", "--port", String(port)],
+      label: "Vite",
+    };
+  }
+  const pm = getPackageManager(repoPath);
+  if (pkg.scripts?.dev) {
+    if (pm === "yarn") {
+      return { command: "yarn", args: ["run", "dev"], label: "yarn dev" };
+    }
+    if (pm === "pnpm") {
+      return { command: "pnpm", args: ["run", "dev"], label: "pnpm dev" };
+    }
+    return { command: "npm", args: ["run", "dev"], label: "npm run dev" };
+  }
+
+  return {
+    command: "npx",
+    args: ["vite", "--host", "0.0.0.0", "--port", String(port)],
+    label: "Vite (fallback)",
+  };
+}
+
+export async function ensureRepoCloned(
+  projectId: string,
+  githubRepoFullName: string,
+  branch: string,
+): Promise<string> {
+  const dir = projectRepoPath(projectId);
+  const gitDir = path.join(dir, ".git");
+  const token = process.env.GITHUB_TOKEN?.trim();
+  const url = token
+    ? `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`
+    : `https://github.com/${githubRepoFullName}.git`;
+
+  if (!fs.existsSync(gitDir)) {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    await simpleGit().clone(url, dir, ["--branch", branch, "--single-branch", "--depth", "1"]);
+    await installDependenciesIfNeeded(dir);
+  } else {
+    const g = simpleGit(dir);
+    if (token) {
+      await g.remote(["set-url", "origin", url]).catch(() => undefined);
+    }
+    await g.fetch("origin", branch);
+    await g.checkout(branch);
+    await g.pull("origin", branch).catch(() => undefined);
+    await installDependenciesIfNeeded(dir);
+  }
+  return dir;
+}
+
+export function stopPreview(projectId: string): void {
+  const child = previewChildren.get(projectId);
+  if (child) {
+    child.kill("SIGTERM");
+    previewChildren.delete(projectId);
+  }
+}
+
+export async function startDevPreview(
+  projectId: string,
+  repoPath: string,
+  previewCommandOverride: string | null | undefined,
+): Promise<{ port: number; label: string }> {
+  stopPreview(projectId);
+  const port = previewPortForProject(projectId);
+  const { command, args, label } = resolveDevCommand(repoPath, port, previewCommandOverride);
+  const child = spawn(command, args, {
+    cwd: repoPath,
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: "0.0.0.0",
+      NODE_ENV: "development",
+      FORCE_COLOR: "0",
+    },
+    shell: false,
+  });
+  previewChildren.set(projectId, child);
+  return { port, label };
+}
+
+export function getPreviewUrl(projectId: string, port: number): string {
+  const host = process.env.PREVIEW_PUBLIC_HOST ?? "localhost";
+  const proto = process.env.PREVIEW_PUBLIC_PROTO ?? "http";
+  return `${proto}://${host}:${port}`;
+}
+
+export async function pushToGitHub(
+  repoPath: string,
+  branch: string,
+  githubRepoFullName: string,
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (!token) {
+    throw new Error("Set GITHUB_TOKEN on the server to publish (push) to GitHub.");
+  }
+
+  const g = simpleGit(repoPath);
+  const authUrl = `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`;
+  await g.remote(["set-url", "origin", authUrl]);
+
+  const status = await g.status();
+  if (!status.isClean()) {
+    throw new Error(
+      "Working tree is not clean. Ask the assistant to commit your changes, then publish again.",
+    );
+  }
+
+  const branches = await g.branch(["-r"]);
+  const hasRemote = branches.all.includes(`origin/${branch}`);
+
+  if (!hasRemote) {
+    try {
+      await g.push(["--set-upstream", "origin", branch]);
+    } catch {
+      await g.push("origin", branch);
+    }
+    return {
+      ok: true,
+      message: `Published ${branch} to GitHub. Your host can deploy from this branch.`,
+    };
+  }
+
+  const log = await g.log({ from: `origin/${branch}`, to: "HEAD", maxCount: 100 });
+  if (log.total === 0) {
+    return { ok: false, message: "Nothing new to push — already in sync with GitHub." };
+  }
+
+  try {
+    await g.push("origin", branch);
+  } catch {
+    await g.push(["--set-upstream", "origin", branch]);
+  }
+  return {
+    ok: true,
+    message: `Published ${log.total} commit(s) to GitHub.`,
+  };
+}

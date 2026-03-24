@@ -1,0 +1,7 @@
+# Example: TLS terminate at Caddy, proxy to Quillra Node server.
+# Replace quillra.com with your domain.
+
+quillra.com {
+	encode gzip
+	reverse_proxy localhost:3000
+}

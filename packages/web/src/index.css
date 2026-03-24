@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --color-brand: #c1121f;
+}
+
+@layer base {
+  html {
+    @apply text-neutral-900 bg-white;
+  }
+  a {
+    @apply text-brand underline-offset-2 hover:underline;
+  }
+}
