@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiJson } from "@/lib/api";
 
 export type ChatLine =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "assistant"; text: string; streaming?: boolean }
-  | { id: string; kind: "tool"; detail: string };
+  | { id: string; kind: "tool"; detail: string }
+  | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean };
 
 type WsPayload =
   | { type: "stream"; text?: string }
+  | { type: "thinking_start" }
+  | { type: "thinking"; text?: string }
   | { type: "tool"; detail?: string }
   | { type: "done"; result?: string }
   | { type: "error"; message?: string }
@@ -22,6 +25,7 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const thinkingStart = useRef<number>(0);
 
   useEffect(() => {
     if (!projectId) return;
@@ -73,24 +77,63 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
           return;
         }
 
-        if (data.type === "stream" && data.text) {
+        // Thinking started — create a streaming thinking card
+        if (data.type === "thinking_start") {
+          thinkingStart.current = Date.now();
+          setLines((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.kind === "assistant" && last.streaming) {
+              updated[updated.length - 1] = { ...last, streaming: false };
+            }
+            updated.push({
+              id: crypto.randomUUID(),
+              kind: "thinking",
+              text: "",
+              streaming: true,
+            });
+            return updated;
+          });
+        }
+
+        // Thinking delta — append to thinking card
+        if (data.type === "thinking" && data.text) {
           setLines((prev) => {
             const last = prev[prev.length - 1];
-            if (last?.kind === "assistant" && last.streaming) {
+            if (last?.kind === "thinking" && last.streaming) {
               return [
                 ...prev.slice(0, -1),
                 { ...last, text: last.text + data.text },
               ];
             }
-            return [
-              ...prev,
-              {
+            return prev;
+          });
+        }
+
+        // Text stream — finalize any thinking card, then append/create assistant bubble
+        if (data.type === "stream" && data.text) {
+          setLines((prev) => {
+            const updated = [...prev];
+            // Finalize any streaming thinking card with duration
+            const last = updated[updated.length - 1];
+            if (last?.kind === "thinking" && last.streaming) {
+              const duration = thinkingStart.current ? Date.now() - thinkingStart.current : 0;
+              updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
+              thinkingStart.current = 0;
+            }
+            // Append to existing streaming assistant or create new
+            const current = updated[updated.length - 1];
+            if (current?.kind === "assistant" && current.streaming) {
+              updated[updated.length - 1] = { ...current, text: current.text + data.text };
+            } else {
+              updated.push({
                 id: crypto.randomUUID(),
                 kind: "assistant",
                 text: data.text ?? "",
                 streaming: true,
-              },
-            ];
+              });
+            }
+            return updated;
           });
         }
 
@@ -99,11 +142,14 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
           if (detail) {
             setLines((prev) => {
               const updated = [...prev];
-              // Finalize any streaming assistant bubble so the next stream
-              // text starts a fresh bubble instead of appending to it.
               const last = updated[updated.length - 1];
               if (last?.kind === "assistant" && last.streaming) {
                 updated[updated.length - 1] = { ...last, streaming: false };
+              }
+              if (last?.kind === "thinking" && last.streaming) {
+                const duration = thinkingStart.current ? Date.now() - thinkingStart.current : 0;
+                updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
+                thinkingStart.current = 0;
               }
               updated.push({ id: crypto.randomUUID(), kind: "tool", detail });
               return updated;
@@ -113,11 +159,16 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
 
         if (data.type === "done") {
           setLines((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.kind === "assistant") {
-              return [...prev.slice(0, -1), { ...last, streaming: false }];
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.kind === "assistant" && last.streaming) {
+              updated[updated.length - 1] = { ...last, streaming: false };
             }
-            return prev;
+            if (last?.kind === "thinking" && last.streaming) {
+              const duration = thinkingStart.current ? Date.now() - thinkingStart.current : 0;
+              updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
+            }
+            return updated;
           });
           setBusy(false);
           ws.close();
@@ -134,21 +185,12 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
             if (last?.kind === "assistant" && last.streaming) {
               return [
                 ...prev.slice(0, -1),
-                {
-                  ...last,
-                  streaming: false,
-                  text: `${last.text}\n\n_${errMsg}_`,
-                },
+                { ...last, streaming: false, text: `${last.text}\n\n_${errMsg}_` },
               ];
             }
             return [
               ...prev,
-              {
-                id: crypto.randomUUID(),
-                kind: "assistant",
-                text: `_${errMsg}_`,
-                streaming: false,
-              },
+              { id: crypto.randomUUID(), kind: "assistant", text: `_${errMsg}_`, streaming: false },
             ];
           });
           setBusy(false);
@@ -170,11 +212,15 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
           if (last?.kind === "assistant" && last.streaming) {
             return [...prev.slice(0, -1), { ...last, streaming: false }];
           }
+          if (last?.kind === "thinking" && last.streaming) {
+            const duration = thinkingStart.current ? Date.now() - thinkingStart.current : 0;
+            return [...prev.slice(0, -1), { ...last, streaming: false, durationMs: duration }];
+          }
           return prev;
         });
       };
     },
-    [projectId],
+    [projectId, onRefreshPreview],
   );
 
   return { lines, busy, error, send };

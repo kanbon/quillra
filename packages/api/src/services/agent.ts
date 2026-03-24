@@ -1,12 +1,25 @@
 import { query, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
 
-function textFromStreamEvent(event: unknown): string | null {
+type StreamExtract =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "thinking_start" }
+  | null;
+
+function extractFromStreamEvent(event: unknown): StreamExtract {
   if (!event || typeof event !== "object") return null;
   const e = event as Record<string, unknown>;
+
+  if (e.type === "content_block_start" && e.content_block && typeof e.content_block === "object") {
+    const block = e.content_block as Record<string, unknown>;
+    if (block.type === "thinking") return { kind: "thinking_start" };
+  }
+
   if (e.type === "content_block_delta" && e.delta && typeof e.delta === "object") {
     const d = e.delta as Record<string, unknown>;
-    if (d.type === "text_delta" && typeof d.text === "string") return d.text;
+    if (d.type === "text_delta" && typeof d.text === "string") return { kind: "text", text: d.text };
+    if (d.type === "thinking_delta" && typeof d.thinking === "string") return { kind: "thinking", text: d.thinking };
   }
   return null;
 }
@@ -127,8 +140,11 @@ export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> 
     case "tool_use_summary":
       return { type: "tool", detail: msg.summary };
     case "stream_event": {
-      const t = textFromStreamEvent(msg.event);
-      if (t) return { type: "stream", text: t };
+      const ex = extractFromStreamEvent(msg.event);
+      if (!ex) return null;
+      if (ex.kind === "text") return { type: "stream", text: ex.text };
+      if (ex.kind === "thinking") return { type: "thinking", text: ex.text };
+      if (ex.kind === "thinking_start") return { type: "thinking_start" };
       return null;
     }
     case "assistant": {
