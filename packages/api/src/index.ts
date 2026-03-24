@@ -63,6 +63,12 @@ app.use("*", async (c, next) => {
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
+app.get("/api/caddy-check", (c) => {
+  const domain = c.req.query("domain") ?? "";
+  if (/^p\d+\.cms\.kanbon\.at$/.test(domain)) return c.text("ok", 200);
+  return c.text("denied", 403);
+});
+
 app.get("/api/session", (c) => {
   const user = c.get("user");
   return c.json({ user });
