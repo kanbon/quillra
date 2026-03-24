@@ -212,6 +212,10 @@ export async function startDevPreview(
 export function getPreviewUrl(projectId: string, port: number): string {
   const host = process.env.PREVIEW_PUBLIC_HOST ?? "localhost";
   const proto = process.env.PREVIEW_PUBLIC_PROTO ?? "http";
+  // Subdomain mode: p{port}.host (e.g. p5453.cms.kanbon.at) — avoids mixed content
+  if (process.env.PREVIEW_SUBDOMAIN === "true") {
+    return `${proto}://p${port}.${host}`;
+  }
   return `${proto}://${host}:${port}`;
 }
 
