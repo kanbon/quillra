@@ -19,7 +19,7 @@ import {
   stopPreview,
 } from "../services/workspace.js";
 import { processUploadToWebP } from "../services/image.js";
-import simpleGit from "simple-git";
+import { simpleGit } from "simple-git";
 import fs from "node:fs";
 import path from "node:path";
 
