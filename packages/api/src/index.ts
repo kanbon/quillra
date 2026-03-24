@@ -6,10 +6,11 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { nanoid } from "nanoid";
 import { cors } from "hono/cors";
 import { db } from "./db/index.js";
 import { user } from "./db/auth-schema.js";
-import { messages, projectMembers, projects } from "./db/schema.js";
+import { conversations, messages, projectMembers, projects } from "./db/schema.js";
 import { auth, type Session, type SessionUser } from "./lib/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubRouter } from "./routes/github.js";
@@ -155,7 +156,7 @@ app.get(
       async onMessage(evt, ws) {
         try {
           const raw = typeof evt.data === "string" ? evt.data : "";
-          const parsed = JSON.parse(raw) as { type?: string; content?: string };
+          const parsed = JSON.parse(raw) as { type?: string; content?: string; conversationId?: string };
           if (parsed.type !== "message" || typeof parsed.content !== "string" || !parsed.content.trim()) {
             ws.send(JSON.stringify({ type: "error", message: "Invalid message payload" }));
             return;
@@ -195,8 +196,27 @@ app.get(
             return;
           }
 
+          // Get or create conversation
+          let convId = parsed.conversationId;
+          let agentSessionId: string | null = null;
+          if (convId) {
+            const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
+            agentSessionId = conv?.agentSessionId ?? null;
+          } else {
+            convId = nanoid();
+            await db.insert(conversations).values({
+              id: convId,
+              projectId,
+              title: parsed.content.slice(0, 100),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
+            ws.send(JSON.stringify({ type: "conversation_created", conversationId: convId }));
+          }
+
           await db.insert(messages).values({
             projectId,
+            conversationId: convId,
             userId: session.user.id,
             role: "user",
             content: parsed.content,
@@ -210,6 +230,11 @@ app.get(
             prompt: parsed.content,
             role,
             projectId,
+            agentSessionId,
+            onSessionId: (sid) => {
+              agentSessionId = sid;
+              void db.update(conversations).set({ agentSessionId: sid }).where(eq(conversations.id, convId!)).catch(() => {});
+            },
           })) {
             ws.send(JSON.stringify(ev));
             if (ev.type === "stream" && typeof ev.text === "string") {
@@ -220,11 +245,19 @@ app.get(
           if (assistantText) {
             await db.insert(messages).values({
               projectId,
+              conversationId: convId,
               userId: null,
               role: "assistant",
               content: assistantText,
               createdAt: new Date(),
             });
+            // Update conversation title from first assistant response if it was auto-generated
+            const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
+            if (conv && !conv.title?.includes(" ")) {
+              await db.update(conversations).set({ title: parsed.content.slice(0, 100), updatedAt: new Date() }).where(eq(conversations.id, convId));
+            } else {
+              await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, convId));
+            }
           }
 
           ws.send(JSON.stringify({ type: "refresh_preview" }));

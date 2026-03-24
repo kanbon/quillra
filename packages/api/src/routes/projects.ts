@@ -4,7 +4,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { account } from "../db/auth-schema.js";
-import { messages, projectMembers, projects } from "../db/schema.js";
+import { conversations, messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
 import {
@@ -288,7 +288,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     }
     return c.json({ url, port, previewLabel });
   })
-  .get("/:id/messages", async (c) => {
+  .get("/:id/conversations", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;
     const projectId = c.req.param("id");
@@ -296,8 +296,32 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     if (!m) return c.json({ error: "Not found" }, 404);
     const rows = await db
       .select()
+      .from(conversations)
+      .where(eq(conversations.projectId, projectId))
+      .orderBy(desc(conversations.updatedAt))
+      .limit(50);
+    return c.json({
+      conversations: rows.map((x) => ({
+        id: x.id,
+        title: x.title,
+        updatedAt: x.updatedAt.getTime(),
+      })),
+    });
+  })
+  .get("/:id/messages", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const conversationId = c.req.query("conversationId");
+    const where = conversationId
+      ? and(eq(messages.projectId, projectId), eq(messages.conversationId, conversationId))
+      : eq(messages.projectId, projectId);
+    const rows = await db
+      .select()
       .from(messages)
-      .where(eq(messages.projectId, projectId))
+      .where(where)
       .orderBy(desc(messages.id))
       .limit(100);
     return c.json({
@@ -305,6 +329,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
         id: x.id,
         role: x.role,
         content: x.content,
+        conversationId: x.conversationId,
         createdAt: x.createdAt.getTime(),
       })),
     });

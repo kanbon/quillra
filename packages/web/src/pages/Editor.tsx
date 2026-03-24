@@ -1,6 +1,7 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/atoms/Button";
 import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
@@ -8,7 +9,6 @@ import { ChatComposer } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
 import { EditorToolbar } from "@/components/organisms/EditorToolbar";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
-import ReactMarkdown from "react-markdown";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
 
@@ -25,9 +25,16 @@ type PublishStatus = {
   summary?: string;
 };
 
+type Conversation = {
+  id: string;
+  title: string | null;
+  updatedAt: number;
+};
+
 export function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
+  const qc = useQueryClient();
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [previewLabel, setPreviewLabel] = useState<string>("");
   const [split, setSplit] = useState(42);
@@ -35,6 +42,8 @@ export function EditorPage() {
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
   const [publishStatusLoading, setPublishStatusLoading] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const previewStarted = useRef(false);
 
   const { data: project } = useQuery({
@@ -43,12 +52,22 @@ export function EditorPage() {
     enabled: Boolean(id),
   });
 
+  const { data: convList } = useQuery({
+    queryKey: ["conversations", id],
+    queryFn: () => apiJson<{ conversations: Conversation[] }>(`/api/projects/${id}/conversations`),
+    enabled: Boolean(id),
+  });
+
+  // Auto-select the most recent conversation on load
+  useEffect(() => {
+    if (convList?.conversations?.length && !conversationId) {
+      setConversationId(convList.conversations[0].id);
+    }
+  }, [convList, conversationId]);
+
   const previewMut = useMutation({
     mutationFn: async () => {
-      const res = await apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, {
-        method: "POST",
-      });
-      return res;
+      return apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, { method: "POST" });
     },
     onMutate: () => setPreviewError(null),
     onSuccess: (res) => {
@@ -67,7 +86,12 @@ export function EditorPage() {
     setPreviewSrc((u) => (u ? `${u.split("?")[0]}?t=${Date.now()}` : null));
   }, []);
 
-  const { lines, busy, error, send } = useProjectChat(id || undefined, refreshPreview);
+  const handleConversationCreated = useCallback((newId: string) => {
+    setConversationId(newId);
+    void qc.invalidateQueries({ queryKey: ["conversations", id] });
+  }, [id, qc]);
+
+  const { lines, busy, error, send } = useProjectChat(id || undefined, conversationId, refreshPreview, handleConversationCreated);
 
   // Auto-start preview on mount
   useEffect(() => {
@@ -79,15 +103,12 @@ export function EditorPage() {
           `/api/projects/${id}/preview-meta`,
         );
         setPreviewLabel(meta.previewLabel);
-        // Auto-start the preview
         const res = await apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, {
           method: "POST",
         });
         setPreviewSrc(res.url);
         setPreviewLabel(res.previewLabel);
-      } catch {
-        /* ignore — user can start manually */
-      }
+      } catch { /* user can start manually */ }
     })();
   }, [id]);
 
@@ -105,6 +126,11 @@ export function EditorPage() {
       setPublishStatusLoading(false);
     }
   }, [id, publishMut]);
+
+  const startNewChat = useCallback(() => {
+    setConversationId(null);
+    setShowHistory(false);
+  }, []);
 
   if (!id) return null;
 
@@ -129,10 +155,67 @@ export function EditorPage() {
           className="flex min-h-0 flex-col border-b border-neutral-200 md:border-b-0 md:border-r"
           style={{ flexBasis: `${split}%`, maxWidth: "100%" }}
         >
-          <div className="border-b border-neutral-200 bg-neutral-50/80 px-3 py-2">
-            <p className="text-xs font-medium text-neutral-700">Assistant</p>
-            <p className="text-[11px] text-neutral-500">Describe edits; commits are made in the repo.</p>
+          {/* Chat header with history toggle + new chat */}
+          <div className="flex items-center justify-between border-b border-neutral-200 bg-neutral-50/80 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
+                onClick={() => setShowHistory((s) => !s)}
+                title="Chat history"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+              <div>
+                <p className="text-xs font-medium text-neutral-700">Assistant</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
+              onClick={startNewChat}
+              title="New chat"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              New
+            </button>
           </div>
+
+          {/* History sidebar (overlay) */}
+          {showHistory && (
+            <div className="border-b border-neutral-200 bg-white">
+              <div className="max-h-48 overflow-y-auto">
+                {convList?.conversations?.length ? (
+                  convList.conversations.map((conv) => (
+                    <button
+                      key={conv.id}
+                      type="button"
+                      className={`flex w-full items-center gap-2 border-b border-neutral-100 px-3 py-2.5 text-left text-xs transition-colors hover:bg-neutral-50 ${conv.id === conversationId ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600"}`}
+                      onClick={() => {
+                        setConversationId(conv.id);
+                        setShowHistory(false);
+                      }}
+                    >
+                      <svg className="h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                      <span className="min-w-0 truncate">{conv.title || "Untitled"}</span>
+                      <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
+                        {new Date(conv.updatedAt).toLocaleDateString()}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-3 py-4 text-center text-xs text-neutral-400">No conversations yet</p>
+                )}
+              </div>
+            </div>
+          )}
+
           <ChatTranscript lines={lines} busy={busy} />
           <ChatComposer onSend={send} disabled={busy} />
         </section>

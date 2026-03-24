@@ -1,10 +1,6 @@
 /**
  * Module-level chat store — survives React component unmount/remount.
- * Keeps WebSocket connections and chat lines per project so navigating
- * away and back preserves the full conversation including in-progress streams.
- *
- * Every mutation creates a NEW snapshot object so useSyncExternalStore
- * detects changes via Object.is reference comparison.
+ * Keyed by "projectId:conversationId" for multi-conversation support.
  */
 
 import { apiJson } from "@/lib/api";
@@ -22,6 +18,7 @@ export type ChatSnapshot = {
   lines: ChatLine[];
   busy: boolean;
   error: string | null;
+  conversationId: string | null;
 };
 
 type Internal = {
@@ -34,27 +31,30 @@ const snapshots = new Map<string, ChatSnapshot>();
 const internals = new Map<string, Internal>();
 const listeners = new Map<string, Set<Listener>>();
 
-const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null };
+const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null };
 
-function getSnap(id: string): ChatSnapshot {
-  return snapshots.get(id) ?? EMPTY;
+function key(projectId: string, conversationId?: string | null) {
+  return conversationId ? `${projectId}:${conversationId}` : projectId;
 }
 
-function getInternal(id: string): Internal {
-  let i = internals.get(id);
+function getSnap(k: string): ChatSnapshot {
+  return snapshots.get(k) ?? EMPTY;
+}
+
+function getInternal(k: string): Internal {
+  let i = internals.get(k);
   if (!i) {
     i = { ws: null, thinkingStart: 0, historyLoaded: false };
-    internals.set(id, i);
+    internals.set(k, i);
   }
   return i;
 }
 
-/** Replace snapshot with a new object and notify listeners */
-function update(id: string, patch: Partial<ChatSnapshot>) {
-  const prev = getSnap(id);
+function update(k: string, patch: Partial<ChatSnapshot>) {
+  const prev = getSnap(k);
   const next = { ...prev, ...patch };
-  snapshots.set(id, next);
-  const subs = listeners.get(id);
+  snapshots.set(k, next);
+  const subs = listeners.get(k);
   if (subs) for (const fn of subs) fn();
 }
 
@@ -63,28 +63,31 @@ function wsBaseUrl() {
   return `${proto}://${window.location.host}`;
 }
 
-export function subscribe(projectId: string, listener: Listener): () => void {
-  let subs = listeners.get(projectId);
+export function subscribe(projectId: string, conversationId: string | null, listener: Listener): () => void {
+  const k = key(projectId, conversationId);
+  let subs = listeners.get(k);
   if (!subs) {
     subs = new Set();
-    listeners.set(projectId, subs);
+    listeners.set(k, subs);
   }
   subs.add(listener);
   return () => subs!.delete(listener);
 }
 
-export function getSnapshot(projectId: string): ChatSnapshot {
-  return getSnap(projectId);
+export function getSnapshot(projectId: string, conversationId: string | null): ChatSnapshot {
+  return getSnap(key(projectId, conversationId));
 }
 
-export async function loadHistory(projectId: string) {
-  const internal = getInternal(projectId);
+export async function loadHistory(projectId: string, conversationId: string | null) {
+  const k = key(projectId, conversationId);
+  const internal = getInternal(k);
   if (internal.historyLoaded) return;
   internal.historyLoaded = true;
   try {
+    const query = conversationId ? `?conversationId=${conversationId}` : "";
     const res = await apiJson<{
-      messages: { id: number; role: string; content: string; createdAt: number }[];
-    }>(`/api/projects/${projectId}/messages`);
+      messages: { id: number; role: string; content: string; conversationId?: string; createdAt: number }[];
+    }>(`/api/projects/${projectId}/messages${query}`);
     const mapped: ChatLine[] = [];
     for (const m of res.messages) {
       if (m.role === "user") {
@@ -93,9 +96,9 @@ export async function loadHistory(projectId: string) {
         mapped.push({ id: `h-${m.id}`, kind: "assistant", text: m.content, streaming: false });
       }
     }
-    update(projectId, { lines: mapped });
+    update(k, { lines: mapped, conversationId });
   } catch {
-    update(projectId, { error: "Could not load history" });
+    update(k, { error: "Could not load history" });
   }
 }
 
@@ -121,25 +124,29 @@ function finalizeStreaming(lines: ChatLine[]): ChatLine[] {
 
 export function sendMessage(
   projectId: string,
+  conversationId: string | null,
   text: string,
   onRefreshPreview?: () => void,
+  onConversationCreated?: (id: string) => void,
 ) {
   if (!text.trim()) return;
-  const snap = getSnap(projectId);
-  const internal = getInternal(projectId);
+  const k = key(projectId, conversationId);
+  const snap = getSnap(k);
+  const internal = getInternal(k);
   if (snap.busy) return;
 
-  update(projectId, {
+  update(k, {
     error: null,
     lines: [...snap.lines, { id: crypto.randomUUID(), kind: "user", text }],
     busy: true,
+    conversationId,
   });
 
   const ws = new WebSocket(`${wsBaseUrl()}/ws/chat/${projectId}`);
   internal.ws = ws;
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: "message", content: text }));
+    ws.send(JSON.stringify({ type: "message", content: text, conversationId }));
   };
 
   ws.onmessage = (evt) => {
@@ -151,14 +158,47 @@ export function sendMessage(
     }
 
     const type = data.type as string;
-    const snap = getSnap(projectId);
+
+    // Handle new conversation creation
+    if (type === "conversation_created" && data.conversationId) {
+      const newConvId = data.conversationId as string;
+      // Move state from the old key to the new conversation key
+      const oldK = k;
+      const newK = key(projectId, newConvId);
+      const currentSnap = getSnap(oldK);
+      snapshots.set(newK, { ...currentSnap, conversationId: newConvId });
+      internals.set(newK, internal);
+      // Copy listeners
+      const oldSubs = listeners.get(oldK);
+      if (oldSubs) {
+        listeners.set(newK, oldSubs);
+        listeners.delete(oldK);
+      }
+      snapshots.delete(oldK);
+      internals.delete(oldK);
+      onConversationCreated?.(newConvId);
+      // Notify on new key
+      const subs = listeners.get(newK);
+      if (subs) for (const fn of subs) fn();
+      return;
+    }
+
+    // Use the current snapshot key (may have been updated by conversation_created)
+    const currentK = (() => {
+      // Find which key this internal belongs to
+      for (const [ik, iv] of internals) {
+        if (iv === internal) return ik;
+      }
+      return k;
+    })();
+    const snap = getSnap(currentK);
 
     if (type === "thinking_start") {
       let updated = finalizeStreaming(snap.lines);
       updated = finalizeThinking(updated, internal);
       internal.thinkingStart = Date.now();
       updated.push({ id: crypto.randomUUID(), kind: "thinking", text: "", streaming: true });
-      update(projectId, { lines: updated });
+      update(currentK, { lines: updated });
     }
 
     if (type === "thinking" && data.text) {
@@ -166,7 +206,7 @@ export function sendMessage(
       const last = lines[lines.length - 1];
       if (last?.kind === "thinking" && last.streaming) {
         lines[lines.length - 1] = { ...last, text: last.text + (data.text as string) };
-        update(projectId, { lines });
+        update(currentK, { lines });
       }
     }
 
@@ -184,7 +224,7 @@ export function sendMessage(
           streaming: true,
         }];
       }
-      update(projectId, { lines: updated });
+      update(currentK, { lines: updated });
     }
 
     if (type === "tool_progress") {
@@ -195,7 +235,7 @@ export function sendMessage(
         toolName: data.toolName as string,
         elapsed: data.elapsed as number,
       });
-      update(projectId, { lines: updated });
+      update(currentK, { lines: updated });
     }
 
     if (type === "tool" && data.detail) {
@@ -203,7 +243,7 @@ export function sendMessage(
       updated = finalizeStreaming(updated);
       updated = finalizeThinking(updated, internal);
       updated.push({ id: crypto.randomUUID(), kind: "tool", detail: data.detail as string });
-      update(projectId, { lines: updated });
+      update(currentK, { lines: updated });
     }
 
     if (type === "done") {
@@ -211,7 +251,7 @@ export function sendMessage(
       updated = finalizeThinking(updated, internal);
       updated = updated.filter((l) => l.kind !== "tool_active");
       internal.ws = null;
-      update(projectId, { lines: updated, busy: false });
+      update(currentK, { lines: updated, busy: false });
       ws.close();
     }
 
@@ -235,25 +275,33 @@ export function sendMessage(
         ];
       }
       internal.ws = null;
-      update(projectId, { lines, busy: false, error: errMsg });
+      update(currentK, { lines, busy: false, error: errMsg });
       ws.close();
     }
   };
 
   ws.onerror = () => {
+    const currentK = (() => {
+      for (const [ik, iv] of internals) { if (iv === internal) return ik; }
+      return k;
+    })();
     internal.ws = null;
-    update(projectId, { busy: false, error: "Connection error" });
+    update(currentK, { busy: false, error: "Connection error" });
     ws.close();
   };
 
   ws.onclose = () => {
     if (internal.ws === ws) {
-      const snap = getSnap(projectId);
+      const currentK = (() => {
+        for (const [ik, iv] of internals) { if (iv === internal) return ik; }
+        return k;
+      })();
+      const snap = getSnap(currentK);
       let updated = finalizeStreaming(snap.lines);
       updated = finalizeThinking(updated, internal);
       updated = updated.filter((l) => l.kind !== "tool_active");
       internal.ws = null;
-      update(projectId, { lines: updated, busy: false });
+      update(currentK, { lines: updated, busy: false });
     }
   };
 }

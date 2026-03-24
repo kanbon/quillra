@@ -68,6 +68,26 @@ export const instanceInvites = sqliteTable("instance_invites", {
   acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
 });
 
+export const conversations = sqliteTable(
+  "conversations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    title: text("title"),
+    agentSessionId: text("agent_session_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("conversations_project_idx").on(table.projectId)],
+);
+
 export const messages = sqliteTable(
   "messages",
   {
@@ -75,6 +95,8 @@ export const messages = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .references(() => conversations.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
     role: text("role").notNull(),
     content: text("content").notNull(),
@@ -88,6 +110,15 @@ export const messages = sqliteTable(
 export const projectsRelations = relations(projects, ({ many }) => ({
   members: many(projectMembers),
   invites: many(projectInvites),
+  conversations: many(conversations),
+  messages: many(messages),
+}));
+
+export const conversationsRelations = relations(conversations, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [conversations.projectId],
+    references: [projects.id],
+  }),
   messages: many(messages),
 }));
 
@@ -113,6 +144,10 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   project: one(projects, {
     fields: [messages.projectId],
     references: [projects.id],
+  }),
+  conversation: one(conversations, {
+    fields: [messages.conversationId],
+    references: [conversations.id],
   }),
   user: one(user, {
     fields: [messages.userId],
