@@ -209,8 +209,29 @@ export async function startDevPreview(
   return { port, label };
 }
 
+/** Maps preview subdomain ID → localhost port */
+const previewSubdomains = new Map<string, number>();
+
+/** Reverse map: projectId → subdomain ID */
+const projectSubdomainIds = new Map<string, string>();
+
+export function getPreviewSubdomainPort(subdomainId: string): number | undefined {
+  return previewSubdomains.get(subdomainId);
+}
+
 export function getPreviewUrl(projectId: string, port: number): string {
-  // Default: same-origin proxy through /__preview/:port/ (works everywhere, no DNS config)
+  const host = process.env.PREVIEW_DOMAIN;
+  if (host) {
+    // Subdomain mode: {id}.cms.kanbon.at
+    let id = projectSubdomainIds.get(projectId);
+    if (!id) {
+      id = projectId.slice(0, 12).toLowerCase().replace(/[^a-z0-9]/g, "");
+      projectSubdomainIds.set(projectId, id);
+    }
+    previewSubdomains.set(id, port);
+    return `https://${id}.${host}`;
+  }
+  // Fallback: same-origin proxy
   const base = process.env.BETTER_AUTH_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
   return `${base}/__preview/${port}/`;
 }

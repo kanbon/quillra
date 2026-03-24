@@ -31,7 +31,6 @@ function usePreviewReady(src: string | null) {
       return;
     }
 
-    // If src changed (refresh), check immediately
     const baseUrl = src.split("?")[0];
     const prevBase = prevSrc.current?.split("?")[0];
     if (baseUrl === prevBase && ready) return;
@@ -48,8 +47,10 @@ function usePreviewReady(src: string | null) {
         attempt++;
         setProgress(Math.min(90, (attempt / maxAttempts) * 100));
         try {
-          const res = await fetch(src.split("?")[0], { method: "HEAD", cache: "no-store" });
-          if (res.ok) {
+          // Use fetch with no-cors mode for cross-origin preview subdomains
+          const res = await fetch(baseUrl, { method: "HEAD", mode: "no-cors", cache: "no-store" });
+          // no-cors returns opaque response (status 0) but means the server is reachable
+          if (res.status === 0 || res.ok) {
             setProgress(100);
             setTimeout(() => { if (!cancelled) setReady(true); }, 300);
             return;
@@ -57,7 +58,6 @@ function usePreviewReady(src: string | null) {
         } catch { /* not ready yet */ }
         await new Promise((r) => setTimeout(r, 1000));
       }
-      // After max attempts, show it anyway (might work)
       if (!cancelled) {
         setProgress(100);
         setReady(true);
@@ -152,7 +152,6 @@ export function PreviewPane({
               ref={iframeRef}
               title="Site preview"
               src={src!}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups-to-escape-sandbox"
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
             />
