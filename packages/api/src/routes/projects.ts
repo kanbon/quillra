@@ -182,7 +182,10 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
         .where(and(eq(account.userId, r.user.id), eq(account.providerId, "github")))
         .limit(1);
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const result = await pushToGitHub(repoPath, p.defaultBranch, p.githubRepoFullName, acct?.accessToken);
+      const result = await pushToGitHub(repoPath, p.defaultBranch, p.githubRepoFullName, acct?.accessToken, {
+        name: r.user.name,
+        email: r.user.email,
+      });
       return c.json(result);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Publish failed" }, 400);

@@ -220,6 +220,7 @@ export async function pushToGitHub(
   branch: string,
   githubRepoFullName: string,
   userToken?: string | null,
+  committer?: { name: string; email: string } | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
   const token = userToken?.trim() || process.env.GITHUB_TOKEN?.trim();
   if (!token) {
@@ -230,10 +231,17 @@ export async function pushToGitHub(
   const authUrl = `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`;
   await g.remote(["set-url", "origin", authUrl]);
 
+  if (committer?.name) await g.addConfig("user.name", committer.name);
+  if (committer?.email) await g.addConfig("user.email", committer.email);
+
   const status = await g.status();
   if (!status.isClean()) {
     await g.add("-A");
-    await g.commit("Update via Quillra CMS");
+    const changed = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
+    const summary = changed.length <= 5
+      ? changed.join(", ")
+      : `${changed.slice(0, 4).join(", ")} +${changed.length - 4} more`;
+    await g.commit(`Update ${summary} via Quillra`);
   }
 
   const branches = await g.branch(["-r"]);
