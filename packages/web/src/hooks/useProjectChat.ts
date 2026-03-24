@@ -97,10 +97,17 @@ export function useProjectChat(projectId: string | undefined, onRefreshPreview?:
         if (data.type === "tool") {
           const detail = data.detail ?? "";
           if (detail) {
-            setLines((prev) => [
-              ...prev,
-              { id: crypto.randomUUID(), kind: "tool", detail },
-            ]);
+            setLines((prev) => {
+              const updated = [...prev];
+              // Finalize any streaming assistant bubble so the next stream
+              // text starts a fresh bubble instead of appending to it.
+              const last = updated[updated.length - 1];
+              if (last?.kind === "assistant" && last.streaming) {
+                updated[updated.length - 1] = { ...last, streaming: false };
+              }
+              updated.push({ id: crypto.randomUUID(), kind: "tool", detail });
+              return updated;
+            });
           }
         }
 
