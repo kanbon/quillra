@@ -21,6 +21,7 @@ type PublishStatus = {
   dirty: string[];
   unpushed: number;
   hasChanges: boolean;
+  summary?: string;
 };
 
 export function EditorPage() {
@@ -183,29 +184,15 @@ export function EditorPage() {
           <>
             {publishStatus.hasChanges ? (
               <>
-                <p className="mb-3 mt-1 text-sm text-neutral-500">
-                  {publishStatus.dirty.length > 0 && publishStatus.unpushed > 0
-                    ? `${publishStatus.dirty.length} edited file${publishStatus.dirty.length !== 1 ? "s" : ""} and ${publishStatus.unpushed} saved change${publishStatus.unpushed !== 1 ? "s" : ""} ready to go live.`
-                    : publishStatus.dirty.length > 0
-                      ? `${publishStatus.dirty.length} edited file${publishStatus.dirty.length !== 1 ? "s" : ""} ready to go live.`
-                      : `${publishStatus.unpushed} saved change${publishStatus.unpushed !== 1 ? "s" : ""} ready to go live.`}
-                </p>
-                <div className="mb-4 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-                  <ul className="space-y-0.5">
-                    {publishStatus.dirty.slice(0, 6).map((f) => {
-                      const name = f.split("/").pop() ?? f;
-                      return (
-                        <li key={f} className="flex items-center gap-2 text-xs text-neutral-600">
-                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
-                          {name}
-                        </li>
-                      );
-                    })}
-                    {publishStatus.dirty.length > 6 && (
-                      <li className="text-xs text-neutral-400 pl-3.5">and {publishStatus.dirty.length - 6} more</li>
-                    )}
-                  </ul>
-                </div>
+                {publishStatus.summary ? (
+                  <p className="mb-4 mt-2 text-sm leading-relaxed text-neutral-600">
+                    {publishStatus.summary}
+                  </p>
+                ) : (
+                  <p className="mb-4 mt-1 text-sm text-neutral-500">
+                    Your recent edits are ready to go live.
+                  </p>
+                )}
                 <Button
                   type="button"
                   className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"

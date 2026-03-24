@@ -187,7 +187,40 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
           unpushed = log.total;
         }
       } catch { /* no remote yet */ }
-      return c.json({ dirty, unpushed, hasChanges: dirty.length > 0 || unpushed > 0 });
+      const hasChanges = dirty.length > 0 || unpushed > 0;
+
+      // Generate a plain-English summary using Claude
+      let summary = "";
+      if (hasChanges) {
+        try {
+          const diffOutput = await g.diff(["--stat", "--no-color"]);
+          const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+          if (apiKey && diffOutput) {
+            const res = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 150,
+                messages: [{
+                  role: "user",
+                  content: `Summarize these website changes in 1-2 short sentences for a non-technical person. Be specific about what changed (e.g. "Updated the homepage title" not "Modified files"). No technical jargon.\n\nChanged files:\n${dirty.join("\n")}\n\nDiff summary:\n${diffOutput.slice(0, 1000)}`,
+                }],
+              }),
+            });
+            if (res.ok) {
+              const body = await res.json() as { content?: { text?: string }[] };
+              summary = body.content?.[0]?.text ?? "";
+            }
+          }
+        } catch { /* summary is optional */ }
+      }
+
+      return c.json({ dirty, unpushed, hasChanges, summary });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
     }
