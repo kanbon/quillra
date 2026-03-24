@@ -182,7 +182,7 @@ export async function* runProjectAgent(params: {
       includePartialMessages: true,
       persistSession: false,
       canUseTool: buildCanUseTool(params.role),
-      permissionMode: "default",
+      permissionMode: "acceptEdits",
     },
   });
 
