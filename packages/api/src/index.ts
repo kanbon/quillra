@@ -198,17 +198,19 @@ app.get("*", async (c) => {
       const buf = readFileSync(file);
       const ext = path.extname(file);
       const mime =
-        ext === ".js"
-          ? "text/javascript"
-          : ext === ".css"
-            ? "text/css"
-            : ext === ".svg"
-              ? "image/svg+xml"
-              : ext === ".webp"
-                ? "image/webp"
-                : ext === ".json"
-                  ? "application/json"
-                  : "application/octet-stream";
+        ext === ".html"
+          ? "text/html"
+          : ext === ".js"
+            ? "text/javascript"
+            : ext === ".css"
+              ? "text/css"
+              : ext === ".svg"
+                ? "image/svg+xml"
+                : ext === ".webp"
+                  ? "image/webp"
+                  : ext === ".json"
+                    ? "application/json"
+                    : "application/octet-stream";
       return c.body(buf, 200, { "Content-Type": mime, "Cache-Control": "public, max-age=3600" });
     } catch {
       /* fall through */
