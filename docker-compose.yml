@@ -6,9 +6,7 @@
 services:
   cms:
     build: .
-    ports:
-      - "3000:3000"
-      - "4321-6320:4321-6320"
+    network_mode: host
     env_file:
       - packages/api/.env
     volumes:
