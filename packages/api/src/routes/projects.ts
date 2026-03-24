@@ -19,6 +19,7 @@ import {
   stopPreview,
 } from "../services/workspace.js";
 import { processUploadToWebP } from "../services/image.js";
+import simpleGit from "simple-git";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -175,7 +176,6 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const simpleGit = (await import("simple-git")).default;
       const g = simpleGit(repoPath);
       const status = await g.status();
       const dirty = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
