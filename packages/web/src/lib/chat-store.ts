@@ -2,6 +2,9 @@
  * Module-level chat store — survives React component unmount/remount.
  * Keeps WebSocket connections and chat lines per project so navigating
  * away and back preserves the full conversation including in-progress streams.
+ *
+ * Every mutation creates a NEW snapshot object so useSyncExternalStore
+ * detects changes via Object.is reference comparison.
  */
 
 import { apiJson } from "@/lib/api";
@@ -15,29 +18,43 @@ export type ChatLine =
 
 type Listener = () => void;
 
-type ProjectChat = {
+export type ChatSnapshot = {
   lines: ChatLine[];
   busy: boolean;
   error: string | null;
+};
+
+type Internal = {
   ws: WebSocket | null;
   thinkingStart: number;
   historyLoaded: boolean;
 };
 
-const store = new Map<string, ProjectChat>();
+const snapshots = new Map<string, ChatSnapshot>();
+const internals = new Map<string, Internal>();
 const listeners = new Map<string, Set<Listener>>();
 
-function getOrCreate(projectId: string): ProjectChat {
-  let entry = store.get(projectId);
-  if (!entry) {
-    entry = { lines: [], busy: false, error: null, ws: null, thinkingStart: 0, historyLoaded: false };
-    store.set(projectId, entry);
-  }
-  return entry;
+const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null };
+
+function getSnap(id: string): ChatSnapshot {
+  return snapshots.get(id) ?? EMPTY;
 }
 
-function notify(projectId: string) {
-  const subs = listeners.get(projectId);
+function getInternal(id: string): Internal {
+  let i = internals.get(id);
+  if (!i) {
+    i = { ws: null, thinkingStart: 0, historyLoaded: false };
+    internals.set(id, i);
+  }
+  return i;
+}
+
+/** Replace snapshot with a new object and notify listeners */
+function update(id: string, patch: Partial<ChatSnapshot>) {
+  const prev = getSnap(id);
+  const next = { ...prev, ...patch };
+  snapshots.set(id, next);
+  const subs = listeners.get(id);
   if (subs) for (const fn of subs) fn();
 }
 
@@ -56,14 +73,14 @@ export function subscribe(projectId: string, listener: Listener): () => void {
   return () => subs!.delete(listener);
 }
 
-export function getSnapshot(projectId: string): ProjectChat {
-  return getOrCreate(projectId);
+export function getSnapshot(projectId: string): ChatSnapshot {
+  return getSnap(projectId);
 }
 
 export async function loadHistory(projectId: string) {
-  const chat = getOrCreate(projectId);
-  if (chat.historyLoaded) return;
-  chat.historyLoaded = true;
+  const internal = getInternal(projectId);
+  if (internal.historyLoaded) return;
+  internal.historyLoaded = true;
   try {
     const res = await apiJson<{
       messages: { id: number; role: string; content: string; createdAt: number }[];
@@ -76,12 +93,30 @@ export async function loadHistory(projectId: string) {
         mapped.push({ id: `h-${m.id}`, kind: "assistant", text: m.content, streaming: false });
       }
     }
-    chat.lines = mapped;
-    notify(projectId);
+    update(projectId, { lines: mapped });
   } catch {
-    chat.error = "Could not load history";
-    notify(projectId);
+    update(projectId, { error: "Could not load history" });
   }
+}
+
+function finalizeThinking(lines: ChatLine[], internal: Internal): ChatLine[] {
+  const updated = [...lines];
+  const last = updated[updated.length - 1];
+  if (last?.kind === "thinking" && last.streaming) {
+    const duration = internal.thinkingStart ? Date.now() - internal.thinkingStart : 0;
+    updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
+    internal.thinkingStart = 0;
+  }
+  return updated;
+}
+
+function finalizeStreaming(lines: ChatLine[]): ChatLine[] {
+  const updated = [...lines];
+  const last = updated[updated.length - 1];
+  if (last?.kind === "assistant" && last.streaming) {
+    updated[updated.length - 1] = { ...last, streaming: false };
+  }
+  return updated;
 }
 
 export function sendMessage(
@@ -90,16 +125,18 @@ export function sendMessage(
   onRefreshPreview?: () => void,
 ) {
   if (!text.trim()) return;
-  const chat = getOrCreate(projectId);
-  if (chat.busy) return;
+  const snap = getSnap(projectId);
+  const internal = getInternal(projectId);
+  if (snap.busy) return;
 
-  chat.error = null;
-  chat.lines = [...chat.lines, { id: crypto.randomUUID(), kind: "user", text }];
-  chat.busy = true;
-  notify(projectId);
+  update(projectId, {
+    error: null,
+    lines: [...snap.lines, { id: crypto.randomUUID(), kind: "user", text }],
+    busy: true,
+  });
 
   const ws = new WebSocket(`${wsBaseUrl()}/ws/chat/${projectId}`);
-  chat.ws = ws;
+  internal.ws = ws;
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: "message", content: text }));
@@ -114,108 +151,67 @@ export function sendMessage(
     }
 
     const type = data.type as string;
+    const snap = getSnap(projectId);
 
     if (type === "thinking_start") {
-      const updated = [...chat.lines];
-      const last = updated[updated.length - 1];
-      // Finalize any previous streaming bubble
-      if (last?.kind === "assistant" && last.streaming) {
-        updated[updated.length - 1] = { ...last, streaming: false };
-      }
-      if (last?.kind === "thinking" && last.streaming) {
-        const duration = chat.thinkingStart ? Date.now() - chat.thinkingStart : 0;
-        updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
-      }
-      chat.thinkingStart = Date.now();
+      let updated = finalizeStreaming(snap.lines);
+      updated = finalizeThinking(updated, internal);
+      internal.thinkingStart = Date.now();
       updated.push({ id: crypto.randomUUID(), kind: "thinking", text: "", streaming: true });
-      chat.lines = updated;
-      notify(projectId);
+      update(projectId, { lines: updated });
     }
 
     if (type === "thinking" && data.text) {
-      const last = chat.lines[chat.lines.length - 1];
+      const lines = [...snap.lines];
+      const last = lines[lines.length - 1];
       if (last?.kind === "thinking" && last.streaming) {
-        chat.lines = [
-          ...chat.lines.slice(0, -1),
-          { ...last, text: last.text + (data.text as string) },
-        ];
-        notify(projectId);
+        lines[lines.length - 1] = { ...last, text: last.text + (data.text as string) };
+        update(projectId, { lines });
       }
     }
 
     if (type === "stream" && data.text) {
-      const updated = [...chat.lines];
-      const last = updated[updated.length - 1];
-      // Finalize thinking
-      if (last?.kind === "thinking" && last.streaming) {
-        const duration = chat.thinkingStart ? Date.now() - chat.thinkingStart : 0;
-        updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
-        chat.thinkingStart = 0;
-      }
+      let updated = finalizeThinking(snap.lines, internal);
       const current = updated[updated.length - 1];
       if (current?.kind === "assistant" && current.streaming) {
+        updated = [...updated];
         updated[updated.length - 1] = { ...current, text: current.text + (data.text as string) };
       } else {
-        updated.push({
+        updated = [...updated, {
           id: crypto.randomUUID(),
-          kind: "assistant",
+          kind: "assistant" as const,
           text: data.text as string,
           streaming: true,
-        });
+        }];
       }
-      chat.lines = updated;
-      notify(projectId);
+      update(projectId, { lines: updated });
     }
 
-    // Live tool activity indicator — replace previous tool_active with updated one
     if (type === "tool_progress") {
-      const updated = [...chat.lines];
-      // Remove previous tool_active entry if any
-      const activeIdx = updated.findLastIndex((l) => l.kind === "tool_active");
-      if (activeIdx >= 0) updated.splice(activeIdx, 1);
+      const updated = snap.lines.filter((l) => l.kind !== "tool_active");
       updated.push({
         id: crypto.randomUUID(),
         kind: "tool_active",
         toolName: data.toolName as string,
         elapsed: data.elapsed as number,
       });
-      chat.lines = updated;
-      notify(projectId);
+      update(projectId, { lines: updated });
     }
 
     if (type === "tool" && data.detail) {
-      const updated = [...chat.lines];
-      // Remove tool_active indicator since we now have the summary
-      const activeIdx = updated.findLastIndex((l) => l.kind === "tool_active");
-      if (activeIdx >= 0) updated.splice(activeIdx, 1);
-      const last = updated[updated.length - 1];
-      if (last?.kind === "assistant" && last.streaming) {
-        updated[updated.length - 1] = { ...last, streaming: false };
-      }
-      if (last?.kind === "thinking" && last.streaming) {
-        const duration = chat.thinkingStart ? Date.now() - chat.thinkingStart : 0;
-        updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
-        chat.thinkingStart = 0;
-      }
+      let updated = snap.lines.filter((l) => l.kind !== "tool_active");
+      updated = finalizeStreaming(updated);
+      updated = finalizeThinking(updated, internal);
       updated.push({ id: crypto.randomUUID(), kind: "tool", detail: data.detail as string });
-      chat.lines = updated;
-      notify(projectId);
+      update(projectId, { lines: updated });
     }
 
     if (type === "done") {
-      const updated = [...chat.lines];
-      const last = updated[updated.length - 1];
-      if (last?.kind === "assistant" && last.streaming) {
-        updated[updated.length - 1] = { ...last, streaming: false };
-      }
-      if (last?.kind === "thinking" && last.streaming) {
-        const duration = chat.thinkingStart ? Date.now() - chat.thinkingStart : 0;
-        updated[updated.length - 1] = { ...last, streaming: false, durationMs: duration };
-      }
-      chat.lines = updated;
-      chat.busy = false;
-      chat.ws = null;
-      notify(projectId);
+      let updated = finalizeStreaming(snap.lines);
+      updated = finalizeThinking(updated, internal);
+      updated = updated.filter((l) => l.kind !== "tool_active");
+      internal.ws = null;
+      update(projectId, { lines: updated, busy: false });
       ws.close();
     }
 
@@ -225,47 +221,39 @@ export function sendMessage(
 
     if (type === "error") {
       const errMsg = (data.message as string) ?? "Error";
-      const last = chat.lines[chat.lines.length - 1];
+      const last = snap.lines[snap.lines.length - 1];
+      let lines: ChatLine[];
       if (last?.kind === "assistant" && last.streaming) {
-        chat.lines = [
-          ...chat.lines.slice(0, -1),
+        lines = [
+          ...snap.lines.slice(0, -1),
           { ...last, streaming: false, text: `${last.text}\n\n_${errMsg}_` },
         ];
       } else {
-        chat.lines = [
-          ...chat.lines,
+        lines = [
+          ...snap.lines,
           { id: crypto.randomUUID(), kind: "assistant", text: `_${errMsg}_`, streaming: false },
         ];
       }
-      chat.busy = false;
-      chat.error = errMsg;
-      chat.ws = null;
-      notify(projectId);
+      internal.ws = null;
+      update(projectId, { lines, busy: false, error: errMsg });
       ws.close();
     }
   };
 
   ws.onerror = () => {
-    chat.busy = false;
-    chat.error = "Connection error";
-    chat.ws = null;
-    notify(projectId);
+    internal.ws = null;
+    update(projectId, { busy: false, error: "Connection error" });
     ws.close();
   };
 
   ws.onclose = () => {
-    if (chat.ws === ws) {
-      chat.busy = false;
-      const last = chat.lines[chat.lines.length - 1];
-      if (last?.kind === "assistant" && last.streaming) {
-        chat.lines = [...chat.lines.slice(0, -1), { ...last, streaming: false }];
-      }
-      if (last?.kind === "thinking" && last.streaming) {
-        const duration = chat.thinkingStart ? Date.now() - chat.thinkingStart : 0;
-        chat.lines = [...chat.lines.slice(0, -1), { ...last, streaming: false, durationMs: duration }];
-      }
-      chat.ws = null;
-      notify(projectId);
+    if (internal.ws === ws) {
+      const snap = getSnap(projectId);
+      let updated = finalizeStreaming(snap.lines);
+      updated = finalizeThinking(updated, internal);
+      updated = updated.filter((l) => l.kind !== "tool_active");
+      internal.ws = null;
+      update(projectId, { lines: updated, busy: false });
     }
   };
 }

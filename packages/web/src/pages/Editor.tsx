@@ -170,12 +170,12 @@ export function EditorPage() {
       </div>
 
       <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>
-        <h3 className="mb-1 text-lg font-semibold text-neutral-900">Publish changes</h3>
+        <h3 className="mb-1 text-lg font-semibold text-neutral-900">Go live</h3>
 
         {publishStatusLoading && (
           <div className="flex flex-col items-center py-6">
             <Spinner className="mb-3 size-5" />
-            <p className="text-sm text-neutral-500">Checking for changes…</p>
+            <p className="text-sm text-neutral-500">Reviewing your changes…</p>
           </div>
         )}
 
@@ -183,38 +183,41 @@ export function EditorPage() {
           <>
             {publishStatus.hasChanges ? (
               <>
-                <div className="mb-4 mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-                  {publishStatus.dirty.length > 0 && (
-                    <div className="mb-2">
-                      <p className="mb-1 text-xs font-medium text-neutral-500">Uncommitted changes</p>
-                      <ul className="space-y-0.5">
-                        {publishStatus.dirty.slice(0, 8).map((f) => (
-                          <li key={f} className="truncate font-mono text-xs text-neutral-700">{f}</li>
-                        ))}
-                        {publishStatus.dirty.length > 8 && (
-                          <li className="text-xs text-neutral-400">+{publishStatus.dirty.length - 8} more</li>
-                        )}
-                      </ul>
-                    </div>
-                  )}
-                  {publishStatus.unpushed > 0 && (
-                    <p className="text-xs text-neutral-600">
-                      {publishStatus.unpushed} unpushed commit{publishStatus.unpushed !== 1 ? "s" : ""}
-                    </p>
-                  )}
+                <p className="mb-3 mt-1 text-sm text-neutral-500">
+                  {publishStatus.dirty.length > 0 && publishStatus.unpushed > 0
+                    ? `${publishStatus.dirty.length} edited file${publishStatus.dirty.length !== 1 ? "s" : ""} and ${publishStatus.unpushed} saved change${publishStatus.unpushed !== 1 ? "s" : ""} ready to go live.`
+                    : publishStatus.dirty.length > 0
+                      ? `${publishStatus.dirty.length} edited file${publishStatus.dirty.length !== 1 ? "s" : ""} ready to go live.`
+                      : `${publishStatus.unpushed} saved change${publishStatus.unpushed !== 1 ? "s" : ""} ready to go live.`}
+                </p>
+                <div className="mb-4 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                  <ul className="space-y-0.5">
+                    {publishStatus.dirty.slice(0, 6).map((f) => {
+                      const name = f.split("/").pop() ?? f;
+                      return (
+                        <li key={f} className="flex items-center gap-2 text-xs text-neutral-600">
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                          {name}
+                        </li>
+                      );
+                    })}
+                    {publishStatus.dirty.length > 6 && (
+                      <li className="text-xs text-neutral-400 pl-3.5">and {publishStatus.dirty.length - 6} more</li>
+                    )}
+                  </ul>
                 </div>
                 <Button
                   type="button"
                   className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
                   onClick={() => publishMut.mutate()}
                 >
-                  Publish to GitHub
+                  Publish now
                 </Button>
               </>
             ) : (
               <>
                 <p className="mb-6 mt-2 text-sm text-neutral-500">
-                  Everything is up to date — no changes to publish.
+                  Your site is up to date — nothing new to publish.
                 </p>
                 <Button
                   type="button"
@@ -230,15 +233,19 @@ export function EditorPage() {
         )}
 
         {publishMut.isPending && (
-          <div className="flex flex-col items-center py-6">
-            <Spinner className="mb-3 size-6" />
-            <p className="text-sm text-neutral-500">Publishing…</p>
+          <div className="flex flex-col items-center py-8">
+            <Spinner className="mb-4 size-6" />
+            <p className="text-sm font-medium text-neutral-700">Publishing your changes…</p>
+            <p className="mt-1 text-xs text-neutral-400">Your site will update in a few moments.</p>
           </div>
         )}
 
         {publishMut.isSuccess && (
           <>
-            <p className="mb-6 mt-2 text-sm text-neutral-600">{publishMut.data?.message}</p>
+            <div className="mb-4 mt-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+              <span className="text-green-600">&#10003;</span>
+              <p className="text-sm text-green-700">Your changes are live! It may take a minute for the update to appear on your site.</p>
+            </div>
             <Button
               type="button"
               className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
@@ -252,14 +259,14 @@ export function EditorPage() {
         {publishMut.isError && (
           <>
             <p className="mb-6 mt-2 text-sm text-red-600">
-              {publishMut.error instanceof Error ? publishMut.error.message : "Publish failed"}
+              Something went wrong while publishing. Please try again.
             </p>
             <Button
               type="button"
               className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
               onClick={() => publishMut.mutate()}
             >
-              Retry
+              Try again
             </Button>
           </>
         )}

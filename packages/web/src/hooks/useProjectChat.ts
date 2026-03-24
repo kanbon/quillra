@@ -5,16 +5,19 @@ import {
   loadHistory,
   sendMessage,
   type ChatLine,
+  type ChatSnapshot,
 } from "@/lib/chat-store";
 
 export type { ChatLine };
+
+const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null };
 
 export function useProjectChat(projectId: string | undefined, onRefreshPreview?: () => void) {
   const id = projectId ?? "";
 
   const snap = useSyncExternalStore(
     (cb) => (id ? subscribe(id, cb) : () => {}),
-    () => (id ? getSnapshot(id) : { lines: [], busy: false, error: null }),
+    () => (id ? getSnapshot(id) : EMPTY),
   );
 
   useEffect(() => {
