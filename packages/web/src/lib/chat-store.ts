@@ -74,9 +74,11 @@ export function subscribe(projectId: string, conversationId: string | null, list
   return () => subs!.delete(listener);
 }
 
+/** Stable empty snapshot for new chats — same reference every time */
+const NEW_CHAT: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null };
+
 export function getSnapshot(projectId: string, conversationId: string | null): ChatSnapshot {
-  // null conversationId = new chat, always empty
-  if (!conversationId) return { ...EMPTY };
+  if (!conversationId) return NEW_CHAT;
   return getSnap(key(projectId, conversationId));
 }
 
