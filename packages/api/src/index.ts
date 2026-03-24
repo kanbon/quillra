@@ -41,6 +41,49 @@ const app = new Hono<{ Variables: Variables }>();
 
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
+/* ── Subdomain preview proxy ──────────────────────────────────────────
+ * If the Host header matches {id}.PREVIEW_DOMAIN, proxy the entire
+ * request to the dev server on the mapped port. Caddy terminates TLS
+ * and forwards to us on :3000.
+ */
+app.use("*", async (c, next) => {
+  const previewDomain = process.env.PREVIEW_DOMAIN;
+  if (!previewDomain) return next();
+  const host = (c.req.header("host") ?? "").split(":")[0];
+  const suffix = `.${previewDomain}`;
+  if (!host.endsWith(suffix)) return next();
+  const id = host.slice(0, -suffix.length);
+  if (!id) return next();
+  const port = getPreviewSubdomainPort(id);
+  if (!port) return c.text("Preview not found", 404);
+
+  const target = `http://127.0.0.1:${port}${c.req.path}`;
+  const url = new URL(target);
+  url.search = new URL(c.req.url).search;
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("host");
+
+  try {
+    const upstream = await fetch(url.toString(), {
+      method: c.req.method,
+      headers,
+      body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
+      redirect: "manual",
+    });
+    const respHeaders = new Headers(upstream.headers);
+    respHeaders.delete("transfer-encoding");
+    return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
+  } catch {
+    return c.html(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3"></head>` +
+      `<body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui;color:#666">` +
+      `<div style="text-align:center"><p style="font-size:14px">Starting preview server…</p>` +
+      `<p style="font-size:12px;color:#999">This page will refresh automatically.</p></div></body></html>`,
+      502,
+    );
+  }
+});
+
 app.use(
   "*",
   cors({
