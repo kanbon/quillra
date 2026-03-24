@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Button } from "@/components/atoms/Button";
 import { Modal } from "@/components/atoms/Modal";
@@ -17,6 +17,12 @@ type ProjectDetail = {
   role: string;
 };
 
+type PublishStatus = {
+  dirty: string[];
+  unpushed: number;
+  hasChanges: boolean;
+};
+
 export function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
@@ -25,6 +31,9 @@ export function EditorPage() {
   const [split, setSplit] = useState(42);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
+  const [publishStatusLoading, setPublishStatusLoading] = useState(false);
+  const previewStarted = useRef(false);
 
   const { data: project } = useQuery({
     queryKey: ["project", id],
@@ -58,19 +67,42 @@ export function EditorPage() {
 
   const { lines, busy, error, send } = useProjectChat(id || undefined, refreshPreview);
 
+  // Auto-start preview on mount
   useEffect(() => {
-    if (!id) return;
+    if (!id || previewStarted.current) return;
+    previewStarted.current = true;
     void (async () => {
       try {
         const meta = await apiJson<{ url: string; previewLabel: string }>(
           `/api/projects/${id}/preview-meta`,
         );
         setPreviewLabel(meta.previewLabel);
+        // Auto-start the preview
+        const res = await apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, {
+          method: "POST",
+        });
+        setPreviewSrc(res.url);
+        setPreviewLabel(res.previewLabel);
       } catch {
-        /* ignore */
+        /* ignore — user can start manually */
       }
     })();
   }, [id]);
+
+  const openPublishModal = useCallback(async () => {
+    publishMut.reset();
+    setPublishStatus(null);
+    setPublishStatusLoading(true);
+    setShowPublishModal(true);
+    try {
+      const status = await apiJson<PublishStatus>(`/api/projects/${id}/publish-status`);
+      setPublishStatus(status);
+    } catch {
+      setPublishStatus({ dirty: [], unpushed: 0, hasChanges: false });
+    } finally {
+      setPublishStatusLoading(false);
+    }
+  }, [id, publishMut]);
 
   if (!id) return null;
 
@@ -85,10 +117,7 @@ export function EditorPage() {
         projectName={project?.name ?? "…"}
         canPublish={Boolean(canPublish)}
         publishing={publishMut.isPending}
-        onPublish={() => {
-          publishMut.reset();
-          setShowPublishModal(true);
-        }}
+        onPublish={openPublishModal}
       />
       {error && (
         <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{error}</div>
@@ -143,18 +172,60 @@ export function EditorPage() {
       <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>
         <h3 className="mb-1 text-lg font-semibold text-neutral-900">Publish changes</h3>
 
-        {publishMut.isIdle && (
+        {publishStatusLoading && (
+          <div className="flex flex-col items-center py-6">
+            <Spinner className="mb-3 size-5" />
+            <p className="text-sm text-neutral-500">Checking for changes…</p>
+          </div>
+        )}
+
+        {publishMut.isIdle && publishStatus && !publishStatusLoading && (
           <>
-            <p className="mb-6 text-sm text-neutral-500">
-              This will commit any pending edits and push to GitHub.
-            </p>
-            <Button
-              type="button"
-              className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
-              onClick={() => publishMut.mutate()}
-            >
-              Publish to GitHub
-            </Button>
+            {publishStatus.hasChanges ? (
+              <>
+                <div className="mb-4 mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                  {publishStatus.dirty.length > 0 && (
+                    <div className="mb-2">
+                      <p className="mb-1 text-xs font-medium text-neutral-500">Uncommitted changes</p>
+                      <ul className="space-y-0.5">
+                        {publishStatus.dirty.slice(0, 8).map((f) => (
+                          <li key={f} className="truncate font-mono text-xs text-neutral-700">{f}</li>
+                        ))}
+                        {publishStatus.dirty.length > 8 && (
+                          <li className="text-xs text-neutral-400">+{publishStatus.dirty.length - 8} more</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                  {publishStatus.unpushed > 0 && (
+                    <p className="text-xs text-neutral-600">
+                      {publishStatus.unpushed} unpushed commit{publishStatus.unpushed !== 1 ? "s" : ""}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
+                  onClick={() => publishMut.mutate()}
+                >
+                  Publish to GitHub
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="mb-6 mt-2 text-sm text-neutral-500">
+                  Everything is up to date — no changes to publish.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full rounded-xl py-3 text-[15px]"
+                  onClick={() => setShowPublishModal(false)}
+                >
+                  Close
+                </Button>
+              </>
+            )}
           </>
         )}
 
@@ -167,7 +238,7 @@ export function EditorPage() {
 
         {publishMut.isSuccess && (
           <>
-            <p className="mb-6 text-sm text-neutral-600">{publishMut.data?.message}</p>
+            <p className="mb-6 mt-2 text-sm text-neutral-600">{publishMut.data?.message}</p>
             <Button
               type="button"
               className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
@@ -180,7 +251,7 @@ export function EditorPage() {
 
         {publishMut.isError && (
           <>
-            <p className="mb-6 text-sm text-red-600">
+            <p className="mb-6 mt-2 text-sm text-red-600">
               {publishMut.error instanceof Error ? publishMut.error.message : "Publish failed"}
             </p>
             <Button

@@ -165,6 +165,33 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     await db.delete(projects).where(eq(projects.id, projectId));
     return c.newResponse(null, 204);
   })
+  .get("/:id/publish-status", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    try {
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+      const simpleGit = (await import("simple-git")).default;
+      const g = simpleGit(repoPath);
+      const status = await g.status();
+      const dirty = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
+      let unpushed = 0;
+      try {
+        const branches = await g.branch(["-r"]);
+        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+          const log = await g.log({ from: `origin/${p.defaultBranch}`, to: "HEAD", maxCount: 100 });
+          unpushed = log.total;
+        }
+      } catch { /* no remote yet */ }
+      return c.json({ dirty, unpushed, hasChanges: dirty.length > 0 || unpushed > 0 });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
+    }
+  })
   .post("/:id/publish", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;

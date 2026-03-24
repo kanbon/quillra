@@ -222,7 +222,13 @@ app.all("/__preview/:port{[0-9]+}/*", async (c) => {
       headers: respHeaders,
     });
   } catch {
-    return c.text("Preview server not ready", 502);
+    return c.html(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3"></head>` +
+      `<body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui;color:#666">` +
+      `<div style="text-align:center"><p style="font-size:14px">Starting preview server…</p>` +
+      `<p style="font-size:12px;color:#999">This page will refresh automatically.</p></div></body></html>`,
+      502,
+    );
   }
 });
 

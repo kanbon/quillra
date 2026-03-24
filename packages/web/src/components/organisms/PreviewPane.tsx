@@ -1,3 +1,4 @@
+import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 
@@ -27,6 +28,23 @@ export function PreviewPane({
   errorMessage,
 }: Props) {
   const hasFrame = Boolean(src);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const basePreviewPath = src?.split("?")[0] ?? "";
+
+  const handleIframeLoad = useCallback(() => {
+    // Safeguard: if the iframe navigates outside the preview URL, reset it
+    try {
+      const frame = iframeRef.current;
+      if (!frame || !basePreviewPath) return;
+      const currentSrc = frame.contentWindow?.location.href;
+      if (currentSrc && !currentSrc.includes("/__preview/")) {
+        frame.src = src!;
+      }
+    } catch {
+      // Cross-origin — can't read location, which is fine (means it's the preview)
+    }
+  }, [src, basePreviewPath]);
 
   return (
     <div className="flex h-full min-h-0 flex-col border-l border-neutral-200 bg-neutral-50">
@@ -50,7 +68,28 @@ export function PreviewPane({
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
         {hasFrame ? (
-          <iframe title="Site preview" src={src!} className="h-full w-full border-0 bg-white shadow-inner" />
+          <>
+            {!bannerDismissed && (
+              <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-amber-50/95 px-3 py-1.5 text-xs text-amber-700 backdrop-blur-sm">
+                <span>Dev preview — may be slower than production</span>
+                <button
+                  type="button"
+                  className="ml-2 rounded px-1.5 py-0.5 text-amber-500 hover:bg-amber-100 hover:text-amber-700"
+                  onClick={() => setBannerDismissed(true)}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <iframe
+              ref={iframeRef}
+              title="Site preview"
+              src={src!}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              className="h-full w-full border-0 bg-white shadow-inner"
+              onLoad={handleIframeLoad}
+            />
+          </>
         ) : starting ? (
           <div className="flex h-full flex-col items-center justify-center px-8 py-12">
             <div
