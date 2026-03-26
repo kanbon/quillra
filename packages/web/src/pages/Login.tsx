@@ -17,8 +17,8 @@ export function LoginPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-neutral-50 px-4">
       <div className="w-full max-w-sm rounded-2xl border border-neutral-200/80 bg-white p-8 shadow-sm">
         <div className="mb-6 flex items-center gap-2">
-          <LogoMark className="text-2xl" />
-          <Heading as="h1" className="text-xl">
+          <LogoMark size={32} />
+          <Heading as="h1" className="font-brand text-2xl font-bold">
             Quillra
           </Heading>
         </div>

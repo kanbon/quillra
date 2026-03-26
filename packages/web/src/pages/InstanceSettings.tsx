@@ -68,7 +68,7 @@ export function InstanceSettingsPage() {
       <header className="border-b border-neutral-200 bg-white px-6 py-4">
         <div className="mx-auto flex max-w-2xl items-center gap-3">
           <Link to="/dashboard" className="flex items-center gap-2 no-underline">
-            <LogoMark className="text-lg" />
+            <LogoMark size={22} />
           </Link>
           <div className="h-6 w-px bg-neutral-200" />
           <Heading as="h1" className="text-lg font-semibold">Instance Settings</Heading>

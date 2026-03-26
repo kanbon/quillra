@@ -21,8 +21,8 @@ export function AppHeader({ showNav, projectId }: Props) {
   return (
     <header className="flex h-12 items-center justify-between border-b border-neutral-200/90 bg-white px-4">
       <Link to="/dashboard" className="flex items-center gap-2 no-underline hover:opacity-90">
-        <LogoMark className="text-lg" />
-        <span className="text-sm font-semibold tracking-tight text-neutral-900">Quillra</span>
+        <LogoMark size={22} />
+        <span className="font-brand text-lg font-bold text-neutral-900">Quillra</span>
       </Link>
       {showNav && projectId && (
         <nav className="flex items-center gap-1 rounded-xl bg-neutral-100/90 p-1" aria-label="Project">

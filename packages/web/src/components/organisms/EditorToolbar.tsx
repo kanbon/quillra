@@ -37,7 +37,7 @@ export function EditorToolbar({
             className="flex shrink-0 items-center gap-2 rounded-lg no-underline hover:bg-neutral-50"
             title="All sites"
           >
-            <LogoMark className="text-lg" />
+            <LogoMark size={22} />
           </Link>
           <div className="hidden h-8 w-px bg-neutral-200 sm:block" />
           <div className="min-w-0 flex-1">

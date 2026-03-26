@@ -1,11 +1,13 @@
-export function LogoMark({ className }: { className?: string }) {
+export function LogoMark({ className, size = 24 }: { className?: string; size?: number }) {
   return (
-    <span
-      className={className}
-      style={{ fontWeight: 600, letterSpacing: "-0.02em", color: "#c1121f" }}
+    <img
+      src="/quillra-icon-48.png"
+      alt=""
       aria-hidden
-    >
-      ✎
-    </span>
+      width={size}
+      height={size}
+      className={className}
+      style={{ objectFit: "contain" }}
+    />
   );
 }
