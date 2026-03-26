@@ -11,6 +11,7 @@ import { EditorToolbar } from "@/components/organisms/EditorToolbar";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
+import { clearNewChat } from "@/lib/chat-store";
 
 type ProjectDetail = {
   id: string;
@@ -128,9 +129,10 @@ export function EditorPage() {
   }, [id, publishMut]);
 
   const startNewChat = useCallback(() => {
+    if (id) clearNewChat(id);
     setConversationId(null);
     setShowHistory(false);
-  }, []);
+  }, [id]);
 
   if (!id) return null;
 

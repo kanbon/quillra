@@ -74,12 +74,20 @@ export function subscribe(projectId: string, conversationId: string | null, list
   return () => subs!.delete(listener);
 }
 
-/** Stable empty snapshot for new chats — same reference every time */
-const NEW_CHAT: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null };
-
 export function getSnapshot(projectId: string, conversationId: string | null): ChatSnapshot {
-  if (!conversationId) return NEW_CHAT;
   return getSnap(key(projectId, conversationId));
+}
+
+/** Clear state for a "new chat" so the UI starts fresh */
+export function clearNewChat(projectId: string) {
+  const k = key(projectId, null);
+  snapshots.delete(k);
+  const i = internals.get(k);
+  if (i?.ws) { i.ws.close(); }
+  internals.delete(k);
+  // Notify listeners so useSyncExternalStore picks up the empty state
+  const subs = listeners.get(k);
+  if (subs) for (const fn of subs) fn();
 }
 
 export async function loadHistory(projectId: string, conversationId: string | null) {
