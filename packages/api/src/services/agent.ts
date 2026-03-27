@@ -217,7 +217,7 @@ export async function* runProjectAgent(params: {
   }
 
   try {
-    yield* run(params.agentSessionId);
+    yield* run(params.agentSessionId ?? null);
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
     if (name === "AbortError") {
