@@ -46,6 +46,7 @@ export function EditorPage() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const previewStarted = useRef(false);
+  const initialConvSelected = useRef(false);
 
   const { data: project } = useQuery({
     queryKey: ["project", id],
@@ -59,12 +60,13 @@ export function EditorPage() {
     enabled: Boolean(id),
   });
 
-  // Auto-select the most recent conversation on load
+  // Auto-select the most recent conversation on initial load only
   useEffect(() => {
-    if (convList?.conversations?.length && !conversationId) {
+    if (convList?.conversations?.length && !initialConvSelected.current) {
+      initialConvSelected.current = true;
       setConversationId(convList.conversations[0].id);
     }
-  }, [convList, conversationId]);
+  }, [convList]);
 
   const previewMut = useMutation({
     mutationFn: async () => {
@@ -218,7 +220,7 @@ export function EditorPage() {
             </div>
           )}
 
-          <ChatTranscript lines={lines} busy={busy} />
+          <ChatTranscript lines={lines} busy={busy} onNewChat={startNewChat} />
           <ChatComposer onSend={send} disabled={busy} />
         </section>
         <div

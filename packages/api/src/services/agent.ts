@@ -187,41 +187,54 @@ export async function* runProjectAgent(params: {
   const abortController = new AbortController();
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
-  const q = query({
-    prompt: params.prompt,
-    options: {
-      cwd: params.cwd,
-      model,
-      abortController,
-      ...(params.agentSessionId ? { resume: params.agentSessionId } : {}),
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: apiKey,
-        CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
+  async function* run(sessionId: string | null): AsyncGenerator<Record<string, unknown>> {
+    const q = query({
+      prompt: params.prompt,
+      options: {
+        cwd: params.cwd,
+        model,
+        abortController,
+        ...(sessionId ? { resume: sessionId } : {}),
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: apiKey,
+          CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
+        },
+        tools: { type: "preset", preset: "claude_code" },
+        includePartialMessages: true,
+        persistSession: true,
+        canUseTool: buildCanUseTool(params.role),
+        permissionMode: "acceptEdits",
       },
-      tools: { type: "preset", preset: "claude_code" },
-      includePartialMessages: true,
-      persistSession: true,
-      canUseTool: buildCanUseTool(params.role),
-      permissionMode: "acceptEdits",
-    },
-  });
-
-  try {
+    });
     for await (const msg of q) {
-      // Capture session ID from any message that has one
       if ("session_id" in msg && typeof msg.session_id === "string" && msg.session_id) {
         params.onSessionId?.(msg.session_id);
       }
       const out = mapSdkMessageToClient(msg);
       if (out) yield out;
     }
+  }
+
+  try {
+    yield* run(params.agentSessionId);
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
     if (name === "AbortError") {
       yield { type: "error", message: "Aborted" };
       return;
     }
-    yield { type: "error", message: e instanceof Error ? e.message : String(e) };
+    // If session expired/not found, retry without resume
+    const msg = e instanceof Error ? e.message : String(e);
+    if (params.agentSessionId && /session|not found/i.test(msg)) {
+      try {
+        yield* run(null);
+        return;
+      } catch (retryErr) {
+        yield { type: "error", message: retryErr instanceof Error ? retryErr.message : String(retryErr) };
+        return;
+      }
+    }
+    yield { type: "error", message: msg };
   }
 }
