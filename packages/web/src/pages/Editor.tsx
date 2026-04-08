@@ -474,6 +474,7 @@ export function EditorPage() {
           engineLabel={previewLabel || undefined}
           startLabel={startLabel}
           errorMessage={previewError}
+          compact
         />
       </MobilePreviewSheet>
 
