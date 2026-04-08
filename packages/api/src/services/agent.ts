@@ -1,5 +1,6 @@
 import { query, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
+import { getInstanceSetting } from "./instance-settings.js";
 
 /**
  * System prompt that shapes how the agent talks to Quillra users.
@@ -251,9 +252,9 @@ export async function* runProjectAgent(params: {
   onSessionId?: (sessionId: string) => void;
   abortSignal?: AbortSignal;
 }): AsyncGenerator<Record<string, unknown>> {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
   if (!apiKey) {
-    yield { type: "error", message: "ANTHROPIC_API_KEY is not set" };
+    yield { type: "error", message: "Quillra is not configured yet — finish the setup wizard." };
     return;
   }
 

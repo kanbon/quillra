@@ -62,4 +62,17 @@ try {
   sqlite.exec(`CREATE INDEX IF NOT EXISTS client_login_codes_project_email_idx ON client_login_codes(project_id, email)`);
 } catch { /* ignore */ }
 
+// Instance settings — key/value store used by the first-run setup wizard
+// and any config the admin can change at runtime without restarting the
+// container (Anthropic key, GitHub token, mailer backend, etc.)
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS instance_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+} catch { /* ignore */ }
+
+export { sqlite as rawSqlite };
+
 export const db = drizzle(sqlite, { schema });

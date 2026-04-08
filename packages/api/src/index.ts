@@ -17,6 +17,7 @@ import { githubRouter } from "./routes/github.js";
 import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
+import { setupRouter } from "./routes/setup.js";
 import { runProjectAgent } from "./services/agent.js";
 import { ensureRepoCloned, getPreviewSubdomainPort } from "./services/workspace.js";
 import { getProjectByPort, getPreviewStatus, describeStage } from "./services/preview-status.js";
@@ -199,13 +200,14 @@ function previewBootHtml(port: string | number): string {
  * (Astro dev toolbar, Next.js indicators, SvelteKit, Vue, etc.) so the
  * preview iframe shows a clean rendering of the user's site.
  */
+// Only hide the mini dev toolbars that float at the bottom of the page.
+// NEVER hide error overlays (vite-error-overlay, astro-error-overlay, etc.)
+// — those exist to tell the user something is broken in their code and
+// swallowing them makes compile errors appear as blank pages.
 const HIDE_DEV_TOOLBARS_CSS = `
 <style data-quillra-preview>
-  astro-dev-toolbar, astro-dev-overlay { display: none !important; }
-  #__next-build-watcher, [data-nextjs-toast], [data-nextjs-dialog-overlay],
-  [data-nextjs-toast-wrapper], nextjs-portal { display: none !important; }
-  #__remix-dev-tools-iframe, #remix-dev-tools-iframe { display: none !important; }
-  #vue-devtools-container, .__vue-devtools-toolbar__ { display: none !important; }
+  astro-dev-toolbar { display: none !important; }
+  #__next-build-watcher, [data-nextjs-toast-wrapper] { display: none !important; }
   #svelte-kit-toolbar, [data-sveltekit-dev-toolbar] { display: none !important; }
 </style>
 `;
@@ -395,6 +397,7 @@ app.route("/api/projects", projectsRouter);
 app.route("/api/github", githubRouter);
 app.route("/api/team", teamRouter);
 app.route("/api/clients", clientsRouter);
+app.route("/api/setup", setupRouter);
 
 app.get(
   "/ws/chat/:projectId",

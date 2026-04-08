@@ -1,10 +1,12 @@
+import { getInstanceSetting } from "./instance-settings.js";
+
 const API = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
 function requireToken(): string {
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = getInstanceSetting("GITHUB_TOKEN");
   if (!token) {
-    throw new Error("Set GITHUB_TOKEN on the server to list GitHub repositories and branches.");
+    throw new Error("GitHub isn't configured yet — finish the setup wizard.");
   }
   return token;
 }

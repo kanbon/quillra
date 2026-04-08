@@ -4,6 +4,7 @@ import path from "node:path";
 import { simpleGit } from "simple-git";
 import { setPreviewStatus, registerPreviewPort } from "./preview-status.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
+import { getInstanceSetting } from "./instance-settings.js";
 
 const previewChildren = new Map<string, ChildProcess>();
 
@@ -151,7 +152,7 @@ export async function ensureRepoCloned(
 ): Promise<string> {
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = getInstanceSetting("GITHUB_TOKEN");
   const url = token
     ? `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`
     : `https://github.com/${githubRepoFullName}.git`;
@@ -254,7 +255,7 @@ export async function pushToGitHub(
   userToken?: string | null,
   committer?: { name: string; email: string } | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
-  const token = userToken?.trim() || process.env.GITHUB_TOKEN?.trim();
+  const token = userToken?.trim() || getInstanceSetting("GITHUB_TOKEN");
   if (!token) {
     throw new Error("GitHub access denied. Try signing out and back in to refresh your token.");
   }

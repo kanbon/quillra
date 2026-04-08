@@ -20,6 +20,7 @@ import {
 } from "../services/workspace.js";
 import { processUploadToWebP } from "../services/image.js";
 import { detectFramework } from "../services/framework.js";
+import { getInstanceSetting } from "../services/instance-settings.js";
 import sharp from "sharp";
 import { simpleGit } from "simple-git";
 import fs from "node:fs";
@@ -200,7 +201,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       if (hasChanges) {
         try {
           const diffOutput = await g.diff(["--stat", "--no-color"]);
-          const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+          const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
           if (apiKey && diffOutput) {
             const res = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",

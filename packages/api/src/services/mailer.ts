@@ -9,9 +9,13 @@
  *                Default for fresh installs.
  *   - "resend" — Resend API via plain fetch (no SDK dependency). Set
  *                RESEND_API_KEY and EMAIL_FROM.
- *   - "smtp"   — placeholder; not yet implemented. Will land in a follow-up
- *                with nodemailer once we add it to the lockfile.
+ *   - "smtp"   — Universal SMTP via nodemailer. Works with any standard
+ *                SMTP server: Postfix, Mailgun, SendGrid, AWS SES, Postmark,
+ *                Gmail, Outlook, your own server, etc. Set SMTP_HOST, PORT,
+ *                USER, PASSWORD, SECURE, and EMAIL_FROM.
  */
+import nodemailer, { type Transporter } from "nodemailer";
+import { getInstanceSetting } from "./instance-settings.js";
 
 export type MailMessage = {
   to: string | string[];
@@ -31,13 +35,13 @@ export type SendResult =
 type Backend = "none" | "resend" | "smtp";
 
 function getBackend(): Backend {
-  const raw = (process.env.EMAIL_PROVIDER ?? "none").trim().toLowerCase();
+  const raw = (getInstanceSetting("EMAIL_PROVIDER") ?? "none").trim().toLowerCase();
   if (raw === "resend" || raw === "smtp" || raw === "none") return raw;
   return "none";
 }
 
 function getFrom(): string {
-  return process.env.EMAIL_FROM?.trim() || "Quillra <hello@quillra.com>";
+  return getInstanceSetting("EMAIL_FROM") || "Quillra <hello@quillra.com>";
 }
 
 function asArray(to: string | string[]): string[] {
@@ -48,8 +52,8 @@ function asArray(to: string | string[]): string[] {
 export function isMailerEnabled(): boolean {
   const backend = getBackend();
   if (backend === "none") return false;
-  if (backend === "resend") return Boolean(process.env.RESEND_API_KEY?.trim());
-  if (backend === "smtp") return false; // not implemented yet
+  if (backend === "resend") return Boolean(getInstanceSetting("RESEND_API_KEY"));
+  if (backend === "smtp") return Boolean(getInstanceSetting("SMTP_HOST"));
   return false;
 }
 
@@ -58,7 +62,7 @@ export function mailerStatus(): { backend: Backend; enabled: boolean; from: stri
 }
 
 async function sendViaResend(msg: MailMessage): Promise<SendResult> {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const apiKey = getInstanceSetting("RESEND_API_KEY");
   if (!apiKey) return { sent: false, backend: "resend", reason: "RESEND_API_KEY not set" };
 
   const body: Record<string, unknown> = {
@@ -91,6 +95,53 @@ async function sendViaResend(msg: MailMessage): Promise<SendResult> {
 }
 
 /**
+ * Lazy-initialised SMTP transporter. Re-created whenever the underlying
+ * config changes so admins can reconfigure the mailer at runtime from the
+ * setup wizard without restarting the container.
+ */
+let smtpTransport: Transporter | null = null;
+let smtpTransportKey = "";
+
+function getSmtpTransport(): Transporter | null {
+  const host = getInstanceSetting("SMTP_HOST");
+  if (!host) return null;
+  const port = Number(getInstanceSetting("SMTP_PORT") ?? "587");
+  const user = getInstanceSetting("SMTP_USER");
+  const password = getInstanceSetting("SMTP_PASSWORD");
+  const secure = (getInstanceSetting("SMTP_SECURE") ?? "").toLowerCase() === "true";
+
+  const key = `${host}|${port}|${user ?? ""}|${password ? "yes" : "no"}|${secure}`;
+  if (smtpTransport && smtpTransportKey === key) return smtpTransport;
+
+  smtpTransport = nodemailer.createTransport({
+    host,
+    port,
+    secure, // true for 465; false for 587/STARTTLS
+    auth: user && password ? { user, pass: password } : undefined,
+  });
+  smtpTransportKey = key;
+  return smtpTransport;
+}
+
+async function sendViaSmtp(msg: MailMessage): Promise<SendResult> {
+  try {
+    const transport = getSmtpTransport();
+    if (!transport) return { sent: false, backend: "smtp", reason: "SMTP_HOST not set" };
+    const info = await transport.sendMail({
+      from: getFrom(),
+      to: asArray(msg.to),
+      subject: msg.subject,
+      text: msg.text,
+      html: msg.html,
+      replyTo: msg.replyTo,
+    });
+    return { sent: true, backend: "smtp", id: info.messageId };
+  } catch (e) {
+    return { sent: false, backend: "smtp", reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * Send an email through the configured backend.
  *
  * The function NEVER throws — callers should branch on `result.sent` and
@@ -103,8 +154,12 @@ export async function sendEmail(msg: MailMessage): Promise<SendResult> {
     return { sent: false, backend, reason: "EMAIL_PROVIDER=none (sending disabled)" };
   }
   if (backend === "resend") return sendViaResend(msg);
-  if (backend === "smtp") {
-    return { sent: false, backend, reason: "SMTP backend not yet implemented" };
-  }
+  if (backend === "smtp") return sendViaSmtp(msg);
   return { sent: false, backend, reason: "Unknown backend" };
+}
+
+/** Reset any cached mailer state — called after the setup wizard saves new config */
+export function resetMailer(): void {
+  smtpTransport = null;
+  smtpTransportKey = "";
 }
