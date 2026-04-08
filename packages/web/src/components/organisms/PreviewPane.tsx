@@ -24,7 +24,16 @@ export function PreviewPane({
 }: Props) {
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("quillra:preview-banner-dismissed") === "1";
+  });
+  const dismissBanner = useCallback(() => {
+    setBannerDismissed(true);
+    try {
+      window.localStorage.setItem("quillra:preview-banner-dismissed", "1");
+    } catch { /* private mode etc. */ }
+  }, []);
   const ready = hasFrame; // The iframe handles its own loading state via the proxy boot page
   const basePreviewPath = src?.split("?")[0] ?? "";
 
@@ -100,7 +109,7 @@ export function PreviewPane({
                 <button
                   type="button"
                   className="ml-2 rounded px-1.5 py-0.5 text-amber-500 hover:bg-amber-100 hover:text-amber-700"
-                  onClick={() => setBannerDismissed(true)}
+                  onClick={dismissBanner}
                 >
                   &#10005;
                 </button>
