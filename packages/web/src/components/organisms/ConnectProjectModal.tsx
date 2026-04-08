@@ -380,69 +380,100 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
             <div className="rounded-2xl border border-red-200 bg-red-50/60 p-5 text-sm text-red-700">
               <p className="font-medium">Couldn't inspect this repository.</p>
               <p className="mt-1 text-red-600/80">{(fwQ.error as Error)?.message ?? "Unknown error"}</p>
+              <button
+                type="button"
+                onClick={() => void fwQ.refetch()}
+                className="mt-3 inline-flex items-center gap-1 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-50"
+              >
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                </svg>
+                Retry
+              </button>
             </div>
           )}
           {fwQ.data && !fwQ.isLoading && (
-            fwQ.data.supported ? (
-              <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-neutral-50 to-white p-6">
-                <div className="flex items-start gap-4">
-                  <div
-                    className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl shadow-sm ring-1 ring-black/5"
-                    style={{ backgroundColor: fwQ.data.framework.color }}
-                  >
-                    <img
-                      src={`https://cdn.simpleicons.org/${fwQ.data.framework.iconSlug}/ffffff`}
-                      alt={fwQ.data.framework.label}
-                      width={28}
-                      height={28}
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-[18px] font-semibold tracking-tight text-neutral-900">
-                        {fwQ.data.framework.label}
-                      </h3>
-                      <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
-                        Supported
-                      </span>
+            <>
+              {fwQ.data.supported ? (
+                <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-neutral-50 to-white p-6">
+                  <div className="flex items-start gap-4">
+                    <div
+                      className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl shadow-sm ring-1 ring-black/5"
+                      style={{ backgroundColor: fwQ.data.framework.color }}
+                    >
+                      <img
+                        src={`https://cdn.simpleicons.org/${fwQ.data.framework.iconSlug}/ffffff`}
+                        alt={fwQ.data.framework.label}
+                        width={28}
+                        height={28}
+                      />
                     </div>
-                    <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">{fwQ.data.framework.blurb}</p>
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
-                        Live preview
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
-                        Image upload
-                      </span>
-                      {fwQ.data.framework.optimizes && (
-                        <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
-                          Auto image optimization
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-[18px] font-semibold tracking-tight text-neutral-900">
+                          {fwQ.data.framework.label}
+                        </h3>
+                        <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                          Supported
                         </span>
-                      )}
+                      </div>
+                      <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">{fwQ.data.framework.blurb}</p>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
+                          Live preview
+                        </span>
+                        <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
+                          Image upload
+                        </span>
+                        {fwQ.data.framework.optimizes && (
+                          <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
+                            Auto image optimization
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-6">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-[15px] font-semibold text-amber-900">Framework not supported</h3>
-                    <p className="mt-1 text-[13px] leading-relaxed text-amber-800/80">{fwQ.data.reason}</p>
-                    <p className="mt-2 text-[11px] text-amber-700/80">
-                      Quillra currently supports Astro, Next.js, Nuxt, Gatsby, SvelteKit, Remix, Eleventy, Vite,
-                      Docusaurus, VitePress, Qwik, SolidStart, Hugo, and Jekyll. Open an issue if you'd like to see
-                      another one added.
-                    </p>
+              ) : (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-6">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-[15px] font-semibold text-amber-900">Framework not supported</h3>
+                      <p className="mt-1 text-[13px] leading-relaxed text-amber-800/80">{fwQ.data.reason}</p>
+                      <p className="mt-2 text-[11px] text-amber-700/80">
+                        Quillra currently supports Astro, Next.js, Nuxt, Gatsby, SvelteKit, Remix, Eleventy, Vite,
+                        React (CRA), Docusaurus, VitePress, Qwik, SolidStart, Hugo, and Jekyll. You can still
+                        connect the project by passing a custom dev command under Advanced on the next step.
+                      </p>
+                    </div>
                   </div>
                 </div>
+              )}
+              <div className="mt-3 text-right">
+                <button
+                  type="button"
+                  onClick={() => void fwQ.refetch()}
+                  disabled={fwQ.isFetching}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50"
+                >
+                  <svg
+                    className={cn("h-3 w-3", fwQ.isFetching && "animate-spin")}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                  </svg>
+                  Re-check
+                </button>
               </div>
-            )
+            </>
           )}
         </div>
       )}
@@ -541,10 +572,10 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
           <button
             type="button"
             onClick={() => setStep("name")}
-            disabled={!fwQ.data || (fwQ.data && !fwQ.data.supported)}
+            disabled={!fwQ.data}
             className={cn(
               "inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm transition-all",
-              fwQ.data && fwQ.data.supported ? "hover:bg-brand/90 hover:shadow" : "cursor-not-allowed opacity-50",
+              fwQ.data ? "hover:bg-brand/90 hover:shadow" : "cursor-not-allowed opacity-50",
             )}
           >
             Continue

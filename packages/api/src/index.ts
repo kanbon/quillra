@@ -127,8 +127,13 @@ function previewBootHtml(port: string | number): string {
   var stages = ['cloning', 'installing', 'starting', 'ready'];
   var steps = document.querySelectorAll('.step');
   var attempts = 0;
+  var pollId = 0;
+  // Once we latch into "errored" we stop touching the DOM — otherwise a
+  // stale poll that started before the error flips us back to spinner.
+  var errored = false;
 
   function setStage(stage) {
+    if (errored) return;
     var idx = stages.indexOf(stage);
     if (idx === -1) idx = 0;
     steps.forEach(function(s) {
@@ -140,6 +145,9 @@ function previewBootHtml(port: string | number): string {
   }
 
   function showError(label, detail) {
+    if (errored) return;
+    errored = true;
+    if (pollId) { clearInterval(pollId); pollId = 0; }
     document.getElementById('label').textContent = label || 'Preview unavailable';
     document.getElementById('detail').textContent = detail || 'Something went wrong while starting your preview.';
     document.getElementById('retry').classList.remove('hidden');
@@ -154,11 +162,12 @@ function previewBootHtml(port: string | number): string {
   }
 
   function tick() {
+    if (errored) return;
     attempts++;
     fetch('/api/preview-status?port=${port}', { credentials: 'omit' })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
-        if (!data) return;
+        if (errored || !data) return;
         if (data.stage === 'error') {
           showError(data.label, data.detail);
           return;
@@ -166,7 +175,7 @@ function previewBootHtml(port: string | number): string {
         if (data.detail) document.getElementById('detail').textContent = data.detail;
         setStage(data.stage);
         if (data.stage === 'ready') {
-          // Mark all done before reload
+          if (pollId) { clearInterval(pollId); pollId = 0; }
           steps.forEach(function(s) { s.classList.remove('active', 'failed'); s.classList.add('done'); });
           setTimeout(function() { window.location.reload(); }, 400);
         }
@@ -178,7 +187,7 @@ function previewBootHtml(port: string | number): string {
     }
   }
   tick();
-  setInterval(tick, 1500);
+  pollId = setInterval(tick, 1500);
 })();
 </script>
 </body>

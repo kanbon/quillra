@@ -13,6 +13,14 @@ import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchF
 import { apiJson } from "@/lib/api";
 import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
 import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
+
+type DetectStatus =
+  | "idle"
+  | "loading"
+  | { kind: "ok"; label: string }
+  | { kind: "none" }
+  | { kind: "error" };
 
 const inviteSchema = z.object({
   email: z.string().email(),
@@ -47,6 +55,7 @@ export function ProjectSettingsPage() {
   const qc = useQueryClient();
   const [preferManualGit, setPreferManualGit] = useState(false);
   const [displayNameMode, setDisplayNameMode] = useState<"repo" | "full" | "custom">("repo");
+  const [detectStatus, setDetectStatus] = useState<DetectStatus>("idle");
   const [inviteResult, setInviteResult] = useState<
     | null
     | { ok: true; emailSent: boolean; inviteLink: string; role: string; emailError: string | null }
@@ -245,15 +254,60 @@ export function ProjectSettingsPage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">
-                  {t("connectForm.devCommandLabel")}
-                </label>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="block text-xs font-medium text-neutral-600">
+                    {t("connectForm.devCommandLabel")}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setDetectStatus("loading");
+                      try {
+                        const fw = await apiJson<{ id: string; label: string }>(
+                          `/api/projects/${id}/framework`,
+                        );
+                        setDetectStatus(
+                          fw.id && fw.id !== "unknown"
+                            ? { kind: "ok", label: fw.label }
+                            : { kind: "none" },
+                        );
+                      } catch {
+                        setDetectStatus({ kind: "error" });
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50"
+                    title="Re-detect framework and dev command from package.json"
+                  >
+                    <svg
+                      className={cn("h-3 w-3", detectStatus === "loading" && "animate-spin")}
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                    </svg>
+                    Re-detect
+                  </button>
+                </div>
                 <Textarea
                   rows={2}
                   className="font-mono text-xs"
                   placeholder={t("projectSettings.devCommandPlaceholder")}
                   {...registerProject("previewDevCommand")}
                 />
+                {detectStatus !== "idle" && detectStatus !== "loading" && (
+                  <p className={cn(
+                    "mt-1 text-xs",
+                    detectStatus.kind === "ok" && "text-green-600",
+                    detectStatus.kind === "none" && "text-amber-600",
+                    detectStatus.kind === "error" && "text-red-600",
+                  )}>
+                    {detectStatus.kind === "ok" && `Detected ${detectStatus.label}. Leave the command empty to use the default.`}
+                    {detectStatus.kind === "none" && "No known framework detected. Set a custom command above."}
+                    {detectStatus.kind === "error" && "Couldn't re-detect. Try again."}
+                  </p>
+                )}
               </div>
               <Button type="submit" disabled={projectSubmitting || patchProject.isPending}>
                 {t("projectSettings.saveProject")}

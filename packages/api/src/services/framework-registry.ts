@@ -17,6 +17,7 @@ export type FrameworkId =
   | "remix"
   | "eleventy"
   | "vite"
+  | "cra"
   | "docusaurus"
   | "vitepress"
   | "qwik"
@@ -134,6 +135,21 @@ const FRAMEWORKS: FrameworkDef[] = [
     blurb: "Frontend tooling for React, Vue, Svelte, Solid, Lit, Preact and more.",
     packageDeps: ["vite", "@vitejs/plugin-react", "@vitejs/plugin-vue", "@vitejs/plugin-svelte"],
     devCommand: { binary: "npx", args: ["vite", "--host", "0.0.0.0", "--port", "{port}"] },
+  },
+  {
+    id: "cra",
+    label: "React (CRA)",
+    iconSlug: "react",
+    color: "#61DAFB",
+    assetsDir: "public/images",
+    optimizes: false,
+    blurb: "Create React App project. Classic react-scripts dev server.",
+    packageDeps: ["react-scripts"],
+    devCommand: {
+      // CRA reads PORT from env; pass it inline via sh -c so it binds to our port
+      binary: "sh",
+      args: ["-c", "HOST=0.0.0.0 PORT={port} BROWSER=none npx react-scripts start"],
+    },
   },
   {
     id: "docusaurus",
