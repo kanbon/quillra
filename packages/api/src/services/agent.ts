@@ -203,11 +203,17 @@ export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> 
   }
 }
 
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: "English",
+  de: "German (Deutsch)",
+};
+
 export async function* runProjectAgent(params: {
   cwd: string;
   prompt: string;
   role: ProjectRole;
   projectId: string;
+  language?: string | null;
   agentSessionId?: string | null;
   onSessionId?: (sessionId: string) => void;
   abortSignal?: AbortSignal;
@@ -220,6 +226,12 @@ export async function* runProjectAgent(params: {
 
   const model = process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-20250514";
   const abortController = new AbortController();
+
+  // Build the system prompt with an optional language directive appended
+  const languageName = params.language ? LANGUAGE_NAMES[params.language] : null;
+  const systemPromptText = languageName
+    ? `${QUILLRA_SYSTEM_PROMPT}\n\nIMPORTANT: Always reply to the user in ${languageName}, regardless of the language the user writes in. Code, file names, and commit messages stay in their natural language; only your spoken/written replies must be in ${languageName}.`
+    : QUILLRA_SYSTEM_PROMPT;
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
   // Symbol thrown internally to trigger a retry without resume when the
@@ -234,7 +246,7 @@ export async function* runProjectAgent(params: {
         model,
         abortController,
         ...(sessionId ? { resume: sessionId } : {}),
-        systemPrompt: { type: "preset", preset: "claude_code", append: QUILLRA_SYSTEM_PROMPT },
+        systemPrompt: { type: "preset", preset: "claude_code", append: systemPromptText },
         env: {
           ...process.env,
           ANTHROPIC_API_KEY: apiKey,

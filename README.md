@@ -2,54 +2,90 @@
   <img src="assets/quillra-logo.png" alt="Quillra" width="320" />
 </p>
 
-# Quillra
+<h1 align="center">From vibe-coded to client-ready.</h1>
 
-## What it is
+<p align="center">
+  <strong>Quillra is the modern, GitHub-native CMS for sites you actually wanted to build.</strong>
+  <br />
+  Hand the keys to your clients without bolting WordPress, Typo3, or a headless CMS subscription onto a clean codebase.
+  <br />
+  <em>Self-host for free, or use our paid SaaS.</em>
+</p>
 
-Quillra is an open-source **editor for websites that already live in GitHub**. Your clients and partners describe what they want in plain language; an AI assistant updates the real files in the repository, and **Publish** sends those changes to GitHub so your normal hosting (Cloudflare Pages, Vercel, Netlify, or anything that deploys from Git) picks them up.
+<p align="center">
+  <a href="#run-your-own-self-hosted"><strong>Self-host</strong></a> ·
+  <a href="#how-it-works-in-practice"><strong>How it works</strong></a> ·
+  <a href="#for-developers"><strong>For developers</strong></a>
+</p>
 
-Nothing from Quillra ships in the public site. Visitors see the same static or SSR app you already built. Quillra is only the **control room** you host yourself.
+---
 
-## The problem it solves
+## Why Quillra exists
 
-Shipping a modern site with today’s tools—Astro, Next.js, Vite, vibe-coding in Cursor or Lovable—is straightforward. What stays hard is the **handoff**: giving **clients, marketing, or partners** a safe way to change copy, images, and structure **without** turning the project into WordPress, a headless CMS subscription maze, or a second codebase they cannot touch.
+You vibe-coded a beautiful site in Astro / Next / Vite / [whatever]. Now a real client needs to edit copy, swap photos, ship a new page — and you don't want to:
 
-Legacy-style products solved “non-dev editing” by owning the stack or the database. Quillra takes a different path: **Git stays the source of truth**, and the **AI layer** turns natural language into real commits in that repo. Editors work in a **chat-first UI** with a **live dev preview**, so updating the site feels closer to “explain the change” than “learn the repo.”
+- 🚫 Rebuild the project on top of WordPress / Typo3 / Strapi / Sanity
+- 🚫 Hand them a Git tutorial
+- 🚫 Become their lifetime "please fix the headline" hotline
+- 🚫 Pay per-seat for a multi-tenant CMS that owns your content
 
-## Who it’s for
+Quillra is the missing layer. Your repo stays the source of truth. Your client opens a chat, says *"change the homepage hero to 'Welcome to spring'"*, watches a live preview, hits **Publish**, and your existing CI deploys it. That's it.
 
-- **Studios and freelancers** who ship Git-based sites and want collaborators to edit content without file trees and pull requests.
-- **Teams** who outgrown “only engineers touch the site” but refuse to bolt a traditional CMS onto an otherwise clean codebase.
-- **Anyone self-hosting** who wants one instance for their org, not a multi-tenant SaaS product.
+> **Modern CMS for the post-WordPress generation.** Git is the database. Chat is the editor. Your hosting is unchanged.
+
+## What it does
+
+- 💬 **Chat-first editing** — clients describe changes in plain language, the agent edits the real files
+- 👀 **Live preview** — every project gets its own dev server with hot reload, opened in an iframe right next to the chat
+- 🔁 **Real Git history** — every change is a real commit, attributed and reviewable, pushed to your existing repo
+- 🚀 **Your existing pipeline** — Pages, Vercel, Netlify, Cloudflare, your VPS — Quillra never touches your hosting
+- 🖼️ **Smart image handling** — paste, drag, or click to upload; saved to the right folder for your framework, optimized only when the framework doesn't already
+- 🔒 **Role-aware permissions** — admins, editors, and translators with different scopes baked into the agent's tool permissions
+- 🌍 **Full i18n** — English and German UI today, more on request; the agent answers in the user's chosen language
+- 🏠 **Self-hosted by default** — one Docker container, your VPS, your data
+
+## Frameworks we know
+
+Auto-detected from `package.json` / config files. The agent is told which framework it's editing so it edits things the way that framework expects.
+
+Astro · Next.js · Nuxt · Gatsby · SvelteKit · Remix · Eleventy · Vite · Hugo · Jekyll · plain HTML
+
+Your dev server command is auto-detected, or you can override it per project.
 
 ## How it works (in practice)
 
-1. Connect a **GitHub repository** and branch; Quillra clones it on your server.
-2. Invite people by email; they sign in with **GitHub** and only see projects they belong to.
-3. They **chat** with the assistant; it reads and edits files in the workspace under **role-aware** rules (admins, editors, translators).
-4. **Publish** runs `git push` so your existing pipeline deploys—same as if a developer pushed.
+1. Connect a **GitHub repository** and branch — Quillra clones it on your server
+2. Invite people by email; they sign in with **GitHub** and only see projects they belong to
+3. They **chat** with the assistant — it reads and edits files in the workspace under role-aware rules
+4. **Publish** runs `git push` so your existing pipeline deploys, exactly as if a developer pushed
 
-Dev servers for preview are **detected from `package.json`** (Astro, Next.js, Vite, and common `dev` scripts) or you can set a **custom command** per project.
+Dev previews are detected from `package.json`, or you can set a custom command per project.
 
 ---
 
 ## Run your own (self-hosted)
 
-You deploy **one Quillra instance** (VPS, internal server, Docker). There are no org tiers—only **projects** (one repo each) and **per-project** members.
+You deploy **one Quillra instance** (VPS, internal server, Docker). There are no org tiers — only **projects** (one repo each) and **per-project** members.
 
 | Variable | Purpose |
 |----------|---------|
-| `BETTER_AUTH_URL` | Public URL of the API (OAuth callbacks and cookies). |
-| `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies. |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for sign-in. |
-| `GITHUB_TOKEN` | Server-side token to clone, fetch, push, and list repos/branches in the UI. |
-| `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server. |
+| `BETTER_AUTH_URL` | Public URL of the API (OAuth callbacks and cookies) |
+| `BETTER_AUTH_SECRET` | Session encryption secret (`openssl rand -base64 32`) |
+| `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for sign-in |
+| `GITHUB_TOKEN` | Server-side token to clone, fetch, push, and list repos in the UI |
+| `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server |
+| `PREVIEW_DOMAIN` | (Optional) wildcard subdomain for clean preview URLs |
 
-Copy `packages/api/.env.example` to `.env`, fill the values, and run `yarn db:push` in `packages/api` after schema changes. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
+Copy `packages/api/.env.example` → `.env`, fill the values, and run `yarn db:push` in `packages/api` after schema changes. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
 
-**Server prerequisites:** Node.js, `git`, and a package manager on `PATH` so installs and previews work inside cloned workspaces.
+**Server prerequisites:** Node.js, `git`, and a package manager on `PATH` so installs and dev previews work inside cloned workspaces.
 
-The **Sites** dashboard lists every project you can access; from the editor, use **All sites** (or the logo) to return and connect more repositories.
+The **Sites** dashboard lists every project you can access; from the editor, use the logo to return and connect more repositories.
+
+### Don't want to self-host?
+
+We're rolling out a managed SaaS — same product, we run the box. Check the website for the waitlist.
 
 ---
 
@@ -75,11 +111,15 @@ Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` f
 
 **UI:** Light, minimal chrome; accent `#C1121F` used sparingly.
 
-**Status (MVP):** GitHub OAuth, projects, team invites, chat with the agent, framework-aware preview, publish via `GITHUB_TOKEN`, role-aware tooling, image upload (WebP). Version history in the UI and rollback are planned later.
-
 Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms, templates (`RequireAuth`).
 
 ---
+
+## Status
+
+The MVP is shipping. Working today: GitHub OAuth, projects, team invites, multi-conversation chat with persistent history, live preview with stage-aware boot screen, framework-aware image upload, publish via `GITHUB_TOKEN`, role-aware tooling, full English/German i18n.
+
+In flight: Resend-powered email invitations, client vs collaborator roles, branded client login portals, file uploads beyond images.
 
 ## Contributing
 

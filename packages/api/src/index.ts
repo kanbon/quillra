@@ -469,6 +469,14 @@ app.get(
               `User message:\n${parsed.content}`;
           }
 
+          // Look up the user's preferred language so the agent can reply in it
+          const [userRow] = await db
+            .select({ language: user.language })
+            .from(user)
+            .where(eq(user.id, session.user.id))
+            .limit(1);
+          const userLanguage = userRow?.language ?? null;
+
           let assistantText = "";
           const role = m.role as ProjectRole;
           for await (const ev of runProjectAgent({
@@ -476,6 +484,7 @@ app.get(
             prompt: promptText,
             role,
             projectId,
+            language: userLanguage,
             agentSessionId,
             onSessionId: (sid) => {
               agentSessionId = sid;

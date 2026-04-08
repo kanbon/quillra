@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -15,13 +16,19 @@ export function Modal({ open, onClose, children, className }: Props) {
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    // Lock body scroll while a modal is open
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center" role="dialog" aria-modal="true">
       <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
       <div
         className={cn(
@@ -31,6 +38,7 @@ export function Modal({ open, onClose, children, className }: Props) {
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
