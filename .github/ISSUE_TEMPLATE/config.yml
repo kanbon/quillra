@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation & self-host guide
+    url: https://github.com/kanbon/quillra#readme
+    about: How to set up Quillra on your own server, plus the full feature list.
+  - name: Security vulnerabilities
+    url: https://github.com/kanbon/quillra/security/advisories/new
+    about: Please report security issues privately via GitHub's advisory flow — not in a public issue.
+  - name: Questions & discussion
+    url: https://github.com/kanbon/quillra/discussions
+    about: For open-ended questions, ideas, and community chat.

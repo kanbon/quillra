@@ -45,8 +45,26 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
       .limit(1);
     if (!any) return c.json({ error: "Not found" }, 404);
 
-    const rows = await db.select().from(projectMembers).where(eq(projectMembers.projectId, projectId));
-    return c.json({ members: rows });
+    const rows = await db
+      .select({
+        id: projectMembers.id,
+        userId: projectMembers.userId,
+        role: projectMembers.role,
+        createdAt: projectMembers.createdAt,
+        email: user.email,
+        name: user.name,
+        image: user.image,
+      })
+      .from(projectMembers)
+      .innerJoin(user, eq(user.id, projectMembers.userId))
+      .where(eq(projectMembers.projectId, projectId));
+
+    return c.json({
+      members: rows.map((m) => ({
+        ...m,
+        createdAt: m.createdAt.getTime(),
+      })),
+    });
   })
   .post("/projects/:projectId/invites", async (c) => {
     const r = await requireUser(c);
@@ -237,5 +255,39 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     if (target.userId === r.user.id) return c.json({ error: "Cannot remove yourself" }, 400);
 
     await db.delete(projectMembers).where(eq(projectMembers.id, memberId));
+    return c.newResponse(null, 204);
+  })
+  /** List pending (not-yet-accepted) invites for a project */
+  .get("/projects/:projectId/invites", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("projectId");
+    const admin = await requireProjectAdmin(r.user.id, projectId);
+    if (!admin) return c.json({ error: "Forbidden" }, 403);
+    const rows = await db
+      .select()
+      .from(projectInvites)
+      .where(eq(projectInvites.projectId, projectId));
+    const pending = rows
+      .filter((r) => r.acceptedAt === null)
+      .map((r) => ({
+        id: r.id,
+        email: r.email,
+        role: r.role,
+        expiresAt: r.expiresAt.getTime(),
+      }));
+    return c.json({ invites: pending });
+  })
+  /** Revoke a pending invite */
+  .delete("/projects/:projectId/invites/:inviteId", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("projectId");
+    const inviteId = c.req.param("inviteId");
+    const admin = await requireProjectAdmin(r.user.id, projectId);
+    if (!admin) return c.json({ error: "Forbidden" }, 403);
+    await db
+      .delete(projectInvites)
+      .where(and(eq(projectInvites.id, inviteId), eq(projectInvites.projectId, projectId)));
     return c.newResponse(null, 204);
   });

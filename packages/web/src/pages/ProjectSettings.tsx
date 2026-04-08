@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
@@ -11,6 +11,7 @@ import { Modal } from "@/components/atoms/Modal";
 import { Textarea } from "@/components/atoms/Textarea";
 import { AppHeader } from "@/components/organisms/AppHeader";
 import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchFields";
+import { InviteMemberModal } from "@/components/organisms/InviteMemberModal";
 import { apiJson } from "@/lib/api";
 import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
 import { useT } from "@/i18n/i18n";
@@ -23,23 +24,31 @@ type DetectStatus =
   | { kind: "none" }
   | { kind: "error" };
 
-const inviteSchema = z.object({
-  email: z.string().email(),
-  role: z.enum(["admin", "editor", "translator", "client"]),
-  name: z.string().max(120).optional(),
-});
-
-type InviteForm = z.infer<typeof inviteSchema>;
-
 const projectSchema = z.object({
   name: z.string().min(1).max(200),
   githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   defaultBranch: z.string().min(1).max(255),
   previewDevCommand: z.string().max(2000).optional(),
-  logoUrl: z.string().url().max(2048).optional().or(z.literal("")),
 });
 
 type ProjectForm = z.infer<typeof projectSchema>;
+
+type Member = {
+  id: string;
+  userId: string;
+  role: string;
+  email: string;
+  name: string;
+  image: string | null;
+  createdAt: number;
+};
+
+type PendingInvite = {
+  id: string;
+  email: string;
+  role: string;
+  expiresAt: number;
+};
 
 function inferDisplayNameMode(name: string, repoFull: string): "repo" | "full" | "custom" {
   const p = parseRepoFullName(repoFull);
@@ -47,6 +56,52 @@ function inferDisplayNameMode(name: string, repoFull: string): "repo" | "full" |
   if (name === p.repo) return "repo";
   if (name === `${p.owner} / ${p.repo}`) return "full";
   return "custom";
+}
+
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() ?? "")
+      .join("") || "·"
+  );
+}
+
+function roleBadgeColor(role: string): { bg: string; text: string; label: string } {
+  switch (role) {
+    case "admin":
+      return { bg: "bg-red-100", text: "text-red-700", label: "Admin" };
+    case "editor":
+      return { bg: "bg-blue-100", text: "text-blue-700", label: "Collaborator" };
+    case "client":
+      return { bg: "bg-purple-100", text: "text-purple-700", label: "Client" };
+    case "translator":
+      return { bg: "bg-emerald-100", text: "text-emerald-700", label: "Translator" };
+    default:
+      return { bg: "bg-neutral-100", text: "text-neutral-700", label: role };
+  }
+}
+
+function SectionCard({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-neutral-200/80 bg-white shadow-sm">
+      <header className="border-b border-neutral-200/80 bg-neutral-50/50 px-6 py-4">
+        <h2 className="text-[15px] font-semibold tracking-tight text-neutral-900">{title}</h2>
+        {description && <p className="mt-0.5 text-[13px] text-neutral-500">{description}</p>}
+      </header>
+      <div className="p-6">{children}</div>
+    </section>
+  );
 }
 
 export function ProjectSettingsPage() {
@@ -60,11 +115,11 @@ export function ProjectSettingsPage() {
   const [detectStatus, setDetectStatus] = useState<DetectStatus>("idle");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
-  const [inviteResult, setInviteResult] = useState<
-    | null
-    | { ok: true; emailSent: boolean; inviteLink: string; role: string; emailError: string | null }
-    | { ok: false; error: string }
-  >(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [logoUrlDraft, setLogoUrlDraft] = useState<string | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   const projectQ = useQuery({
     queryKey: ["project", id],
@@ -84,23 +139,14 @@ export function ProjectSettingsPage() {
     queryKey: ["members", id],
     enabled: !!id,
     queryFn: () =>
-      apiJson<{
-        members: {
-          id: string;
-          userId: string;
-          role: string;
-        }[];
-      }>(`/api/team/projects/${id}/members`),
+      apiJson<{ members: Member[] }>(`/api/team/projects/${id}/members`),
   });
 
-  const {
-    register: registerInvite,
-    handleSubmit: handleInviteSubmit,
-    reset: resetInvite,
-    formState: { isSubmitting: inviteSubmitting },
-  } = useForm<InviteForm>({
-    resolver: zodResolver(inviteSchema),
-    defaultValues: { email: "", role: "editor", name: "" },
+  const pendingInvitesQ = useQuery({
+    queryKey: ["pending-invites", id],
+    enabled: !!id && projectQ.data?.role === "admin",
+    queryFn: () =>
+      apiJson<{ invites: PendingInvite[] }>(`/api/team/projects/${id}/invites`),
   });
 
   const {
@@ -117,7 +163,6 @@ export function ProjectSettingsPage() {
       githubRepoFullName: "",
       defaultBranch: "main",
       previewDevCommand: "",
-      logoUrl: "",
     },
   });
 
@@ -133,21 +178,18 @@ export function ProjectSettingsPage() {
       githubRepoFullName: p.githubRepoFullName,
       defaultBranch: p.defaultBranch,
       previewDevCommand: p.previewDevCommand ?? "",
-      logoUrl: p.logoUrl ?? "",
     });
     setDisplayNameMode(inferDisplayNameMode(p.name, p.githubRepoFullName));
     setPreferManualGit(false);
+    setLogoUrlDraft(p.logoUrl);
   }, [projectQ.data, resetProject]);
 
   useEffect(() => {
     if (displayNameMode === "custom") return;
     const p = parseRepoFullName(repoFull);
     if (!p) return;
-    if (displayNameMode === "repo") {
-      setValue("name", p.repo);
-    } else {
-      setValue("name", `${p.owner} / ${p.repo}`);
-    }
+    if (displayNameMode === "repo") setValue("name", p.repo);
+    else setValue("name", `${p.owner} / ${p.repo}`);
   }, [repoFull, displayNameMode, setValue]);
 
   const patchProject = useMutation({
@@ -156,7 +198,6 @@ export function ProjectSettingsPage() {
       githubRepoFullName: string;
       defaultBranch: string;
       previewDevCommand: string | null;
-      logoUrl: string | null;
     }) => apiJson(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["project", id] });
@@ -172,8 +213,59 @@ export function ProjectSettingsPage() {
     },
   });
 
-  const isAdmin = projectQ.data?.role === "admin";
+  const removeMember = useMutation({
+    mutationFn: (memberId: string) =>
+      apiJson(`/api/team/projects/${id}/members/${memberId}`, { method: "DELETE" }),
+    onSuccess: () => void membersQ.refetch(),
+  });
 
+  const revokeInvite = useMutation({
+    mutationFn: (inviteId: string) =>
+      apiJson(`/api/team/projects/${id}/invites/${inviteId}`, { method: "DELETE" }),
+    onSuccess: () => void pendingInvitesQ.refetch(),
+  });
+
+  async function uploadLogo(file: File) {
+    setLogoError(null);
+    setLogoUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/projects/${id}/logo`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error ?? `Upload failed (${res.status})`);
+      }
+      const data = (await res.json()) as { logoUrl: string };
+      setLogoUrlDraft(data.logoUrl);
+      void qc.invalidateQueries({ queryKey: ["project", id] });
+    } catch (e) {
+      setLogoError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLogoUploading(false);
+    }
+  }
+
+  async function clearLogo() {
+    setLogoError(null);
+    setLogoUploading(true);
+    try {
+      await apiJson(`/api/projects/${id}/logo`, { method: "DELETE" });
+      setLogoUrlDraft(null);
+      void qc.invalidateQueries({ queryKey: ["project", id] });
+    } catch (e) {
+      setLogoError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLogoUploading(false);
+    }
+  }
+
+  const isAdmin = projectQ.data?.role === "admin";
+  const currentUserId = membersQ.data?.members.find((m) => m.role === "admin")?.userId;
   const slug = repoFull ? repoSlugDisplay(repoFull) : "…";
   const fullPretty = repoFull ? repoFull.replace("/", " / ") : "…";
 
@@ -181,298 +273,377 @@ export function ProjectSettingsPage() {
     <div className="min-h-screen bg-neutral-50">
       <AppHeader showNav projectId={id} />
       <main className="mx-auto max-w-3xl px-4 py-10">
-        <Heading as="h1" className="mb-2 text-2xl font-semibold tracking-tight">
-          {t("projectSettings.teamProjectHeading")}
-        </Heading>
-        <p className="mb-8 text-sm text-neutral-600">
-          {t("projectSettings.teamProjectHelp")}
-        </p>
-
-        {isAdmin && (
-          <div className="mb-10 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-            <Heading as="h2" className="mb-1 text-base font-semibold">
-              {t("projectSettings.gitConnection")}
-            </Heading>
-            <p className="mb-4 text-sm text-neutral-600">
-              {t("projectSettings.gitConnectionHelp")}
-            </p>
-            <form
-              className="flex flex-col gap-4"
-              onSubmit={handleProjectSubmit(async (v) => {
-                await patchProject.mutateAsync({
-                  name: v.name.trim(),
-                  githubRepoFullName: v.githubRepoFullName.trim(),
-                  defaultBranch: v.defaultBranch.trim(),
-                  previewDevCommand: v.previewDevCommand?.trim() || null,
-                  logoUrl: v.logoUrl?.trim() || null,
-                });
-              })}
-            >
-              <GitHubRepoBranchFields
-                repoFullName={repoFull}
-                branch={branch}
-                disabled={projectSubmitting || patchProject.isPending}
-                preferManual={preferManualGit}
-                setPreferManual={setPreferManualGit}
-                onRepoChange={(full, dbHint) => {
-                  setValue("githubRepoFullName", full, { shouldValidate: true });
-                  setValue("defaultBranch", dbHint, { shouldValidate: true });
-                }}
-                onBranchChange={(b) => setValue("defaultBranch", b, { shouldValidate: true })}
-              />
-              {(projectErrors.githubRepoFullName || projectErrors.defaultBranch) && (
-                <p className="text-xs text-red-600">
-                  {projectErrors.githubRepoFullName?.message ?? projectErrors.defaultBranch?.message}
-                </p>
-              )}
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">{t("connectForm.displayName")}</label>
-                <select
-                  className={selectLikeInputClassName()}
-                  value={displayNameMode}
-                  disabled={projectSubmitting || patchProject.isPending}
-                  onChange={(e) => setDisplayNameMode(e.target.value as "repo" | "full" | "custom")}
-                >
-                  <option value="repo">{t("connectForm.useRepoName", { slug })}</option>
-                  <option value="full">{t("connectForm.useOwnerRepo", { fullPretty })}</option>
-                  <option value="custom">{t("connectForm.custom")}</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">
-                  {displayNameMode === "custom" ? t("connectForm.customName") : t("connectForm.shownInApp")}
-                </label>
-                {displayNameMode === "custom" ? (
-                  <>
-                    <Input {...registerProject("name")} />
-                    {projectErrors.name && (
-                      <p className="mt-1 text-xs text-red-600">{projectErrors.name.message}</p>
-                    )}
-                  </>
-                ) : (
-                  <p className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">
-                    {nameVal || "—"}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">Project logo URL</label>
-                <Input placeholder="https://yourcompany.com/logo.png" {...registerProject("logoUrl")} />
-                <p className="mt-1 text-xs text-neutral-500">
-                  Shown on the branded client login page. Square images work best.
-                </p>
-              </div>
-
-              <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <label className="block text-xs font-medium text-neutral-600">
-                    {t("connectForm.devCommandLabel")}
-                  </label>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setDetectStatus("loading");
-                      try {
-                        const fw = await apiJson<{ id: string; label: string }>(
-                          `/api/projects/${id}/framework`,
-                        );
-                        setDetectStatus(
-                          fw.id && fw.id !== "unknown"
-                            ? { kind: "ok", label: fw.label }
-                            : { kind: "none" },
-                        );
-                      } catch {
-                        setDetectStatus({ kind: "error" });
-                      }
-                    }}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50"
-                    title="Re-detect framework and dev command from package.json"
-                  >
-                    <svg
-                      className={cn("h-3 w-3", detectStatus === "loading" && "animate-spin")}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
-                    </svg>
-                    Re-detect
-                  </button>
-                </div>
-                <Textarea
-                  rows={2}
-                  className="font-mono text-xs"
-                  placeholder={t("projectSettings.devCommandPlaceholder")}
-                  {...registerProject("previewDevCommand")}
-                />
-                {detectStatus !== "idle" && detectStatus !== "loading" && (
-                  <p className={cn(
-                    "mt-1 text-xs",
-                    detectStatus.kind === "ok" && "text-green-600",
-                    detectStatus.kind === "none" && "text-amber-600",
-                    detectStatus.kind === "error" && "text-red-600",
-                  )}>
-                    {detectStatus.kind === "ok" && `Detected ${detectStatus.label}. Leave the command empty to use the default.`}
-                    {detectStatus.kind === "none" && "No known framework detected. Set a custom command above."}
-                    {detectStatus.kind === "error" && "Couldn't re-detect. Try again."}
-                  </p>
-                )}
-              </div>
-              <Button type="submit" disabled={projectSubmitting || patchProject.isPending}>
-                {t("projectSettings.saveProject")}
-              </Button>
-            </form>
-          </div>
-        )}
-
+        {/* Page heading */}
         <div className="mb-8">
-          <Heading as="h2" className="mb-3 text-base font-semibold">
-            {t("projectSettings.members")}
+          <Heading as="h1" className="text-[26px] font-semibold tracking-tight text-neutral-900">
+            Project settings
           </Heading>
-          <ul className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
-            {(membersQ.data?.members ?? []).map((m) => (
-              <li key={m.id} className="flex justify-between px-4 py-3 text-sm">
-                <span className="font-mono text-xs text-neutral-600">{m.userId.slice(0, 8)}…</span>
-                <span className="text-neutral-500">{m.role}</span>
-              </li>
-            ))}
-          </ul>
+          <p className="mt-1 text-sm text-neutral-500">
+            {projectQ.data?.name ?? "…"} — {projectQ.data?.githubRepoFullName ?? ""}
+          </p>
         </div>
 
-        {isAdmin && (
-          <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-            <Heading as="h2" className="mb-1 text-base font-semibold">
-              {t("projectSettings.inviteByEmail")}
-            </Heading>
-            <p className="mb-4 text-sm text-neutral-600">
-              {t("projectSettings.inviteByEmailHelp")}
-            </p>
-            <form
-              className="flex flex-col gap-3"
-              onSubmit={handleInviteSubmit(async (v) => {
-                setInviteResult(null);
-                try {
-                  const res = await apiJson<{
-                    inviteLink: string;
-                    emailSent: boolean;
-                    emailError: string | null;
-                    role: string;
-                  }>(`/api/team/projects/${id}/invites`, {
-                    method: "POST",
-                    body: JSON.stringify(v),
-                  });
-                  setInviteResult({ ok: true, ...res });
-                  resetInvite();
-                  void membersQ.refetch();
-                } catch (e) {
-                  setInviteResult({ ok: false, error: e instanceof Error ? e.message : "Failed" });
-                }
-              })}
+        <div className="space-y-6">
+          {/* Brand section */}
+          {isAdmin && (
+            <SectionCard
+              title="Brand"
+              description="Name and logo your clients see on the branded sign-in page."
             >
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Input
-                  type="email"
-                  placeholder={t("projectSettings.emailPlaceholder")}
-                  {...registerInvite("email")}
-                />
-                <Input placeholder="Their name (optional)" {...registerInvite("name")} />
-              </div>
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+                <div className="flex flex-col items-center gap-2">
+                  <div className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
+                    {logoUrlDraft ? (
+                      <img src={logoUrlDraft} alt="Project logo" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="text-2xl font-semibold text-neutral-400">
+                        {initialsOf(projectQ.data?.name ?? "")}
+                      </span>
+                    )}
+                    {logoUploading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-white/60">
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-900" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={logoUploading}
+                      className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-50"
+                    >
+                      {logoUrlDraft ? "Change" : "Upload"}
+                    </button>
+                    {logoUrlDraft && (
+                      <button
+                        type="button"
+                        onClick={clearLogo}
+                        disabled={logoUploading}
+                        className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-red-700 disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void uploadLogo(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  {logoError && <p className="max-w-[140px] text-center text-[11px] text-red-600">{logoError}</p>}
+                </div>
 
-              {/* Role picker as cards so the difference is visible */}
-              <div className="grid gap-2 sm:grid-cols-2">
-                {[
-                  { value: "client", title: "Client", desc: "Branded login. Edits text and images via chat. Sees only this site." },
-                  { value: "editor", title: "Collaborator", desc: "Full access. Signs in with GitHub. Sees all sites they belong to." },
-                  { value: "admin", title: "Admin", desc: "Collaborator + can manage members and project settings." },
-                  { value: "translator", title: "Translator", desc: "Edits content in non-English locales only." },
-                ].map((r) => (
-                  <label
-                    key={r.value}
-                    className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-neutral-200 bg-neutral-50/60 p-3 text-left transition-colors hover:border-neutral-300 hover:bg-white has-[:checked]:border-brand has-[:checked]:bg-brand/5"
+                <div className="flex-1 space-y-4">
+                  <form
+                    className="flex flex-col gap-4"
+                    onSubmit={handleProjectSubmit(async (v) => {
+                      await patchProject.mutateAsync({
+                        name: v.name.trim(),
+                        githubRepoFullName: v.githubRepoFullName.trim(),
+                        defaultBranch: v.defaultBranch.trim(),
+                        previewDevCommand: v.previewDevCommand?.trim() || null,
+                      });
+                    })}
+                    id="project-form"
                   >
-                    <input
-                      type="radio"
-                      value={r.value}
-                      className="mt-1 accent-brand"
-                      {...registerInvite("role")}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-neutral-900">{r.title}</p>
-                      <p className="mt-0.5 text-[12px] leading-snug text-neutral-500">{r.desc}</p>
+                    <div>
+                      <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                        Display name
+                      </label>
+                      <select
+                        className={selectLikeInputClassName()}
+                        value={displayNameMode}
+                        disabled={projectSubmitting || patchProject.isPending}
+                        onChange={(e) => setDisplayNameMode(e.target.value as "repo" | "full" | "custom")}
+                      >
+                        <option value="repo">{t("connectForm.useRepoName", { slug })}</option>
+                        <option value="full">{t("connectForm.useOwnerRepo", { fullPretty })}</option>
+                        <option value="custom">{t("connectForm.custom")}</option>
+                      </select>
+                      {displayNameMode === "custom" ? (
+                        <div className="mt-2">
+                          <Input {...registerProject("name")} placeholder="Client homepage" />
+                          {projectErrors.name && (
+                            <p className="mt-1 text-xs text-red-600">{projectErrors.name.message}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">
+                          {nameVal || "—"}
+                        </p>
+                      )}
                     </div>
-                  </label>
-                ))}
+                  </form>
+                </div>
               </div>
+            </SectionCard>
+          )}
 
-              <Button type="submit" disabled={inviteSubmitting}>
-                {inviteSubmitting ? "Sending invite…" : t("projectSettings.createInvite")}
-              </Button>
+          {/* Git connection section */}
+          {isAdmin && (
+            <SectionCard
+              title="Git connection"
+              description="Which repository and branch this project edits. Changing these reclones the workspace."
+            >
+              <div className="space-y-5" >
+                <GitHubRepoBranchFields
+                  repoFullName={repoFull}
+                  branch={branch}
+                  disabled={projectSubmitting || patchProject.isPending}
+                  preferManual={preferManualGit}
+                  setPreferManual={setPreferManualGit}
+                  onRepoChange={(full, dbHint) => {
+                    setValue("githubRepoFullName", full, { shouldValidate: true });
+                    setValue("defaultBranch", dbHint, { shouldValidate: true });
+                  }}
+                  onBranchChange={(b) => setValue("defaultBranch", b, { shouldValidate: true })}
+                />
+                {(projectErrors.githubRepoFullName || projectErrors.defaultBranch) && (
+                  <p className="text-xs text-red-600">
+                    {projectErrors.githubRepoFullName?.message ?? projectErrors.defaultBranch?.message}
+                  </p>
+                )}
 
-              {inviteResult && inviteResult.ok && (
-                <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm">
-                  {inviteResult.emailSent ? (
-                    <p className="text-green-700">
-                      ✓ Invite email sent. They'll get a {inviteResult.role === "client" ? "branded sign-in page" : "GitHub sign-in link"} in their inbox.
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50/50 p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <label className="text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                      Dev preview command
+                    </label>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setDetectStatus("loading");
+                        try {
+                          const fw = await apiJson<{ id: string; label: string }>(
+                            `/api/projects/${id}/framework`,
+                          );
+                          setDetectStatus(
+                            fw.id && fw.id !== "unknown"
+                              ? { kind: "ok", label: fw.label }
+                              : { kind: "none" },
+                          );
+                        } catch {
+                          setDetectStatus({ kind: "error" });
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+                    >
+                      <svg
+                        className={cn("h-3 w-3", detectStatus === "loading" && "animate-spin")}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                      </svg>
+                      Re-detect
+                    </button>
+                  </div>
+                  <Textarea
+                    rows={2}
+                    className="font-mono text-xs"
+                    placeholder="Leave empty to auto-detect"
+                    {...registerProject("previewDevCommand")}
+                  />
+                  {detectStatus !== "idle" && detectStatus !== "loading" && (
+                    <p className={cn(
+                      "mt-2 text-xs",
+                      typeof detectStatus === "object" && detectStatus.kind === "ok" && "text-green-600",
+                      typeof detectStatus === "object" && detectStatus.kind === "none" && "text-amber-600",
+                      typeof detectStatus === "object" && detectStatus.kind === "error" && "text-red-600",
+                    )}>
+                      {typeof detectStatus === "object" && detectStatus.kind === "ok" && `Detected ${detectStatus.label}. Leave the command empty to use the default.`}
+                      {typeof detectStatus === "object" && detectStatus.kind === "none" && "No known framework detected. Set a custom command above."}
+                      {typeof detectStatus === "object" && detectStatus.kind === "error" && "Couldn't re-detect. Try again."}
                     </p>
-                  ) : (
-                    <>
-                      <p className="text-amber-700">
-                        Email isn't configured on this server. Copy the link and send it yourself:
-                      </p>
-                      <div className="mt-2 flex items-center gap-2">
-                        <code className="flex-1 truncate rounded-lg border border-neutral-200 bg-white px-2 py-1.5 font-mono text-[11px] text-neutral-700">
-                          {inviteResult.inviteLink}
-                        </code>
+                  )}
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="submit"
+                    form="project-form"
+                    disabled={projectSubmitting || patchProject.isPending}
+                  >
+                    {patchProject.isPending ? "Saving…" : "Save changes"}
+                  </Button>
+                </div>
+              </div>
+            </SectionCard>
+          )}
+
+          {/* Team section */}
+          <SectionCard
+            title="Team"
+            description={
+              isAdmin
+                ? "Everyone who can edit this site. Invite clients or collaborators."
+                : "Everyone who can edit this site."
+            }
+          >
+            {/* Header row with count + invite button */}
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-[12px] font-medium text-neutral-500">
+                {(membersQ.data?.members ?? []).length}{" "}
+                {(membersQ.data?.members ?? []).length === 1 ? "member" : "members"}
+                {pendingInvitesQ.data && pendingInvitesQ.data.invites.length > 0 && (
+                  <> · {pendingInvitesQ.data.invites.length} pending</>
+                )}
+              </p>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setInviteOpen(true)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-neutral-900 px-3.5 text-[12px] font-semibold text-white shadow-sm hover:bg-neutral-800"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Invite
+                </button>
+              )}
+            </div>
+
+            {/* Members table */}
+            <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+              {(membersQ.data?.members ?? []).length === 0 ? (
+                <p className="px-4 py-6 text-center text-[12px] text-neutral-400">No members yet.</p>
+              ) : (
+                (membersQ.data?.members ?? []).map((m) => {
+                  const badge = roleBadgeColor(m.role);
+                  return (
+                    <div key={m.id} className="flex items-center gap-3 px-4 py-3">
+                      {m.image ? (
+                        <img src={m.image} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-neutral-100 to-neutral-200 text-[11px] font-semibold text-neutral-500">
+                          {initialsOf(m.name)}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-semibold text-neutral-900">{m.name || m.email}</p>
+                        <p className="truncate text-[11px] text-neutral-500">{m.email}</p>
+                      </div>
+                      <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", badge.bg, badge.text)}>
+                        {badge.label}
+                      </span>
+                      {isAdmin && m.userId !== currentUserId && (
                         <button
                           type="button"
                           onClick={() => {
-                            void navigator.clipboard.writeText(inviteResult.inviteLink);
+                            if (confirm(`Remove ${m.name || m.email} from this project?`)) {
+                              removeMember.mutate(m.id);
+                            }
                           }}
-                          className="rounded-md bg-neutral-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-neutral-700"
+                          disabled={removeMember.isPending}
+                          className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                          title="Remove from project"
+                          aria-label="Remove from project"
                         >
-                          Copy
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Pending invites */}
+            {isAdmin && pendingInvitesQ.data && pendingInvitesQ.data.invites.length > 0 && (
+              <div className="mt-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                  Pending invites
+                </p>
+                <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-dashed border-neutral-200 bg-neutral-50/50">
+                  {pendingInvitesQ.data.invites.map((inv) => {
+                    const badge = roleBadgeColor(inv.role);
+                    return (
+                      <div key={inv.id} className="flex items-center gap-3 px-4 py-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-dashed border-neutral-300 text-neutral-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13px] font-medium text-neutral-800">{inv.email}</p>
+                          <p className="text-[11px] text-neutral-400">
+                            Expires {new Date(inv.expiresAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", badge.bg, badge.text)}>
+                          {badge.label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => revokeInvite.mutate(inv.id)}
+                          disabled={revokeInvite.isPending}
+                          className="text-[11px] font-medium text-neutral-500 underline-offset-2 hover:text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Revoke
                         </button>
                       </div>
-                    </>
-                  )}
+                    );
+                  })}
                 </div>
-              )}
-              {inviteResult && !inviteResult.ok && (
-                <p className="text-sm text-red-600">{inviteResult.error}</p>
-              )}
-            </form>
-          </div>
-        )}
+              </div>
+            )}
+          </SectionCard>
 
-        {/* Danger zone */}
-        {isAdmin && projectQ.data && (
-          <div className="mt-10 rounded-2xl border border-red-200 bg-red-50/40 p-6 shadow-sm">
-            <Heading as="h2" className="mb-1 text-base font-semibold text-red-900">
-              Danger zone
-            </Heading>
-            <p className="mb-4 text-sm text-red-800/80">
-              Deleting this project removes it from Quillra, stops the live preview, and wipes its cloned
-              workspace on the server. <strong>Your GitHub repository is not touched.</strong>
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setDeleteConfirm("");
-                setDeleteOpen(true);
-              }}
-              className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-red-300 bg-white px-4 text-[13px] font-semibold text-red-700 transition-colors hover:bg-red-50"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              Delete project
-            </button>
-          </div>
-        )}
+          {/* Danger zone */}
+          {isAdmin && projectQ.data && (
+            <div className="overflow-hidden rounded-2xl border border-red-200 bg-red-50/40 shadow-sm">
+              <header className="border-b border-red-200 bg-red-50/60 px-6 py-4">
+                <h2 className="text-[15px] font-semibold tracking-tight text-red-900">Danger zone</h2>
+                <p className="mt-0.5 text-[13px] text-red-800/80">
+                  Destructive actions. These cannot be undone.
+                </p>
+              </header>
+              <div className="p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[14px] font-medium text-red-900">Delete this project</p>
+                    <p className="mt-1 text-[13px] text-red-800/80">
+                      Removes the project from Quillra, stops the live preview, and wipes its cloned workspace.{" "}
+                      <strong>Your GitHub repository is not touched.</strong>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteConfirm("");
+                      setDeleteOpen(true);
+                    }}
+                    className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3.5 text-[13px] font-semibold text-red-700 transition-colors hover:bg-red-50"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </main>
+
+      <InviteMemberModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        projectId={id}
+        onInvited={() => {
+          void membersQ.refetch();
+          void pendingInvitesQ.refetch();
+        }}
+      />
 
       {/* Delete confirmation modal */}
       <Modal

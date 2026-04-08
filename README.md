@@ -123,8 +123,29 @@ In flight: Resend-powered email invitations, client vs collaborator roles, brand
 
 ## Contributing
 
-Issues and pull requests are welcome.
+Contributions are welcome — bug reports, feature proposals, PRs, docs, framework support.
+
+Start with the **[contributing guide](./CONTRIBUTING.md)** — it covers local setup, code style, commit conventions, how to file a good bug report, and what the license means for contributors.
+
+We follow a [Code of Conduct](./CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
+
+### Contributors
+
+<a href="https://github.com/kanbon/quillra/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=kanbon/quillra" alt="Contributors" />
+</a>
+
+<sub>Made with [contrib.rocks](https://contrib.rocks).</sub>
 
 ## License
 
-[MIT](LICENSE)
+Quillra is released under the **[Functional Source License v1.1, MIT Future License](./LICENSE)** (FSL-1.1-MIT).
+
+In plain English:
+
+- ✅ Free to **use commercially** — for your company, your clients, your agency, your side projects. Charge whatever you want for the work you do with it.
+- ✅ Free to **fork, modify, and self-host** for your own use.
+- ✅ After **two years**, every version automatically becomes full MIT — no restrictions at all.
+- ❌ You may **not** use Quillra to build a **competing hosted/managed CMS service** (i.e. a "Quillra-as-a-service" competitor). That's the one thing we're protecting, because we run one ourselves.
+
+If in doubt: self-hosting it for your own clients, your employer, or your own projects is always fine. Selling hosted Quillra to other people is not.

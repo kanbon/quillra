@@ -139,7 +139,16 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       previewDevCommand: z.string().max(2000).nullable().optional(),
       githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
       defaultBranch: z.string().min(1).max(255).optional(),
-      logoUrl: z.string().url().max(2048).nullable().optional(),
+      // Accepts either a real https URL or a data: URL (from the logo upload endpoint)
+      logoUrl: z
+        .string()
+        .max(2_500_000) // ~2.5 MB upper bound for base64-encoded logos
+        .refine(
+          (v) => v.startsWith("http://") || v.startsWith("https://") || v.startsWith("data:image/"),
+          { message: "logoUrl must be an http(s) or data:image URL" },
+        )
+        .nullable()
+        .optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
@@ -685,5 +694,58 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     try {
       fs.unlinkSync(resolved);
     } catch { /* already gone */ }
+    return c.json({ ok: true });
+  })
+  /**
+   * Upload a project logo. The file is resized/recoded via sharp into a
+   * reasonable square PNG under ~200 KiB and stored as a data: URL in
+   * projects.logo_url. Avoids the "you need a CDN" step for small teams
+   * while keeping the column portable (it's still just text).
+   *
+   * Admins only.
+   */
+  .post("/:id/logo", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+    const body = await c.req.parseBody();
+    const file = body.file;
+    if (!file || !(file instanceof File)) return c.json({ error: "Expected file field" }, 400);
+    if (!file.type.startsWith("image/")) return c.json({ error: "File must be an image" }, 400);
+    // Hard cap raw upload at 5 MB before sharp even sees it
+    if (file.size > 5 * 1024 * 1024) return c.json({ error: "Image too large (max 5 MB)" }, 400);
+
+    const inputBuf = Buffer.from(await file.arrayBuffer());
+    let outBuf: Buffer;
+    try {
+      outBuf = await sharp(inputBuf)
+        .rotate() // honour EXIF
+        .resize(256, 256, { fit: "cover", position: "centre" })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+    } catch {
+      return c.json({ error: "Could not process image" }, 400);
+    }
+
+    const dataUrl = `data:image/png;base64,${outBuf.toString("base64")}`;
+
+    await db
+      .update(projects)
+      .set({ logoUrl: dataUrl, updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
+
+    return c.json({ logoUrl: dataUrl, bytes: outBuf.length });
+  })
+  /** Clear the project logo (sets logo_url to NULL). Admins only. */
+  .delete("/:id/logo", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+    await db.update(projects).set({ logoUrl: null, updatedAt: new Date() }).where(eq(projects.id, projectId));
     return c.json({ ok: true });
   });

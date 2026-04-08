@@ -1,0 +1,66 @@
+name: Feature request
+description: Propose a new feature, framework support, or UX improvement.
+title: "[Feature] "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for thinking about how Quillra could be better!
+
+        **Before filing:** large features benefit from a quick discussion before implementation. This issue IS the discussion — lay out the problem clearly and we'll work through the shape of the solution together.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the user pain in plain language. Who's hitting it, and when?
+      placeholder: |
+        Right now when a client wants to swap out a blog post header image, they can't see the final dimensions
+        until the site deploys. They end up going back and forth with me.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How might we fix it? A rough sketch is fine — design doesn't have to be final.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you think about? Why didn't that work?
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of change
+      options:
+        - New feature
+        - UX / UI improvement
+        - New framework support (Astro / Next / etc.)
+        - Integration (GitHub App, OAuth provider, email backend, etc.)
+        - Performance
+        - Developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Screenshots, links, related issues, prior art from other tools — anything that helps us understand.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues before filing this one.
+          required: true
+        - label: I'd be willing to help test or review the change once someone starts working on it.

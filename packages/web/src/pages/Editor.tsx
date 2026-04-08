@@ -13,6 +13,7 @@ import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
 import { clearNewChat } from "@/lib/chat-store";
 import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 
 type ProjectDetail = {
   id: string;
@@ -41,6 +42,7 @@ export function EditorPage() {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [previewLabel, setPreviewLabel] = useState<string>("");
   const [split, setSplit] = useState(42);
+  const [dragging, setDragging] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
@@ -280,27 +282,45 @@ export function EditorPage() {
           <ChatComposer ref={composerRef} projectId={id} onSend={send} disabled={busy} />
         </section>
         <div
-          className="hidden w-1 shrink-0 cursor-col-resize bg-neutral-200 hover:bg-neutral-400 md:block"
-          onMouseDown={(e) => {
+          className={cn(
+            "hidden w-1.5 shrink-0 cursor-col-resize bg-neutral-200 transition-colors md:block",
+            dragging ? "bg-brand" : "hover:bg-neutral-400",
+          )}
+          onPointerDown={(e) => {
             e.preventDefault();
+            const target = e.currentTarget;
+            target.setPointerCapture(e.pointerId);
             const startX = e.clientX;
             const start = split;
-            const wrap = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect().width;
-            const onMove = (ev: MouseEvent) => {
+            const wrap = (target.parentElement as HTMLElement).getBoundingClientRect().width;
+            setDragging(true);
+            const onMove = (ev: PointerEvent) => {
               const dx = ev.clientX - startX;
               const next = Math.min(72, Math.max(28, start + (dx / wrap) * 100));
               setSplit(next);
             };
-            const onUp = () => {
-              window.removeEventListener("mousemove", onMove);
-              window.removeEventListener("mouseup", onUp);
+            const onUp = (ev: PointerEvent) => {
+              try { target.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+              target.removeEventListener("pointermove", onMove);
+              target.removeEventListener("pointerup", onUp);
+              target.removeEventListener("pointercancel", onUp);
+              setDragging(false);
             };
-            window.addEventListener("mousemove", onMove);
-            window.addEventListener("mouseup", onUp);
+            target.addEventListener("pointermove", onMove);
+            target.addEventListener("pointerup", onUp);
+            target.addEventListener("pointercancel", onUp);
           }}
           role="separator"
           aria-orientation="vertical"
         />
+        {/* Block iframe + selection while dragging so the cursor doesn't get eaten */}
+        {dragging && (
+          <div
+            className="fixed inset-0 z-[999] cursor-col-resize"
+            style={{ userSelect: "none" }}
+            aria-hidden
+          />
+        )}
         <section className="min-h-[40vh] min-w-0 flex-1 md:min-h-0">
           <PreviewPane
             projectId={id}

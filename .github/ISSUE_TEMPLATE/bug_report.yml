@@ -1,0 +1,82 @@
+name: Bug report
+description: Something in Quillra is broken, crashing, or behaving unexpectedly.
+title: "[Bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Filling this out carefully helps us fix it faster.
+
+        **Before submitting:** please search existing issues first — someone may already be tracking this.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: One or two sentences describing the bug in plain language.
+      placeholder: "When I upload a PNG in the chat, the preview shows a broken image icon."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that reliably triggers the bug.
+      placeholder: |
+        1. Open any project
+        2. Drag a PNG onto the chat
+        3. Send the message
+        4. Observe the broken thumbnail
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your setup — helps us tell "works on my machine" apart from real bugs.
+      value: |
+        - Quillra version / commit SHA:
+        - How you're running it (self-hosted Docker / SaaS / local dev):
+        - Browser + version:
+        - OS:
+        - Framework of the project you were editing (Astro, Next, etc.):
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / console output
+      description: |
+        If the preview or chat misbehaved, open the **Debug modal** (bug icon next to Refresh in the preview header) and paste the relevant bits here.
+        Browser console errors are also helpful.
+      render: shell
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or screen recordings
+      description: Drag them into the text box — GitHub will upload them for you. Not required but hugely helpful for UI bugs.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues before filing this one.
+          required: true
+        - label: The steps above reliably reproduce the bug for me.
+          required: true
+        - label: I've removed any secrets (API keys, tokens, passwords) from the logs I pasted.
+          required: true
