@@ -197,6 +197,11 @@ app.use("*", async (c, next) => {
   if (!host.endsWith(suffix)) return next();
   const id = host.slice(0, -suffix.length);
   if (!id) return next();
+  // Internal Quillra paths (e.g. the polling status endpoint used by the
+  // boot page) must NOT be forwarded to the user's dev server, even when
+  // requested from a preview subdomain. Pass them through to our own
+  // routers below.
+  if (c.req.path.startsWith("/api/preview-status")) return next();
   const port = getPreviewSubdomainPort(id);
   if (!port) return c.text("Preview not found", 404);
 

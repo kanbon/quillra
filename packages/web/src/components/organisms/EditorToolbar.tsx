@@ -1,6 +1,5 @@
 import { NavLink, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { authClient } from "@/lib/auth-client";
@@ -86,25 +85,46 @@ export function EditorToolbar({
           </NavLink>
         </nav>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {canPublish && (
-            <Button
+            <button
               type="button"
-              className="shrink-0 rounded-lg bg-brand text-white hover:bg-brand/90"
               disabled={publishing}
               onClick={onPublish}
+              className={cn(
+                "inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-4 text-[13px] font-semibold text-white shadow-sm transition-all",
+                publishing
+                  ? "cursor-wait opacity-70"
+                  : "hover:bg-brand/90 hover:shadow",
+              )}
             >
-              {publishing ? "Publishing…" : "Publish"}
-            </Button>
+              {publishing ? (
+                <>
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  Publishing
+                </>
+              ) : (
+                <>
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  Publish
+                </>
+              )}
+            </button>
           )}
-          <Button
-            variant="ghost"
+          <div className="h-6 w-px bg-neutral-200" />
+          <button
             type="button"
-            className="shrink-0 rounded-lg text-xs text-neutral-500"
             onClick={() => authClient.signOut({ fetchOptions: { credentials: "include" } })}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
+            title="Sign out"
+            aria-label="Sign out"
           >
-            Sign out
-          </Button>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </button>
         </div>
       </div>
     </header>

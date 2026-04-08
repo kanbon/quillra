@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
+import { cn } from "@/lib/cn";
 
 type Props = {
   src: string | null;
@@ -112,25 +113,41 @@ export function PreviewPane({
             <p className="mt-0.5 text-[11px] text-neutral-400">Local dev server in your repo</p>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {hasFrame && ready && src && (
+        {hasFrame && (
+          <div className="flex items-center overflow-hidden rounded-lg border border-neutral-200 bg-white">
             <a
-              href={src.split("?")[0]}
+              href={ready && src ? src.split("?")[0] : "#"}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-600 no-underline transition-colors hover:bg-neutral-50 hover:text-neutral-900"
+              className={cn(
+                "flex h-8 w-9 items-center justify-center text-neutral-500 transition-colors no-underline",
+                ready
+                  ? "hover:bg-neutral-50 hover:text-neutral-900"
+                  : "pointer-events-none opacity-40",
+              )}
               title="Open in new tab"
+              aria-label="Open in new tab"
+              onClick={(e) => { if (!ready) e.preventDefault(); }}
             >
-              <svg className="mr-1.5 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
-              New tab
             </a>
-          )}
-          <Button variant="outline" type="button" onClick={onRefresh} disabled={starting || !hasFrame || !ready}>
-            Refresh
-          </Button>
-        </div>
+            <div className="h-5 w-px bg-neutral-200" />
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={starting || !hasFrame || !ready}
+              className="flex h-8 w-9 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-40 disabled:hover:bg-transparent"
+              title="Refresh preview"
+              aria-label="Refresh preview"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
