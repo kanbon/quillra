@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { simpleGit } from "simple-git";
+import { setPreviewStatus, registerPreviewPort } from "./preview-status.js";
 
 const previewChildren = new Map<string, ChildProcess>();
 
@@ -47,12 +48,13 @@ function getPackageManager(repoPath: string): "yarn" | "pnpm" | "npm" {
   return "npm";
 }
 
-export async function installDependenciesIfNeeded(repoPath: string): Promise<void> {
+export async function installDependenciesIfNeeded(repoPath: string, projectId?: string): Promise<void> {
   const pkg = path.join(repoPath, "package.json");
   if (!fs.existsSync(pkg)) return;
   if (fs.existsSync(path.join(repoPath, "node_modules"))) return;
 
   const pm = getPackageManager(repoPath);
+  if (projectId) setPreviewStatus(projectId, "installing", `Running ${pm} install`);
   if (pm === "yarn") {
     await runCommand("yarn", ["install", "--non-interactive"], repoPath);
   } else if (pm === "pnpm") {
@@ -161,9 +163,10 @@ export async function ensureRepoCloned(
     : `https://github.com/${githubRepoFullName}.git`;
 
   if (!fs.existsSync(gitDir)) {
+    setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     await simpleGit().clone(url, dir, ["--branch", branch, "--single-branch", "--depth", "1"]);
-    await installDependenciesIfNeeded(dir);
+    await installDependenciesIfNeeded(dir, projectId);
   } else {
     const g = simpleGit(dir);
     if (token) {
@@ -172,7 +175,7 @@ export async function ensureRepoCloned(
     await g.fetch("origin", branch);
     await g.checkout(branch);
     await g.pull("origin", branch).catch(() => undefined);
-    await installDependenciesIfNeeded(dir);
+    await installDependenciesIfNeeded(dir, projectId);
   }
   return dir;
 }
@@ -192,6 +195,8 @@ export async function startDevPreview(
 ): Promise<{ port: number; label: string }> {
   stopPreview(projectId);
   const port = previewPortForProject(projectId);
+  registerPreviewPort(port, projectId);
+  setPreviewStatus(projectId, "starting", "Launching dev server");
   const { command, args, label } = resolveDevCommand(repoPath, port, previewCommandOverride);
   const child = spawn(command, args, {
     cwd: repoPath,
@@ -204,6 +209,18 @@ export async function startDevPreview(
       FORCE_COLOR: "0",
     },
     shell: false,
+  });
+  // Watch dev server output for "ready" indicators so we can flip status
+  const onChunk = (buf: Buffer) => {
+    const s = buf.toString();
+    if (/ready|local:|listening|started server|compiled successfully/i.test(s)) {
+      setPreviewStatus(projectId, "ready");
+    }
+  };
+  child.stdout?.on("data", onChunk);
+  child.stderr?.on("data", onChunk);
+  child.on("exit", (code) => {
+    if (code !== 0) setPreviewStatus(projectId, "error", `Dev server exited with code ${code}`);
   });
   previewChildren.set(projectId, child);
   return { port, label };

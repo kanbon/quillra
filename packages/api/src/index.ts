@@ -18,6 +18,7 @@ import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
 import { runProjectAgent } from "./services/agent.js";
 import { ensureRepoCloned, getPreviewSubdomainPort } from "./services/workspace.js";
+import { getProjectByPort, getPreviewStatus, describeStage } from "./services/preview-status.js";
 import type { ProjectRole } from "./db/app-schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,79 @@ function trustedOriginsList(): string[] {
 const app = new Hono<{ Variables: Variables }>();
 
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+
+/**
+ * Build the polling HTML shown while the preview is starting up. Includes
+ * the inline JS that fetches /api/preview-status?port=… and updates the
+ * stage label until the upstream is ready.
+ */
+function previewBootHtml(port: string | number): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Starting preview…</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #fafafa; font-family: -apple-system, system-ui, sans-serif; color: #525252; }
+  .wrap { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; }
+  .card { width: 100%; max-width: 360px; text-align: center; }
+  .spinner { width: 32px; height: 32px; margin: 0 auto 18px; border: 3px solid #e5e5e5; border-top-color: #525252; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 6px; color: #262626; }
+  p { font-size: 13px; line-height: 1.5; margin: 0; color: #737373; }
+  .stage-bar { display: flex; gap: 6px; margin-top: 22px; justify-content: center; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #e5e5e5; transition: background-color .25s; }
+  .dot.active { background: #525252; }
+  .dot.done { background: #22c55e; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="spinner"></div>
+    <h1 id="label">Preparing</h1>
+    <p id="detail">Getting things ready…</p>
+    <div class="stage-bar">
+      <div class="dot" data-stage="cloning"></div>
+      <div class="dot" data-stage="installing"></div>
+      <div class="dot" data-stage="starting"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  var stages = ['cloning', 'installing', 'starting', 'ready'];
+  var dots = document.querySelectorAll('.dot');
+  function setStage(stage) {
+    var idx = stages.indexOf(stage);
+    dots.forEach(function(d) {
+      var sIdx = stages.indexOf(d.dataset.stage);
+      d.classList.toggle('done', sIdx > -1 && sIdx < idx);
+      d.classList.toggle('active', sIdx === idx);
+    });
+  }
+  function tick() {
+    fetch('/api/preview-status?port=${port}', { credentials: 'omit' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data) return;
+        document.getElementById('label').textContent = data.label || 'Preparing';
+        document.getElementById('detail').textContent = data.detail || '';
+        setStage(data.stage);
+        if (data.stage === 'ready') {
+          // Give the dev server a beat then reload
+          setTimeout(function() { window.location.reload(); }, 500);
+        }
+      })
+      .catch(function() {});
+  }
+  tick();
+  setInterval(tick, 1500);
+})();
+</script>
+</body>
+</html>`;
+}
 
 /**
  * CSS injected into preview HTML responses to hide framework dev toolbars
@@ -110,13 +184,7 @@ app.use("*", async (c, next) => {
     respHeaders.delete("transfer-encoding");
     return new Response(withCss.body, { status: withCss.status, headers: respHeaders });
   } catch {
-    return c.html(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3"></head>` +
-      `<body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui;color:#666">` +
-      `<div style="text-align:center"><p style="font-size:14px">Starting preview server…</p>` +
-      `<p style="font-size:12px;color:#999">This page will refresh automatically.</p></div></body></html>`,
-      502,
-    );
+    return c.html(previewBootHtml(port), 502);
   }
 });
 
@@ -143,6 +211,19 @@ app.use("*", async (c, next) => {
 });
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+
+app.get("/api/preview-status", async (c) => {
+  const portStr = c.req.query("port") ?? "";
+  const port = Number(portStr);
+  if (!Number.isFinite(port)) return c.json({ stage: "idle", label: "Preparing", detail: "" });
+  const projectId = getProjectByPort(port);
+  if (!projectId) {
+    return c.json({ stage: "starting", label: "Starting the preview", detail: "Waking up the dev server…" });
+  }
+  const status = getPreviewStatus(projectId);
+  const desc = describeStage(status.stage);
+  return c.json({ stage: status.stage, label: desc.label, detail: status.message ?? desc.detail });
+});
 
 app.get("/api/caddy-check", (c) => {
   const domain = c.req.query("domain") ?? "";
@@ -360,13 +441,7 @@ app.all("/__preview/:port{[0-9]+}/*", async (c) => {
       headers: respHeaders,
     });
   } catch {
-    return c.html(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3"></head>` +
-      `<body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui;color:#666">` +
-      `<div style="text-align:center"><p style="font-size:14px">Starting preview server…</p>` +
-      `<p style="font-size:12px;color:#999">This page will refresh automatically.</p></div></body></html>`,
-      502,
-    );
+    return c.html(previewBootHtml(port), 502);
   }
 });
 
