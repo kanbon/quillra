@@ -174,7 +174,9 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-    stopPreview(projectId);
+    // Kill any running preview + wipe the cloned workspace (node_modules,
+    // git, everything) so deleted projects don't leave orphan files.
+    clearProjectRepoClone(projectId);
     await db.delete(projects).where(eq(projects.id, projectId));
     return c.newResponse(null, 204);
   })

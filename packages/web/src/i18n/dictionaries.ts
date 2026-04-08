@@ -74,6 +74,7 @@ const enDict = {
     untitled: "Untitled",
     noConversations: "No conversations yet",
     assistant: "Assistant",
+    greeting: "What should we change?",
   },
   publish: {
     modalTitle: "Go live",
@@ -244,6 +245,7 @@ export const de: DeepStringRecord = {
     untitled: "Ohne Titel",
     noConversations: "Noch keine Unterhaltungen",
     assistant: "Assistent",
+    greeting: "Was sollen wir ändern?",
   },
   publish: {
     modalTitle: "Live schalten",

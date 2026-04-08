@@ -55,7 +55,7 @@ export function EditorToolbar({
 
   return (
     <header className="border-b border-neutral-200/90 bg-white/95 backdrop-blur-sm">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
+      <div className="relative flex items-center gap-x-4 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {isClient ? (
             <div className="flex shrink-0 items-center gap-2">
@@ -109,15 +109,17 @@ export function EditorToolbar({
 
         {!isClient && (
           <nav
-            className="flex w-full items-center gap-1 rounded-xl bg-neutral-100/90 p-1 sm:w-auto"
+            className="pointer-events-none absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 md:block"
             aria-label={t("toolbar.project")}
           >
-            <NavLink to={`/p/${projectId}`} end className={tabClass}>
-              {t("toolbar.editor")}
-            </NavLink>
-            <NavLink to={`/p/${projectId}/settings`} className={tabClass}>
-              {t("toolbar.project")}
-            </NavLink>
+            <div className="pointer-events-auto flex items-center gap-1 rounded-xl bg-neutral-100/90 p-1">
+              <NavLink to={`/p/${projectId}`} end className={tabClass}>
+                {t("toolbar.editor")}
+              </NavLink>
+              <NavLink to={`/p/${projectId}/settings`} className={tabClass}>
+                {t("toolbar.project")}
+              </NavLink>
+            </div>
           </nav>
         )}
 

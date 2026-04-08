@@ -8,7 +8,6 @@ import type { ChatLine } from "@/hooks/useProjectChat";
 type Props = {
   lines: ChatLine[];
   busy: boolean;
-  onNewChat?: () => void;
 };
 
 function ThinkingCard({ text, durationMs, streaming }: { text: string; durationMs?: number; streaming?: boolean }) {
@@ -79,7 +78,7 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
   );
 }
 
-export function ChatTranscript({ lines, busy, onNewChat }: Props) {
+export function ChatTranscript({ lines, busy }: Props) {
   const { t } = useT();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -112,20 +111,15 @@ export function ChatTranscript({ lines, busy, onNewChat }: Props) {
   return (
     <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-4">
       {grouped.length === 0 && !busy && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
-          <p className="text-sm text-neutral-400">{t("chat.noMessages")}</p>
-          {onNewChat && (
-            <button
-              type="button"
-              className="flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 shadow-sm transition-colors hover:bg-neutral-50 hover:text-neutral-800"
-              onClick={onNewChat}
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-center opacity-80">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-neutral-100 to-neutral-50 ring-1 ring-neutral-200">
+              <svg className="h-5 w-5 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              {t("chat.newChat")}
-            </button>
-          )}
+            </div>
+            <p className="text-[13px] font-medium text-neutral-500">{t("chat.greeting")}</p>
+          </div>
         </div>
       )}
       {grouped.map((entry, i) => {

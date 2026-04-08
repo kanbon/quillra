@@ -276,7 +276,7 @@ export function EditorPage() {
             </div>
           )}
 
-          <ChatTranscript lines={lines} busy={busy} onNewChat={startNewChat} />
+          <ChatTranscript lines={lines} busy={busy} />
           <ChatComposer ref={composerRef} projectId={id} onSend={send} disabled={busy} />
         </section>
         <div
