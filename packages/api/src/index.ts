@@ -57,60 +57,97 @@ function previewBootHtml(port: string | number): string {
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #fafafa; font-family: -apple-system, system-ui, sans-serif; color: #525252; }
   .wrap { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; }
-  .card { width: 100%; max-width: 380px; text-align: center; }
-  .spinner { width: 32px; height: 32px; margin: 0 auto 18px; border: 3px solid #e5e5e5; border-top-color: #525252; border-radius: 50%; animation: spin 0.9s linear infinite; }
-  .icon-error { width: 36px; height: 36px; margin: 0 auto 14px; border-radius: 50%; background: #fee2e2; color: #b91c1c; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 600; }
-  h1 { font-size: 15px; font-weight: 600; margin: 0 0 6px; color: #262626; }
-  p { font-size: 13px; line-height: 1.5; margin: 0; color: #737373; }
-  .stage-bar { display: flex; gap: 6px; margin-top: 22px; justify-content: center; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: #e5e5e5; transition: background-color .25s; }
-  .dot.active { background: #525252; }
-  .dot.done { background: #22c55e; }
-  .dot.failed { background: #ef4444; }
-  .retry { margin-top: 18px; padding: 7px 16px; font-size: 12px; font-weight: 500; background: #262626; color: white; border: none; border-radius: 8px; cursor: pointer; }
+  .card { width: 100%; max-width: 360px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 22px; color: #262626; text-align: center; }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+  .step { display: flex; align-items: center; gap: 12px; font-size: 13px; line-height: 1.4; transition: color .25s, opacity .25s; color: #a3a3a3; opacity: 0.6; }
+  .step.active { color: #262626; opacity: 1; }
+  .step.done { color: #525252; opacity: 1; }
+  .step.failed { color: #b91c1c; opacity: 1; }
+  .bullet { width: 18px; height: 18px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .bullet .dot { width: 6px; height: 6px; border-radius: 50%; background: #d4d4d4; }
+  .bullet .spinner { width: 14px; height: 14px; border: 2px solid #e5e5e5; border-top-color: #262626; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  .bullet .check { width: 18px; height: 18px; color: #22c55e; }
+  .bullet .x { width: 18px; height: 18px; color: #ef4444; }
+  .step.active .dot, .step.done .dot, .step.failed .dot { display: none; }
+  .step:not(.active) .spinner, .step:not(.active) .check, .step:not(.active) .x { display: none; }
+  .step.done .spinner, .step.done .x, .step.done .dot { display: none; }
+  .step.done .check { display: block; }
+  .step.failed .spinner, .step.failed .check, .step.failed .dot { display: none; }
+  .step.failed .x { display: block; }
+  .detail { margin: 22px 0 0; font-size: 12px; line-height: 1.5; color: #a3a3a3; text-align: center; min-height: 1.2em; }
+  .retry { display: block; margin: 22px auto 0; padding: 8px 18px; font-size: 12px; font-weight: 500; background: #262626; color: white; border: none; border-radius: 8px; cursor: pointer; }
   .retry:hover { background: #525252; }
-  .hidden { display: none; }
+  .hidden { display: none !important; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
-    <div id="spinner" class="spinner"></div>
-    <div id="error-icon" class="icon-error hidden">!</div>
-    <h1 id="label">Preparing</h1>
-    <p id="detail">Getting things ready…</p>
-    <div class="stage-bar" id="stages">
-      <div class="dot" data-stage="cloning"></div>
-      <div class="dot" data-stage="installing"></div>
-      <div class="dot" data-stage="starting"></div>
-    </div>
+    <h1 id="label">Starting your preview</h1>
+    <ul class="steps">
+      <li class="step" data-stage="cloning">
+        <span class="bullet">
+          <span class="dot"></span>
+          <span class="spinner"></span>
+          <svg class="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          <svg class="x" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </span>
+        Fetching your site files
+      </li>
+      <li class="step" data-stage="installing">
+        <span class="bullet">
+          <span class="dot"></span>
+          <span class="spinner"></span>
+          <svg class="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          <svg class="x" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </span>
+        Setting things up (one-time, can take a minute)
+      </li>
+      <li class="step" data-stage="starting">
+        <span class="bullet">
+          <span class="dot"></span>
+          <span class="spinner"></span>
+          <svg class="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          <svg class="x" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </span>
+        Opening your preview
+      </li>
+    </ul>
+    <p class="detail" id="detail">Getting things ready…</p>
     <button id="retry" class="retry hidden" onclick="window.location.reload()">Retry</button>
   </div>
 </div>
 <script>
 (function() {
   var stages = ['cloning', 'installing', 'starting', 'ready'];
-  var dots = document.querySelectorAll('.dot');
+  var steps = document.querySelectorAll('.step');
   var attempts = 0;
 
   function setStage(stage) {
     var idx = stages.indexOf(stage);
-    dots.forEach(function(d) {
-      var sIdx = stages.indexOf(d.dataset.stage);
-      d.classList.toggle('done', sIdx > -1 && sIdx < idx);
-      d.classList.toggle('active', sIdx === idx);
-      d.classList.toggle('failed', false);
+    if (idx === -1) idx = 0;
+    steps.forEach(function(s) {
+      var sIdx = stages.indexOf(s.dataset.stage);
+      s.classList.remove('active', 'done', 'failed');
+      if (sIdx < idx) s.classList.add('done');
+      else if (sIdx === idx) s.classList.add('active');
     });
   }
 
   function showError(label, detail) {
-    document.getElementById('spinner').classList.add('hidden');
-    document.getElementById('error-icon').classList.remove('hidden');
     document.getElementById('label').textContent = label || 'Preview unavailable';
-    document.getElementById('detail').textContent = detail || 'The dev server failed to start.';
+    document.getElementById('detail').textContent = detail || 'Something went wrong while starting your preview.';
     document.getElementById('retry').classList.remove('hidden');
-    dots.forEach(function(d) { d.classList.remove('active', 'done'); d.classList.add('failed'); });
+    // Mark the active (or first not-done) step as failed; leave previous as done
+    var active = document.querySelector('.step.active');
+    if (active) {
+      active.classList.remove('active');
+      active.classList.add('failed');
+    } else {
+      steps[steps.length - 1].classList.add('failed');
+    }
   }
 
   function tick() {
@@ -123,19 +160,18 @@ function previewBootHtml(port: string | number): string {
           showError(data.label, data.detail);
           return;
         }
-        document.getElementById('label').textContent = data.label || 'Preparing';
-        document.getElementById('detail').textContent = data.detail || '';
+        if (data.detail) document.getElementById('detail').textContent = data.detail;
         setStage(data.stage);
         if (data.stage === 'ready') {
+          // Mark all done before reload
+          steps.forEach(function(s) { s.classList.remove('active', 'failed'); s.classList.add('done'); });
           setTimeout(function() { window.location.reload(); }, 400);
         }
       })
       .catch(function() {});
 
-    // Safety net: after 30 polling attempts (~45s) without ready, show
-    // a manual retry option so the user isn't stuck on a blank spinner.
     if (attempts >= 30) {
-      showError('Taking longer than expected', 'The dev server is still starting up. You can wait or retry.');
+      showError('Taking longer than expected', 'Your preview is still starting up. You can wait or retry.');
     }
   }
   tick();
