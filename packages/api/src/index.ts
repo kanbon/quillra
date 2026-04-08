@@ -42,6 +42,40 @@ const app = new Hono<{ Variables: Variables }>();
 
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
+/**
+ * CSS injected into preview HTML responses to hide framework dev toolbars
+ * (Astro dev toolbar, Next.js indicators, SvelteKit, Vue, etc.) so the
+ * preview iframe shows a clean rendering of the user's site.
+ */
+const HIDE_DEV_TOOLBARS_CSS = `
+<style data-quillra-preview>
+  astro-dev-toolbar, astro-dev-overlay { display: none !important; }
+  #__next-build-watcher, [data-nextjs-toast], [data-nextjs-dialog-overlay],
+  [data-nextjs-toast-wrapper], nextjs-portal { display: none !important; }
+  #__remix-dev-tools-iframe, #remix-dev-tools-iframe { display: none !important; }
+  #vue-devtools-container, .__vue-devtools-toolbar__ { display: none !important; }
+  #svelte-kit-toolbar, [data-sveltekit-dev-toolbar] { display: none !important; }
+</style>
+`;
+
+/** Inject the hide-toolbar style into a fetched HTML response, transparently. */
+async function injectHideToolbarCss(upstream: Response): Promise<Response> {
+  const ct = upstream.headers.get("content-type") ?? "";
+  if (!ct.includes("text/html")) return upstream;
+  try {
+    const html = await upstream.text();
+    const injected = html.includes("</head>")
+      ? html.replace("</head>", `${HIDE_DEV_TOOLBARS_CSS}</head>`)
+      : `${HIDE_DEV_TOOLBARS_CSS}${html}`;
+    const headers = new Headers(upstream.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    return new Response(injected, { status: upstream.status, headers });
+  } catch {
+    return upstream;
+  }
+}
+
 /* ── Subdomain preview proxy ──────────────────────────────────────────
  * If the Host header matches {id}.PREVIEW_DOMAIN, proxy the entire
  * request to the dev server on the mapped port. Caddy terminates TLS
@@ -71,9 +105,10 @@ app.use("*", async (c, next) => {
       body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
       redirect: "manual",
     });
-    const respHeaders = new Headers(upstream.headers);
+    const withCss = await injectHideToolbarCss(upstream);
+    const respHeaders = new Headers(withCss.headers);
     respHeaders.delete("transfer-encoding");
-    return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
+    return new Response(withCss.body, { status: withCss.status, headers: respHeaders });
   } catch {
     return c.html(
       `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3"></head>` +
@@ -316,11 +351,12 @@ app.all("/__preview/:port{[0-9]+}/*", async (c) => {
       redirect: "manual",
     });
 
-    const respHeaders = new Headers(upstream.headers);
+    const withCss = await injectHideToolbarCss(upstream);
+    const respHeaders = new Headers(withCss.headers);
     respHeaders.delete("transfer-encoding");
 
-    return new Response(upstream.body, {
-      status: upstream.status,
+    return new Response(withCss.body, {
+      status: withCss.status,
       headers: respHeaders,
     });
   } catch {
