@@ -26,6 +26,12 @@ export type MailMessage = {
   html?: string;
   /** Optional reply-to override */
   replyTo?: string;
+  /**
+   * Optional extra headers to set on the outgoing mail. Used for things
+   * like List-Unsubscribe (required by Gmail/Yahoo for bulk senders to
+   * stay out of spam) and Message-ID.
+   */
+  headers?: Record<string, string>;
 };
 
 export type SendResult =
@@ -73,6 +79,7 @@ async function sendViaResend(msg: MailMessage): Promise<SendResult> {
   if (msg.html) body.html = msg.html;
   if (msg.text) body.text = msg.text;
   if (msg.replyTo) body.reply_to = msg.replyTo;
+  if (msg.headers && Object.keys(msg.headers).length > 0) body.headers = msg.headers;
 
   try {
     const res = await fetch("https://api.resend.com/emails", {
@@ -134,6 +141,7 @@ async function sendViaSmtp(msg: MailMessage): Promise<SendResult> {
       text: msg.text,
       html: msg.html,
       replyTo: msg.replyTo,
+      headers: msg.headers,
     });
     return { sent: true, backend: "smtp", id: info.messageId };
   } catch (e) {

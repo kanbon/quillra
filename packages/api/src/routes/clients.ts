@@ -125,11 +125,18 @@ export const clientsRouter = new Hono()
       code,
       expiresInMinutes: CODE_TTL_MINUTES,
     });
+    // Gmail / Yahoo spam heuristics require List-Unsubscribe on bulk
+    // sends. A login code isn't bulk but the filters are the same.
+    const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "");
     await sendEmail({
       to: email,
-      subject: `Your sign-in code for ${p.name}`,
+      subject: `Your ${p.name} sign-in code: ${code}`,
       html,
       text: `Your sign-in code for ${p.name} is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+      headers: {
+        "List-Unsubscribe": `<${base || "https://cms.kanbon.at"}/c/${projectId}>, <mailto:noreply@quillra.com?subject=Unsubscribe>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
     });
     return c.json({ ok: true });
   })

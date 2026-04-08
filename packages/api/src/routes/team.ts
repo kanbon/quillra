@@ -157,11 +157,25 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
         role,
         acceptUrl,
       });
+      // Deliverability: set a personal Reply-To so replies go straight
+      // to the admin who invited them (Gmail treats threaded replies as
+      // a strong engagement signal). List-Unsubscribe + List-Unsubscribe-Post
+      // are required by Gmail/Yahoo's bulk-sender rules even for
+      // transactional mail — without them we're more likely to be
+      // spam-foldered on first contact with a cold recipient.
+      const replyTo = r.user.email ?? undefined;
+      const headers: Record<string, string> = {
+        "List-Unsubscribe": `<${base}/i/${token}/decline>, <mailto:${r.user.email ?? "noreply@quillra.com"}?subject=Unsubscribe>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      };
+
       const result = await sendEmail({
         to: inviteEmail,
-        subject: `You're invited to ${project.name}`,
+        subject: `${r.user.name ?? "Someone"} invited you to ${project.name}`,
         html,
         text: `${r.user.name ?? "Someone"} invited you to ${project.name}. Open this link to accept: ${acceptUrl}`,
+        replyTo,
+        headers,
       });
       emailSent = result.sent;
       if (!result.sent) emailError = result.reason;
