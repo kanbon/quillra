@@ -14,6 +14,7 @@ import { useProjectChat } from "@/hooks/useProjectChat";
 import { clearNewChat } from "@/lib/chat-store";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
+import { MobilePreviewSheet } from "@/components/organisms/MobilePreviewSheet";
 
 type ProjectDetail = {
   id: string;
@@ -57,6 +58,7 @@ export function EditorPage() {
   const [publishStatusLoading, setPublishStatusLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [mobilePreviewOpen, setMobilePreviewOpen] = useState(false);
   const previewStarted = useRef(false);
   const initialConvSelected = useRef(false);
   const composerRef = useRef<ChatComposerHandle>(null);
@@ -216,7 +218,7 @@ export function EditorPage() {
       )}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section
-          className="relative flex min-h-0 flex-col border-b border-neutral-200 md:border-b-0 md:border-r"
+          className="relative flex min-h-0 w-full flex-col md:w-auto md:border-r md:border-neutral-200"
           style={{ flexBasis: `${split}%`, maxWidth: "100%" }}
           onDragEnter={(e) => {
             if (!Array.from(e.dataTransfer.types).includes("Files")) return;
@@ -397,7 +399,9 @@ export function EditorPage() {
             aria-hidden
           />
         )}
-        <section className="min-h-[40vh] min-w-0 flex-1 md:min-h-0">
+        {/* Desktop: inline preview pane.
+            Mobile: hidden here and rendered inside the bottom sheet below. */}
+        <section className="hidden min-w-0 flex-1 md:block">
           <PreviewPane
             projectId={id}
             src={previewSrc}
@@ -410,6 +414,32 @@ export function EditorPage() {
           />
         </section>
       </div>
+
+      {/* Mobile-only: floating Preview button + bottom-sheet iframe */}
+      <button
+        type="button"
+        onClick={() => setMobilePreviewOpen(true)}
+        className="fixed bottom-5 right-5 z-40 flex h-14 items-center gap-2 rounded-full bg-neutral-900 px-5 text-[14px] font-semibold text-white shadow-xl ring-1 ring-black/5 transition-transform active:scale-95 md:hidden"
+        aria-label={t("preview.mobileOpenAria")}
+      >
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        {t("preview.mobileOpen")}
+      </button>
+      <MobilePreviewSheet open={mobilePreviewOpen} onClose={() => setMobilePreviewOpen(false)}>
+        <PreviewPane
+          projectId={id}
+          src={previewSrc}
+          onRefresh={refreshPreview}
+          onStartPreview={() => previewMut.mutate()}
+          starting={previewMut.isPending}
+          engineLabel={previewLabel || undefined}
+          startLabel={startLabel}
+          errorMessage={previewError}
+        />
+      </MobilePreviewSheet>
 
       <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>
         <h3 className="mb-1 text-lg font-semibold text-neutral-900">{t("publish.modalTitle")}</h3>

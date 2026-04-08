@@ -52,6 +52,9 @@ const enDict = {
     noPreviewHelp: "Spin up the dev server to see your site here. The first run may take a minute while dependencies install.",
     startLive: "Start live preview",
     startSpecific: "Start {framework} preview",
+    mobileOpen: "Preview",
+    mobileOpenAria: "Open preview",
+    mobileClose: "Close preview",
   },
   composer: {
     placeholder: "Ask Quillra to edit your site…",
@@ -317,6 +320,9 @@ export const de: DeepStringRecord = {
     noPreviewHelp: "Starten Sie den Dev-Server, um Ihre Website hier zu sehen. Der erste Start kann etwas dauern.",
     startLive: "Live-Vorschau starten",
     startSpecific: "{framework}-Vorschau starten",
+    mobileOpen: "Vorschau",
+    mobileOpenAria: "Vorschau öffnen",
+    mobileClose: "Vorschau schließen",
   },
   composer: {
     placeholder: "Bitten Sie Quillra, Ihre Website zu bearbeiten…",
