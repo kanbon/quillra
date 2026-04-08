@@ -303,6 +303,7 @@ export function EditorPage() {
         />
         <section className="min-h-[40vh] min-w-0 flex-1 md:min-h-0">
           <PreviewPane
+            projectId={id}
             src={previewSrc}
             onRefresh={refreshPreview}
             onStartPreview={() => previewMut.mutate()}

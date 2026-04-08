@@ -1,10 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
+import { PreviewDebugModal } from "@/components/organisms/PreviewDebugModal";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
 type Props = {
+  projectId: string;
   src: string | null;
   onRefresh: () => void;
   onStartPreview: () => void;
@@ -15,6 +17,7 @@ type Props = {
 };
 
 export function PreviewPane({
+  projectId,
   src,
   onRefresh,
   onStartPreview,
@@ -26,6 +29,7 @@ export function PreviewPane({
   const { t } = useT();
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("quillra:preview-banner-dismissed") === "1";
@@ -98,9 +102,24 @@ export function PreviewPane({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
               </svg>
             </button>
+            <div className="h-5 w-px bg-neutral-200" />
+            <button
+              type="button"
+              onClick={() => setDebugOpen(true)}
+              className="flex h-8 w-9 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-900"
+              title="Debug live preview"
+              aria-label="Debug live preview"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 4l-2 3M16 4l2 3" />
+              </svg>
+            </button>
           </div>
         )}
       </div>
+
+      <PreviewDebugModal open={debugOpen} onClose={() => setDebugOpen(false)} projectId={projectId} />
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
         {hasFrame ? (

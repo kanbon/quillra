@@ -10,7 +10,10 @@ import type { ProjectRole } from "../db/app-schema.js";
 import {
   clearProjectRepoClone,
   ensureRepoCloned,
+  getPreviewLogs,
+  getPreviewProcessInfo,
   getPreviewUrl,
+  getProjectSubdomainId,
   previewPortForProject,
   projectRepoPath,
   pushToGitHub,
@@ -18,6 +21,7 @@ import {
   startDevPreview,
   stopPreview,
 } from "../services/workspace.js";
+import { getPreviewStatus } from "../services/preview-status.js";
 import { processUploadToWebP } from "../services/image.js";
 import { detectFramework } from "../services/framework.js";
 import { getInstanceSetting } from "../services/instance-settings.js";
@@ -294,6 +298,116 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
     }
     return c.json({ url, port, previewLabel });
+  })
+  /**
+   * Deep debug snapshot for the live-preview pipeline. Used by the Debug
+   * modal in the editor to diagnose why a preview is failing. Collects
+   * everything we know locally — no external calls — so it never adds
+   * latency or leaks data.
+   */
+  .get("/:id/preview-debug", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+
+    const port = previewPortForProject(projectId);
+    const previewUrl = getPreviewUrl(projectId, port);
+    const repoPath = projectRepoPath(projectId);
+    const repoExists = fs.existsSync(repoPath);
+    const pkgPath = path.join(repoPath, "package.json");
+    const nodeModulesPath = path.join(repoPath, "node_modules");
+    const hasPackageJson = fs.existsSync(pkgPath);
+    const hasNodeModules = fs.existsSync(nodeModulesPath);
+
+    let packageJsonScripts: Record<string, string> | null = null;
+    let packageManager: string | null = null;
+    if (hasPackageJson) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+          scripts?: Record<string, string>;
+        };
+        packageJsonScripts = pkg.scripts ?? null;
+      } catch { /* ignore malformed */ }
+      if (fs.existsSync(path.join(repoPath, "yarn.lock"))) packageManager = "yarn";
+      else if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) packageManager = "pnpm";
+      else packageManager = "npm";
+    }
+
+    let rootFiles: string[] = [];
+    try {
+      if (repoExists) rootFiles = fs.readdirSync(repoPath).slice(0, 80);
+    } catch { /* ignore */ }
+
+    const fw = repoExists ? detectFramework(repoPath) : null;
+    const dev = repoExists && hasPackageJson
+      ? resolveDevCommand(repoPath, port, p.previewDevCommand)
+      : null;
+
+    const processInfo = getPreviewProcessInfo(projectId);
+    const previewStatus = getPreviewStatus(projectId);
+    const subdomainId = getProjectSubdomainId(projectId);
+    const subdomainHost = process.env.PREVIEW_DOMAIN;
+
+    // Probe the upstream dev server — short timeout so the modal is snappy
+    type ProbeResult = { ok: boolean; status?: number; contentType?: string; error?: string };
+    let probe: ProbeResult = { ok: false };
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, {
+        signal: AbortSignal.timeout(1500),
+        redirect: "manual",
+      });
+      probe = {
+        ok: res.ok,
+        status: res.status,
+        contentType: res.headers.get("content-type") ?? undefined,
+      };
+    } catch (e) {
+      probe = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+
+    const logs = getPreviewLogs(projectId).slice(-120);
+
+    return c.json({
+      project: {
+        id: p.id,
+        name: p.name,
+        githubRepoFullName: p.githubRepoFullName,
+        defaultBranch: p.defaultBranch,
+        previewDevCommandOverride: p.previewDevCommand,
+      },
+      framework: fw && fw.id !== "unknown"
+        ? { id: fw.id, label: fw.label, iconSlug: fw.iconSlug, color: fw.color, optimizes: fw.optimizes }
+        : null,
+      workspace: {
+        repoPath,
+        repoExists,
+        hasPackageJson,
+        hasNodeModules,
+        packageManager,
+        packageJsonScripts,
+        rootFiles,
+      },
+      devCommand: dev
+        ? { command: dev.command, args: dev.args, label: dev.label }
+        : null,
+      preview: {
+        port,
+        previewUrl,
+        subdomainHost: subdomainHost ?? null,
+        subdomainId,
+        stage: previewStatus.stage,
+        stageMessage: previewStatus.message ?? null,
+        stageUpdatedAt: previewStatus.updatedAt,
+      },
+      childProcess: processInfo,
+      upstreamProbe: probe,
+      logs,
+      serverTime: Date.now(),
+    });
   })
   .get("/:id/conversations", async (c) => {
     const r = await requireUser(c);

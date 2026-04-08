@@ -8,6 +8,33 @@ import { getInstanceSetting } from "./instance-settings.js";
 
 const previewChildren = new Map<string, ChildProcess>();
 
+/**
+ * Bounded ring buffer of the last ~200 log lines per running dev server
+ * so the debug modal can show what the framework is printing in real time.
+ * Wiped whenever the dev server restarts.
+ */
+const MAX_LOG_LINES = 200;
+const previewLogs = new Map<string, Array<{ t: number; stream: "stdout" | "stderr"; line: string }>>();
+
+function appendLog(projectId: string, stream: "stdout" | "stderr", chunk: string) {
+  const buf = previewLogs.get(projectId) ?? [];
+  for (const raw of chunk.split(/\r?\n/)) {
+    const line = raw.replace(/\u001b\[[0-9;]*m/g, ""); // strip ANSI colours
+    if (!line) continue;
+    buf.push({ t: Date.now(), stream, line });
+  }
+  while (buf.length > MAX_LOG_LINES) buf.shift();
+  previewLogs.set(projectId, buf);
+}
+
+export function getPreviewLogs(projectId: string) {
+  return previewLogs.get(projectId) ?? [];
+}
+
+export function clearPreviewLogs(projectId: string) {
+  previewLogs.delete(projectId);
+}
+
 export function workspaceRoot(): string {
   const dir = process.env.WORKSPACE_DIR ?? path.join(process.cwd(), "data", "workspaces");
   fs.mkdirSync(dir, { recursive: true });
@@ -136,6 +163,28 @@ export function resolveDevCommand(
 // Re-exported so other modules can resolve a framework by id without importing the registry directly
 export { getFrameworkById };
 
+/** Returns metadata about the running (or not) preview child for a project */
+export function getPreviewProcessInfo(projectId: string): {
+  running: boolean;
+  pid: number | null;
+  exitCode: number | null;
+  signalCode: string | null;
+} {
+  const child = previewChildren.get(projectId);
+  if (!child) return { running: false, pid: null, exitCode: null, signalCode: null };
+  return {
+    running: child.exitCode === null && !child.killed,
+    pid: child.pid ?? null,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode ?? null,
+  };
+}
+
+/** Return the current subdomain id (if any) that maps to this project */
+export function getProjectSubdomainId(projectId: string): string | null {
+  return projectSubdomainIds.get(projectId) ?? null;
+}
+
 /** Remove cloned workspace so the next ensureRepoCloned does a fresh clone (repo or branch change). */
 export function clearProjectRepoClone(projectId: string): void {
   stopPreview(projectId);
@@ -205,15 +254,24 @@ export async function startDevPreview(
     },
     shell: false,
   });
-  // Watch dev server output for "ready" indicators so we can flip status
-  const onChunk = (buf: Buffer) => {
+  // Reset logs whenever the dev server (re)starts
+  clearPreviewLogs(projectId);
+  // Watch dev server output for "ready" indicators so we can flip status,
+  // and buffer the lines for the debug modal.
+  child.stdout?.on("data", (buf: Buffer) => {
     const s = buf.toString();
+    appendLog(projectId, "stdout", s);
     if (/ready|local:|listening|started server|compiled successfully/i.test(s)) {
       setPreviewStatus(projectId, "ready");
     }
-  };
-  child.stdout?.on("data", onChunk);
-  child.stderr?.on("data", onChunk);
+  });
+  child.stderr?.on("data", (buf: Buffer) => {
+    const s = buf.toString();
+    appendLog(projectId, "stderr", s);
+    if (/ready|local:|listening|started server|compiled successfully/i.test(s)) {
+      setPreviewStatus(projectId, "ready");
+    }
+  });
   child.on("exit", (code) => {
     if (code !== 0) setPreviewStatus(projectId, "error", `Dev server exited with code ${code}`);
   });
