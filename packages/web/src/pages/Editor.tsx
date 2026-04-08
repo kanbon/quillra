@@ -116,7 +116,9 @@ export function EditorPage() {
 
   const { lines, busy, error, send } = useProjectChat(id || undefined, conversationId, refreshPreview, handleConversationCreated);
 
-  // Auto-start preview on mount via the mutation so PreviewPane sees `starting`
+  // Auto-start preview on mount: render the iframe immediately with the
+  // (deterministic) preview URL so the user sees the proxy boot page —
+  // no intermediate spinners. The dev server is started in the background.
   useEffect(() => {
     if (!id || previewStarted.current) return;
     previewStarted.current = true;
@@ -126,6 +128,7 @@ export function EditorPage() {
           `/api/projects/${id}/preview-meta`,
         );
         setPreviewLabel(meta.previewLabel);
+        setPreviewSrc(meta.url);
       } catch { /* not critical */ }
       previewMut.mutate();
     })();

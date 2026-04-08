@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { cn } from "@/lib/cn";
@@ -13,65 +13,6 @@ type Props = {
   errorMessage?: string | null;
 };
 
-const startSteps = [
-  "Preparing workspace…",
-  "Installing dependencies if needed…",
-  "Starting dev server…",
-];
-
-function usePreviewReady(src: string | null) {
-  const [ready, setReady] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const prevSrc = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!src) {
-      setReady(false);
-      setProgress(0);
-      prevSrc.current = null;
-      return;
-    }
-
-    const baseUrl = src.split("?")[0];
-    const prevBase = prevSrc.current?.split("?")[0];
-    if (baseUrl === prevBase && ready) return;
-    prevSrc.current = src;
-
-    setReady(false);
-    setProgress(0);
-    let attempt = 0;
-    const maxAttempts = 30;
-    let cancelled = false;
-
-    const poll = async () => {
-      while (attempt < maxAttempts && !cancelled) {
-        attempt++;
-        setProgress(Math.min(90, (attempt / maxAttempts) * 100));
-        try {
-          // Use fetch with no-cors mode for cross-origin preview subdomains
-          const res = await fetch(baseUrl, { method: "HEAD", mode: "no-cors", cache: "no-store" });
-          // no-cors returns opaque response (status 0) but means the server is reachable
-          if (res.status === 0 || res.ok) {
-            setProgress(100);
-            setTimeout(() => { if (!cancelled) setReady(true); }, 300);
-            return;
-          }
-        } catch { /* not ready yet */ }
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      if (!cancelled) {
-        setProgress(100);
-        setReady(true);
-      }
-    };
-
-    void poll();
-    return () => { cancelled = true; };
-  }, [src]);
-
-  return { ready, progress };
-}
-
 export function PreviewPane({
   src,
   onRefresh,
@@ -84,7 +25,7 @@ export function PreviewPane({
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
-  const { ready, progress } = usePreviewReady(src);
+  const ready = hasFrame; // The iframe handles its own loading state via the proxy boot page
   const basePreviewPath = src?.split("?")[0] ?? "";
 
   const handleIframeLoad = useCallback(() => {
@@ -151,7 +92,7 @@ export function PreviewPane({
       </div>
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
-        {hasFrame && ready ? (
+        {hasFrame ? (
           <>
             {!bannerDismissed && (
               <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-amber-50/95 px-3 py-1.5 text-xs text-amber-700 backdrop-blur-sm">
@@ -173,88 +114,6 @@ export function PreviewPane({
               onLoad={handleIframeLoad}
             />
           </>
-        ) : hasFrame && !ready ? (
-          /* Waiting for preview server to be ready */
-          <div className="flex h-full flex-col items-center justify-center px-8 py-12">
-            <div className="relative mb-8 h-16 w-16">
-              {/* Outer ring */}
-              <svg className="h-16 w-16" viewBox="0 0 64 64">
-                <circle
-                  cx="32" cy="32" r="28"
-                  fill="none"
-                  stroke="#e5e5e5"
-                  strokeWidth="3"
-                />
-                <circle
-                  cx="32" cy="32" r="28"
-                  fill="none"
-                  stroke="#c1121f"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeDasharray={`${progress * 1.76} 176`}
-                  className="transition-all duration-500 ease-out"
-                  style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
-                />
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-neutral-500">
-                {Math.round(progress)}%
-              </span>
-            </div>
-            <p className="mb-2 text-center text-sm font-medium text-neutral-700">
-              Starting your preview
-            </p>
-            <p className="text-center text-xs text-neutral-400">
-              Setting up the dev server — this usually takes a few seconds
-            </p>
-            <div className="mt-6 h-1 w-48 max-w-full overflow-hidden rounded-full bg-neutral-200/80">
-              <div
-                className="h-full rounded-full bg-brand/40 transition-all duration-500 ease-out"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
-        ) : starting ? (
-          <div className="flex h-full flex-col items-center justify-center px-8 py-12">
-            <div
-              className="mb-8 h-14 w-14 rounded-full border-2 border-brand/20 border-t-brand"
-              style={{ animation: "preview-orbit 0.9s linear infinite" }}
-              aria-hidden
-            />
-            <p className="mb-6 text-center text-sm font-medium text-neutral-800">Starting preview</p>
-            <ul className="flex w-full max-w-xs flex-col gap-3">
-              {startSteps.map((label, i) => (
-                <li
-                  key={label}
-                  className="flex items-center gap-3 text-sm text-neutral-600"
-                  style={{
-                    animation: `preview-pulse 1.8s ease-in-out ${i * 0.35}s infinite`,
-                  }}
-                >
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
-                    style={{
-                      animation: `preview-pulse 1.2s ease-in-out ${i * 0.25}s infinite`,
-                    }}
-                  />
-                  {label}
-                </li>
-              ))}
-            </ul>
-            <div
-              className="mt-10 h-1 w-48 max-w-full overflow-hidden rounded-full bg-neutral-200/80"
-              aria-hidden
-            >
-              <div
-                className="h-full w-1/2 rounded-full"
-                style={{
-                  background:
-                    "linear-gradient(90deg, transparent, rgba(193, 18, 31, 0.45), transparent)",
-                  backgroundSize: "200% 100%",
-                  animation: "preview-shimmer 1.5s ease-in-out infinite",
-                }}
-              />
-            </div>
-          </div>
         ) : (
           <div className="flex h-full flex-col items-center justify-center px-6 py-10">
             <div
