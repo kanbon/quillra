@@ -107,6 +107,8 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [actionBusy, setActionBusy] = useState<null | "reinstall" | "restart">(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -148,6 +150,38 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
     try {
       await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
     } catch { /* ignore */ }
+  }
+
+  async function runReinstall() {
+    if (actionBusy) return;
+    setActionBusy("reinstall");
+    setActionMsg("Wiping node_modules and reinstalling…");
+    try {
+      await apiJson(`/api/projects/${projectId}/reinstall`, { method: "POST" });
+      setActionMsg("Reinstall complete. Restarting preview…");
+      await apiJson(`/api/projects/${projectId}/preview`, { method: "POST" });
+      setActionMsg("Preview restarted.");
+      void load();
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : "Reinstall failed");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function restartPreview() {
+    if (actionBusy) return;
+    setActionBusy("restart");
+    setActionMsg("Restarting dev server…");
+    try {
+      await apiJson(`/api/projects/${projectId}/preview`, { method: "POST" });
+      setActionMsg("Preview restarted.");
+      void load();
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : "Restart failed");
+    } finally {
+      setActionBusy(null);
+    }
   }
 
   return (
@@ -207,6 +241,37 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
       {error && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50/60 p-3 text-sm text-red-700">{error}</div>
       )}
+
+      {/* Quick actions */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={restartPreview}
+          disabled={!!actionBusy}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-[12px] font-medium text-neutral-700 transition-colors hover:bg-neutral-50 disabled:opacity-50"
+          title="Kill the dev server child and start a fresh one"
+        >
+          <svg className={cn("h-3.5 w-3.5", actionBusy === "restart" && "animate-spin")} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+          </svg>
+          Restart dev server
+        </button>
+        <button
+          type="button"
+          onClick={runReinstall}
+          disabled={!!actionBusy}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[12px] font-medium text-amber-800 transition-colors hover:bg-amber-100 disabled:opacity-50"
+          title="Wipe node_modules and reinstall dependencies with devDependencies included"
+        >
+          <svg className={cn("h-3.5 w-3.5", actionBusy === "reinstall" && "animate-spin")} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2h7m3-3l3 3m0 0l3-3m-3 3V9" />
+          </svg>
+          Reinstall dependencies
+        </button>
+        {actionMsg && (
+          <span className="text-[11px] text-neutral-500">{actionMsg}</span>
+        )}
+      </div>
 
       {!data && !error && (
         <div className="flex items-center justify-center py-10">

@@ -52,12 +52,18 @@ export function previewPortForProject(projectId: string): number {
   return base + (h % 2000);
 }
 
-function runCommand(cmd: string, args: string[], cwd: string): Promise<void> {
+function runCommand(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  envOverride?: Record<string, string>,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
       stdio: "pipe",
       shell: process.platform === "win32",
+      env: envOverride ? { ...process.env, ...envOverride } : process.env,
     });
     let stderr = "";
     child.stderr?.on("data", (d: Buffer) => {
@@ -84,12 +90,20 @@ export async function installDependenciesIfNeeded(repoPath: string, projectId?: 
 
   const pm = getPackageManager(repoPath);
   if (projectId) setPreviewStatus(projectId, "installing", `Running ${pm} install`);
+
+  // CRITICAL: Quillra's own container runs with NODE_ENV=production, and
+  // npm respects that by default (skips devDependencies). User projects
+  // NEED their devDeps to run dev servers (autoprefixer, postcss, vite
+  // plugins, etc.), so we force NODE_ENV=development for the install and
+  // also pass the explicit "include dev" flags per package manager.
+  const installEnv = { NODE_ENV: "development", NPM_CONFIG_PRODUCTION: "false" };
+
   if (pm === "yarn") {
-    await runCommand("yarn", ["install", "--non-interactive"], repoPath);
+    await runCommand("yarn", ["install", "--non-interactive"], repoPath, installEnv);
   } else if (pm === "pnpm") {
-    await runCommand("pnpm", ["install"], repoPath);
+    await runCommand("pnpm", ["install", "--prod=false"], repoPath, installEnv);
   } else {
-    await runCommand("npm", ["install"], repoPath);
+    await runCommand("npm", ["install", "--include=dev"], repoPath, installEnv);
   }
 }
 
@@ -192,6 +206,23 @@ export function clearProjectRepoClone(projectId: string): void {
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Wipe node_modules + lockfile-fresh reinstall without re-cloning the repo.
+ * Used when a previous install was broken (e.g. ran with NODE_ENV=production
+ * and skipped devDependencies) and you want to heal without losing local
+ * edits or re-downloading the whole repo.
+ */
+export async function reinstallProjectDependencies(projectId: string): Promise<void> {
+  stopPreview(projectId);
+  const dir = projectRepoPath(projectId);
+  if (!fs.existsSync(dir)) throw new Error("Workspace not cloned");
+  const nm = path.join(dir, "node_modules");
+  if (fs.existsSync(nm)) {
+    fs.rmSync(nm, { recursive: true, force: true });
+  }
+  await installDependenciesIfNeeded(dir, projectId);
 }
 
 export async function ensureRepoCloned(

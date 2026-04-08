@@ -17,6 +17,7 @@ import {
   previewPortForProject,
   projectRepoPath,
   pushToGitHub,
+  reinstallProjectDependencies,
   resolveDevCommand,
   startDevPreview,
   stopPreview,
@@ -278,6 +279,29 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     } catch (e) {
       return c.json(
         { error: e instanceof Error ? e.message : "Failed to start preview" },
+        500,
+      );
+    }
+  })
+  /**
+   * Wipe node_modules and reinstall without re-cloning. Heals a project
+   * whose dependencies were installed with the wrong NODE_ENV / missing
+   * devDependencies / stale lockfile. Admins only.
+   */
+  .post("/:id/reinstall", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m || (m.role !== "admin" && m.role !== "editor")) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    try {
+      await reinstallProjectDependencies(projectId);
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "Reinstall failed" },
         500,
       );
     }
