@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/atoms/Button";
 import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
-import { ChatComposer } from "@/components/organisms/ChatComposer";
+import { ChatComposer, type ChatComposerHandle } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
 import { EditorToolbar } from "@/components/organisms/EditorToolbar";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
@@ -47,6 +47,26 @@ export function EditorPage() {
   const [showHistory, setShowHistory] = useState(false);
   const previewStarted = useRef(false);
   const initialConvSelected = useRef(false);
+  const composerRef = useRef<ChatComposerHandle>(null);
+  const chatDragDepth = useRef(0);
+  const [chatDragging, setChatDragging] = useState(false);
+
+  // Window-level paste handler so images can be pasted from anywhere on the editor
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      // Don't hijack paste when typing in inputs that aren't the composer
+      if (target && target.tagName === "INPUT") return;
+      const items = Array.from(e.clipboardData?.items ?? []);
+      const imageItems = items.filter((i) => i.type.startsWith("image/"));
+      if (imageItems.length === 0) return;
+      e.preventDefault();
+      const files = imageItems.map((i) => i.getAsFile()).filter((f): f is File => !!f);
+      composerRef.current?.addFiles(files);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
 
   const { data: project } = useQuery({
     queryKey: ["project", id],
@@ -156,9 +176,47 @@ export function EditorPage() {
       )}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section
-          className="flex min-h-0 flex-col border-b border-neutral-200 md:border-b-0 md:border-r"
+          className="relative flex min-h-0 flex-col border-b border-neutral-200 md:border-b-0 md:border-r"
           style={{ flexBasis: `${split}%`, maxWidth: "100%" }}
+          onPaste={(e) => {
+            const items = Array.from(e.clipboardData?.items ?? []);
+            const imageItems = items.filter((i) => i.type.startsWith("image/"));
+            if (imageItems.length === 0) return;
+            e.preventDefault();
+            const files = imageItems.map((i) => i.getAsFile()).filter((f): f is File => !!f);
+            composerRef.current?.addFiles(files);
+          }}
+          onDragEnter={(e) => {
+            if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+            e.preventDefault();
+            chatDragDepth.current += 1;
+            setChatDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            chatDragDepth.current -= 1;
+            if (chatDragDepth.current <= 0) {
+              chatDragDepth.current = 0;
+              setChatDragging(false);
+            }
+          }}
+          onDragOver={(e) => {
+            if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            chatDragDepth.current = 0;
+            setChatDragging(false);
+            composerRef.current?.addFiles(e.dataTransfer.files);
+          }}
         >
+          {chatDragging && (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-brand bg-brand/5 backdrop-blur-sm">
+              <p className="rounded-full bg-white px-4 py-2 text-sm font-medium text-brand shadow-lg">
+                Drop images to attach
+              </p>
+            </div>
+          )}
           {/* Chat header with history toggle + new chat */}
           <div className="flex items-center justify-between border-b border-neutral-200 bg-neutral-50/80 px-3 py-2">
             <div className="flex items-center gap-2">
@@ -221,7 +279,7 @@ export function EditorPage() {
           )}
 
           <ChatTranscript lines={lines} busy={busy} onNewChat={startNewChat} />
-          <ChatComposer projectId={id} onSend={send} disabled={busy} />
+          <ChatComposer ref={composerRef} projectId={id} onSend={send} disabled={busy} />
         </section>
         <div
           className="hidden w-1 shrink-0 cursor-col-resize bg-neutral-200 hover:bg-neutral-400 md:block"
