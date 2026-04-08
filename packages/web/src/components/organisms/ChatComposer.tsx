@@ -34,10 +34,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
 ) {
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedFile[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const dragDepth = useRef(0);
 
   // Cleanup object URLs on unmount
   useEffect(() => {
@@ -113,36 +111,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
 
   useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
 
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
-    e.preventDefault();
-    dragDepth.current += 1;
-    setIsDragging(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    dragDepth.current -= 1;
-    if (dragDepth.current <= 0) {
-      dragDepth.current = 0;
-      setIsDragging(false);
-    }
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
-  }, []);
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      dragDepth.current = 0;
-      setIsDragging(false);
-      addFiles(e.dataTransfer.files);
-    },
-    [addFiles],
-  );
-
   const submit = useCallback(() => {
     const trimmed = text.trim();
     const completed = staged.filter((s) => s.status === "done" && s.serverPath);
@@ -167,19 +135,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
 
   return (
     <div className="px-3 pb-3 pt-1">
-      <div
-        className="relative rounded-[26px] border border-neutral-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-shadow focus-within:border-neutral-300 focus-within:shadow-[0_4px_16px_rgba(0,0,0,0.06)]"
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-      >
-        {isDragging && (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[26px] border-2 border-dashed border-brand bg-brand/5 backdrop-blur-sm">
-            <p className="text-sm font-medium text-brand">Drop images to attach</p>
-          </div>
-        )}
-
+      <div className="relative rounded-[26px] border border-neutral-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-shadow focus-within:border-neutral-300 focus-within:shadow-[0_4px_16px_rgba(0,0,0,0.06)]">
         {staged.length > 0 && (
           <div className="flex flex-wrap gap-2 px-4 pb-1 pt-3">
             {staged.map((s) => (
