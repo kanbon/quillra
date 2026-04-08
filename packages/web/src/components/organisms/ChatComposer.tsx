@@ -113,18 +113,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
 
   useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
 
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const items = Array.from(e.clipboardData.items);
-      const imageItems = items.filter((i) => i.type.startsWith("image/"));
-      if (imageItems.length === 0) return;
-      e.preventDefault();
-      const files = imageItems.map((i) => i.getAsFile()).filter((f): f is File => !!f);
-      addFiles(files);
-    },
-    [addFiles],
-  );
-
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     if (!Array.from(e.dataTransfer.types).includes("Files")) return;
     e.preventDefault();
@@ -181,7 +169,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     <div className="px-3 pb-3 pt-1">
       <div
         className="relative rounded-[26px] border border-neutral-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-shadow focus-within:border-neutral-300 focus-within:shadow-[0_4px_16px_rgba(0,0,0,0.06)]"
-        onPaste={handlePaste}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}

@@ -178,14 +178,6 @@ export function EditorPage() {
         <section
           className="relative flex min-h-0 flex-col border-b border-neutral-200 md:border-b-0 md:border-r"
           style={{ flexBasis: `${split}%`, maxWidth: "100%" }}
-          onPaste={(e) => {
-            const items = Array.from(e.clipboardData?.items ?? []);
-            const imageItems = items.filter((i) => i.type.startsWith("image/"));
-            if (imageItems.length === 0) return;
-            e.preventDefault();
-            const files = imageItems.map((i) => i.getAsFile()).filter((f): f is File => !!f);
-            composerRef.current?.addFiles(files);
-          }}
           onDragEnter={(e) => {
             if (!Array.from(e.dataTransfer.types).includes("Files")) return;
             e.preventDefault();
