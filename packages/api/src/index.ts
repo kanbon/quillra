@@ -156,11 +156,17 @@ app.get(
       async onMessage(evt, ws) {
         try {
           const raw = typeof evt.data === "string" ? evt.data : "";
-          const parsed = JSON.parse(raw) as { type?: string; content?: string; conversationId?: string };
+          const parsed = JSON.parse(raw) as {
+            type?: string;
+            content?: string;
+            conversationId?: string;
+            attachments?: { path: string; originalName: string }[];
+          };
           if (parsed.type !== "message" || typeof parsed.content !== "string" || !parsed.content.trim()) {
             ws.send(JSON.stringify({ type: "error", message: "Invalid message payload" }));
             return;
           }
+          const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : [];
 
           const [m] = await db
             .select()
@@ -223,11 +229,25 @@ app.get(
             createdAt: new Date(),
           });
 
+          // Build the prompt — if attachments are present, prepend a clear note for the agent
+          let promptText = parsed.content;
+          if (attachments.length > 0) {
+            const list = attachments
+              .map((a) => `- ${a.path} (originally: ${a.originalName})`)
+              .join("\n");
+            promptText =
+              `The user attached ${attachments.length} image${attachments.length > 1 ? "s" : ""}, ` +
+              `already saved to the repo at the following paths (relative to repo root):\n${list}\n\n` +
+              `Use these images where the user describes. Reference them via the framework's image system ` +
+              `when applicable. Do not re-create or move them unless asked.\n\n` +
+              `User message:\n${parsed.content}`;
+          }
+
           let assistantText = "";
           const role = m.role as ProjectRole;
           for await (const ev of runProjectAgent({
             cwd: repoPath,
-            prompt: parsed.content,
+            prompt: promptText,
             role,
             projectId,
             agentSessionId,

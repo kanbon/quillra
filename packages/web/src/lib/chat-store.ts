@@ -5,8 +5,10 @@
 
 import { apiJson } from "@/lib/api";
 
+export type Attachment = { path: string; originalName: string; previewUrl?: string };
+
 export type ChatLine =
-  | { id: string; kind: "user"; text: string }
+  | { id: string; kind: "user"; text: string; attachments?: Attachment[] }
   | { id: string; kind: "assistant"; text: string; streaming?: boolean }
   | { id: string; kind: "tool"; detail: string }
   | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean }
@@ -140,16 +142,24 @@ export function sendMessage(
   text: string,
   onRefreshPreview?: () => void,
   onConversationCreated?: (id: string) => void,
+  attachments?: Attachment[],
 ) {
-  if (!text.trim()) return;
+  if (!text.trim() && (!attachments || attachments.length === 0)) return;
   const k = key(projectId, conversationId);
   const snap = getSnap(k);
   const internal = getInternal(k);
   if (snap.busy) return;
 
+  const userLine: ChatLine = {
+    id: crypto.randomUUID(),
+    kind: "user",
+    text,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+  };
+
   update(k, {
     error: null,
-    lines: [...snap.lines, { id: crypto.randomUUID(), kind: "user", text }],
+    lines: [...snap.lines, userLine],
     busy: true,
     conversationId,
   });
@@ -158,7 +168,12 @@ export function sendMessage(
   internal.ws = ws;
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: "message", content: text, conversationId }));
+    ws.send(JSON.stringify({
+      type: "message",
+      content: text,
+      conversationId,
+      attachments: attachments?.map((a) => ({ path: a.path, originalName: a.originalName })),
+    }));
   };
 
   ws.onmessage = (evt) => {
@@ -240,7 +255,7 @@ export function sendMessage(
     }
 
     if (type === "tool_progress") {
-      const updated = snap.lines.filter((l) => l.kind !== "tool_active");
+      const updated: ChatLine[] = snap.lines.filter((l) => l.kind !== "tool_active");
       updated.push({
         id: crypto.randomUUID(),
         kind: "tool_active",
@@ -251,7 +266,7 @@ export function sendMessage(
     }
 
     if (type === "tool" && data.detail) {
-      let updated = snap.lines.filter((l) => l.kind !== "tool_active");
+      let updated: ChatLine[] = snap.lines.filter((l) => l.kind !== "tool_active");
       updated = finalizeStreaming(updated);
       updated = finalizeThinking(updated, internal);
       updated.push({ id: crypto.randomUUID(), kind: "tool", detail: data.detail as string });

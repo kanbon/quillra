@@ -6,9 +6,10 @@ import {
   sendMessage,
   type ChatLine,
   type ChatSnapshot,
+  type Attachment,
 } from "@/lib/chat-store";
 
-export type { ChatLine };
+export type { ChatLine, Attachment };
 
 const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null };
 
@@ -30,8 +31,8 @@ export function useProjectChat(
   }, [id, conversationId]);
 
   const send = useCallback(
-    (text: string) => {
-      if (id) sendMessage(id, conversationId, text, onRefreshPreview, onConversationCreated);
+    (text: string, attachments?: Attachment[]) => {
+      if (id) sendMessage(id, conversationId, text, onRefreshPreview, onConversationCreated, attachments);
     },
     [id, conversationId, onRefreshPreview, onConversationCreated],
   );

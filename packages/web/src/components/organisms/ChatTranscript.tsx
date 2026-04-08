@@ -7,6 +7,7 @@ import type { ChatLine } from "@/hooks/useProjectChat";
 type Props = {
   lines: ChatLine[];
   busy: boolean;
+  onNewChat?: () => void;
 };
 
 function ThinkingCard({ text, durationMs, streaming }: { text: string; durationMs?: number; streaming?: boolean }) {
@@ -76,7 +77,7 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
   );
 }
 
-export function ChatTranscript({ lines, busy }: Props) {
+export function ChatTranscript({ lines, busy, onNewChat }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Derive a scroll key that changes when content grows (not just line count)
@@ -107,6 +108,23 @@ export function ChatTranscript({ lines, busy }: Props) {
 
   return (
     <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-4">
+      {grouped.length === 0 && !busy && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <p className="text-sm text-neutral-400">No messages yet</p>
+          {onNewChat && (
+            <button
+              type="button"
+              className="flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 shadow-sm transition-colors hover:bg-neutral-50 hover:text-neutral-800"
+              onClick={onNewChat}
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              New chat
+            </button>
+          )}
+        </div>
+      )}
       {grouped.map((entry, i) => {
         if ("items" in entry) {
           return (
@@ -138,16 +156,38 @@ export function ChatTranscript({ lines, busy }: Props) {
         }
         if (entry.kind === "user") {
           return (
-            <div key={entry.id} className="animate-[fadeIn_0.2s_ease-out]">
-              <ChatBubble role="user">{entry.text}</ChatBubble>
+            <div key={entry.id} className="flex animate-[fadeIn_0.2s_ease-out] flex-col items-end gap-1.5">
+              {entry.attachments && entry.attachments.length > 0 && (
+                <div className="flex max-w-[min(100%,42rem)] flex-wrap justify-end gap-1.5">
+                  {entry.attachments.map((a, idx) => (
+                    <div
+                      key={`${entry.id}-att-${idx}`}
+                      className="h-20 w-20 overflow-hidden rounded-md border border-neutral-200 bg-neutral-50"
+                      title={a.originalName}
+                    >
+                      {a.previewUrl ? (
+                        <img src={a.previewUrl} alt={a.originalName} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-400">
+                          {a.originalName.split(".").pop()?.toUpperCase() ?? "IMG"}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {entry.text && <ChatBubble role="user">{entry.text}</ChatBubble>}
             </div>
           );
         }
-        return (
-          <div key={entry.id} className="animate-[fadeIn_0.2s_ease-out]">
-            <ChatBubble role="assistant" streaming={entry.streaming}>{entry.text}</ChatBubble>
-          </div>
-        );
+        if (entry.kind === "assistant") {
+          return (
+            <div key={entry.id} className="animate-[fadeIn_0.2s_ease-out]">
+              <ChatBubble role="assistant" streaming={entry.streaming}>{entry.text}</ChatBubble>
+            </div>
+          );
+        }
+        return null;
       })}
       {busy && !lines.some((l) => l.kind === "thinking" && "streaming" in l && l.streaming) && !lines.some((l) => l.kind === "tool_active") && (
         <div className="flex animate-[fadeIn_0.2s_ease-out] items-center gap-2 text-xs text-neutral-500">

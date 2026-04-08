@@ -221,7 +221,7 @@ export function EditorPage() {
           )}
 
           <ChatTranscript lines={lines} busy={busy} onNewChat={startNewChat} />
-          <ChatComposer onSend={send} disabled={busy} />
+          <ChatComposer projectId={id} onSend={send} disabled={busy} />
         </section>
         <div
           className="hidden w-1 shrink-0 cursor-col-resize bg-neutral-200 hover:bg-neutral-400 md:block"

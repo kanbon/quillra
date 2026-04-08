@@ -19,6 +19,8 @@ import {
   stopPreview,
 } from "../services/workspace.js";
 import { processUploadToWebP } from "../services/image.js";
+import { detectFramework } from "../services/framework.js";
+import sharp from "sharp";
 import { simpleGit } from "simple-git";
 import fs from "node:fs";
 import path from "node:path";
@@ -334,6 +336,18 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       })),
     });
   })
+  .get("/:id/framework", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+    const fw = detectFramework(repoPath);
+    return c.json(fw);
+  })
   .post("/:id/upload", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;
@@ -343,16 +357,94 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
 
-    const body = await c.req.parseBody();
-    const file = body.file;
-    if (!file || !(file instanceof File)) return c.json({ error: "Expected file field" }, 400);
-    const buf = Buffer.from(await file.arrayBuffer());
-    const webp = await processUploadToWebP(buf);
+    // Accept either a single `file` field or multiple `files` fields
+    const body = await c.req.parseBody({ all: true });
+    const candidates: unknown[] = [];
+    if (Array.isArray(body.files)) candidates.push(...body.files);
+    else if (body.files) candidates.push(body.files);
+    if (Array.isArray(body.file)) candidates.push(...body.file);
+    else if (body.file) candidates.push(body.file);
+
+    const files: File[] = candidates.filter((f): f is File => f instanceof File);
+    if (files.length === 0) return c.json({ error: "Expected files field" }, 400);
+
     const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-    const uploads = path.join(repoPath, "public", "uploads");
-    fs.mkdirSync(uploads, { recursive: true });
-    const name = `${nanoid()}.webp`;
-    const outPath = path.join(uploads, name);
-    fs.writeFileSync(outPath, webp);
-    return c.json({ path: `/uploads/${name}`, bytes: webp.length });
+    const fw = detectFramework(repoPath);
+    const targetDir = path.join(repoPath, fw.assetsDir);
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const items: Array<{ path: string; originalName: string; bytes: number; contentType: string }> = [];
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      const inputBuf = Buffer.from(await file.arrayBuffer());
+      const id = nanoid(10);
+      const safeStem = (file.name.replace(/\.[^.]+$/, "") || "image")
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/(^-|-$)/g, "")
+        .slice(0, 40) || "image";
+
+      let outBuf: Buffer;
+      let ext: string;
+      let contentType: string;
+      if (fw.optimizes) {
+        // Framework optimises at build time — preserve original (auto-rotate, cap dimensions)
+        const meta = await sharp(inputBuf).metadata();
+        const isJpeg = meta.format === "jpeg" || meta.format === "jpg";
+        const isPng = meta.format === "png";
+        const pipeline = sharp(inputBuf).rotate().resize(2400, 2400, { fit: "inside", withoutEnlargement: true });
+        if (isJpeg) {
+          outBuf = await pipeline.jpeg({ quality: 90 }).toBuffer();
+          ext = "jpg";
+          contentType = "image/jpeg";
+        } else if (isPng) {
+          outBuf = await pipeline.png({ compressionLevel: 9 }).toBuffer();
+          ext = "png";
+          contentType = "image/png";
+        } else {
+          outBuf = await pipeline.webp({ quality: 90 }).toBuffer();
+          ext = "webp";
+          contentType = "image/webp";
+        }
+      } else {
+        // No build-time optimisation — convert to webp ourselves
+        outBuf = await processUploadToWebP(inputBuf);
+        ext = "webp";
+        contentType = "image/webp";
+      }
+
+      const filename = `${safeStem}-${id}.${ext}`;
+      fs.writeFileSync(path.join(targetDir, filename), outBuf);
+      items.push({
+        path: `${fw.assetsDir}/${filename}`,
+        originalName: file.name,
+        bytes: outBuf.length,
+        contentType,
+      });
+    }
+
+    if (items.length === 0) return c.json({ error: "No image files in upload" }, 400);
+    return c.json({ items, framework: fw });
+  })
+  .post("/:id/asset-delete", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    const body = await c.req.json().catch(() => null) as { path?: string } | null;
+    const rel = body?.path?.replace(/^\/+/, "");
+    if (!rel) return c.json({ error: "path required" }, 400);
+    // Path safety: must stay inside the repo
+    const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+    const resolved = path.resolve(repoPath, rel);
+    if (!resolved.startsWith(path.resolve(repoPath) + path.sep)) {
+      return c.json({ error: "Invalid path" }, 400);
+    }
+    try {
+      fs.unlinkSync(resolved);
+    } catch { /* already gone */ }
+    return c.json({ ok: true });
   });

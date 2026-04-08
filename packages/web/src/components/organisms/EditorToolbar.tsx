@@ -1,9 +1,13 @@
 import { NavLink, Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { authClient } from "@/lib/auth-client";
+import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+
+type FrameworkInfo = { id: string; label: string; assetsDir: string; optimizes: boolean };
 
 type Props = {
   projectId: string;
@@ -28,6 +32,13 @@ export function EditorToolbar({
   publishing,
   onPublish,
 }: Props) {
+  const { data: framework } = useQuery({
+    queryKey: ["project-framework", projectId],
+    queryFn: () => apiJson<FrameworkInfo>(`/api/projects/${projectId}/framework`),
+    enabled: Boolean(projectId),
+    staleTime: 5 * 60 * 1000,
+  });
+
   return (
     <header className="border-b border-neutral-200/90 bg-white/95 backdrop-blur-sm">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
@@ -47,9 +58,19 @@ export function EditorToolbar({
             >
               All sites
             </Link>
-            <Heading as="h2" className="truncate text-base font-semibold tracking-tight text-neutral-900">
-              {projectName}
-            </Heading>
+            <div className="flex items-center gap-2">
+              <Heading as="h2" className="truncate text-base font-semibold tracking-tight text-neutral-900">
+                {projectName}
+              </Heading>
+              {framework && framework.id !== "unknown" && (
+                <span
+                  className="shrink-0 rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600"
+                  title={`${framework.label}${framework.optimizes ? " · auto-optimises images" : ""}`}
+                >
+                  {framework.label}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
