@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
 import { AppHeader } from "@/components/organisms/AppHeader";
 import { ConnectProjectModal } from "@/components/organisms/ConnectProjectModal";
 import { ProjectCard } from "@/components/organisms/ProjectCard";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
@@ -35,13 +36,20 @@ function ProjectCardSkeleton({ index }: { index: number }) {
 
 export function DashboardPage() {
   const { t } = useT();
+  const me = useCurrentUser();
   const [search, setSearch] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiJson<{ projects: ProjectRow[] }>("/api/projects"),
+    enabled: me.kind !== "client",
   });
+
+  // Clients have no Dashboard — bounce them to their project
+  if (me.kind === "client") {
+    return <Navigate to={`/p/${me.projectId}`} replace />;
+  }
 
   const projects = data?.projects ?? [];
 

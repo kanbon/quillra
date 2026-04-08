@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { I18nProvider } from "@/i18n/i18n";
 import { RequireAuth } from "@/components/templates/RequireAuth";
 import { AcceptInvitePage } from "@/pages/AcceptInvite";
+import { ClientLoginPage } from "@/pages/ClientLogin";
 import { DashboardPage } from "@/pages/Dashboard";
 import { EditorPage } from "@/pages/Editor";
 import { LoginPage } from "@/pages/Login";
@@ -21,6 +22,7 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/accept-invite" element={<AcceptInvitePage />} />
+          <Route path="/c/:projectId" element={<ClientLoginPage />} />
           <Route
             path="/dashboard"
             element={

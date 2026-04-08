@@ -16,6 +16,7 @@ import { adminRouter } from "./routes/admin.js";
 import { githubRouter } from "./routes/github.js";
 import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
+import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
 import { runProjectAgent } from "./services/agent.js";
 import { ensureRepoCloned, getPreviewSubdomainPort } from "./services/workspace.js";
 import { getProjectByPort, getPreviewStatus, describeStage } from "./services/preview-status.js";
@@ -27,6 +28,8 @@ const publicDir = path.resolve(__dirname, "../public");
 type Variables = {
   user: SessionUser | null;
   session: Session | null;
+  /** Set when the request was authenticated via the client session cookie */
+  clientSession: { projectId: string } | null;
 };
 
 function trustedOriginsList(): string[] {
@@ -280,8 +283,34 @@ app.use(
 
 app.use("*", async (c, next) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  c.set("user", session?.user ?? null);
-  c.set("session", session?.session ?? null);
+  if (session?.user) {
+    c.set("user", session.user);
+    c.set("session", session.session);
+  } else {
+    // Fall through to client cookie
+    const cookieHeader = c.req.header("cookie") ?? "";
+    const m = /(?:^|;\s*)quillra_client_session=([^;]+)/.exec(cookieHeader);
+    const token = m?.[1];
+    const cs = await getClientSessionFromCookie(token);
+    if (cs) {
+      // Synthesize a SessionUser-shaped object the rest of the app can use
+      c.set("user", {
+        id: cs.user.id,
+        email: cs.user.email,
+        name: cs.user.name ?? cs.user.email,
+        image: cs.user.image ?? null,
+        emailVerified: cs.user.emailVerified,
+        createdAt: cs.user.createdAt,
+        updatedAt: cs.user.updatedAt,
+      } as unknown as SessionUser);
+      c.set("session", null);
+      // Pin client session info so route guards can refuse cross-project access
+      c.set("clientSession", { projectId: cs.projectId });
+    } else {
+      c.set("user", null);
+      c.set("session", null);
+    }
+  }
   await next();
 });
 
@@ -356,6 +385,7 @@ app.route("/api/admin", adminRouter);
 app.route("/api/projects", projectsRouter);
 app.route("/api/github", githubRouter);
 app.route("/api/team", teamRouter);
+app.route("/api/clients", clientsRouter);
 
 app.get(
   "/ws/chat/:projectId",

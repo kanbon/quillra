@@ -115,6 +115,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       githubRepoFullName: p.githubRepoFullName,
       defaultBranch: p.defaultBranch,
       previewDevCommand: p.previewDevCommand,
+      logoUrl: p.logoUrl,
       role: m.role,
     });
   })
@@ -132,6 +133,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       previewDevCommand: z.string().max(2000).nullable().optional(),
       githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
       defaultBranch: z.string().min(1).max(255).optional(),
+      logoUrl: z.string().url().max(2048).nullable().optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
@@ -140,12 +142,14 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       previewDevCommand?: string | null;
       githubRepoFullName?: string;
       defaultBranch?: string;
+      logoUrl?: string | null;
       updatedAt: Date;
     } = { updatedAt: new Date() };
     if (parsed.data.name !== undefined) patch.name = parsed.data.name;
     if (parsed.data.previewDevCommand !== undefined) patch.previewDevCommand = parsed.data.previewDevCommand;
     if (parsed.data.githubRepoFullName !== undefined) patch.githubRepoFullName = parsed.data.githubRepoFullName;
     if (parsed.data.defaultBranch !== undefined) patch.defaultBranch = parsed.data.defaultBranch;
+    if (parsed.data.logoUrl !== undefined) patch.logoUrl = parsed.data.logoUrl;
 
     const repoChanged =
       patch.githubRepoFullName !== undefined && patch.githubRepoFullName !== existing.githubRepoFullName;

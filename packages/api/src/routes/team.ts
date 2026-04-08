@@ -5,8 +5,11 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { projectInvites, projectMembers, projects } from "../db/schema.js";
+import { user } from "../db/auth-schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
+import { sendEmail, isMailerEnabled } from "../services/mailer.js";
+import { inviteEmailHtml } from "../services/email-templates.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -55,32 +58,103 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const body = await c.req.json().catch(() => null);
     const schema = z.object({
       email: z.string().email(),
-      role: z.enum(["admin", "editor", "translator"]).default("editor"),
+      role: z.enum(["admin", "editor", "translator", "client"]).default("editor"),
+      name: z.string().min(1).max(120).optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    const inviteEmail = parsed.data.email.toLowerCase();
+    const role = parsed.data.role as ProjectRole;
+
+    const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!project) return c.json({ error: "Project not found" }, 404);
 
     const token = randomBytes(24).toString("hex");
     const now = new Date();
     const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 14);
 
-    await db.insert(projectInvites).values({
-      id: nanoid(),
-      projectId,
-      email: parsed.data.email.toLowerCase(),
-      role: parsed.data.role as ProjectRole,
-      tokenHash: hashToken(token),
-      invitedByUserId: r.user.id,
-      expiresAt: expires,
-    });
+    // For client invites: pre-create the user + membership now so the
+    // recipient can log in via the branded code flow without needing a
+    // separate "accept" step. For admin/editor/translator we keep the
+    // existing GitHub-sign-in-then-accept flow.
+    let acceptUrl: string;
+    const base = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    if (role === "client") {
+      let [existingUser] = await db.select().from(user).where(eq(user.email, inviteEmail)).limit(1);
+      if (!existingUser) {
+        const newId = nanoid();
+        await db.insert(user).values({
+          id: newId,
+          email: inviteEmail,
+          name: parsed.data.name ?? inviteEmail,
+          emailVerified: false,
+          createdAt: now,
+          updatedAt: now,
+        });
+        [existingUser] = await db.select().from(user).where(eq(user.id, newId)).limit(1);
+      }
+      if (existingUser) {
+        const [memberRow] = await db
+          .select()
+          .from(projectMembers)
+          .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, existingUser.id)))
+          .limit(1);
+        if (!memberRow) {
+          await db.insert(projectMembers).values({
+            id: nanoid(),
+            projectId,
+            userId: existingUser.id,
+            role,
+            invitedByUserId: r.user.id,
+            createdAt: now,
+          });
+        } else if (memberRow.role !== "client") {
+          // already a non-client member of this project — refuse to overwrite
+          return c.json({ error: "User already has a non-client role on this project" }, 409);
+        }
+      }
+      acceptUrl = `${base}/c/${projectId}`;
+    } else {
+      // Collaborator-style invites still use the token-based accept flow
+      await db.insert(projectInvites).values({
+        id: nanoid(),
+        projectId,
+        email: inviteEmail,
+        role,
+        tokenHash: hashToken(token),
+        invitedByUserId: r.user.id,
+        expiresAt: expires,
+      });
+      acceptUrl = `${base}/accept-invite?token=${token}`;
+    }
 
-    const base = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
-    const acceptPath = `/accept-invite?token=${token}`;
+    // Try to send the email; gracefully fall back to copy-link mode
+    let emailSent = false;
+    let emailError: string | null = null;
+    if (isMailerEnabled()) {
+      const html = inviteEmailHtml({
+        projectName: project.name,
+        projectLogoUrl: project.logoUrl,
+        inviterName: r.user.name ?? r.user.email ?? null,
+        role,
+        acceptUrl,
+      });
+      const result = await sendEmail({
+        to: inviteEmail,
+        subject: `You're invited to ${project.name}`,
+        html,
+        text: `${r.user.name ?? "Someone"} invited you to ${project.name}. Open this link to accept: ${acceptUrl}`,
+      });
+      emailSent = result.sent;
+      if (!result.sent) emailError = result.reason;
+    }
+
     return c.json({
-      inviteLink: `${base.replace(/\/$/, "")}${acceptPath}`,
-      token,
-      message:
-        "Share this link with the invitee (email delivery not configured). Token is only shown once in dev.",
+      inviteLink: acceptUrl,
+      token: role === "client" ? null : token,
+      emailSent,
+      emailError,
+      role,
     });
   })
   .post("/invites/accept", async (c) => {
@@ -135,7 +209,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     if (!admin) return c.json({ error: "Forbidden" }, 403);
 
     const body = await c.req.json().catch(() => null);
-    const schema = z.object({ role: z.enum(["admin", "editor", "translator"]) });
+    const schema = z.object({ role: z.enum(["admin", "editor", "translator", "client"]) });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 

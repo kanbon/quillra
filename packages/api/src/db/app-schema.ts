@@ -2,7 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { user } from "./auth-schema.js";
 
-export const projectRoleValues = ["admin", "editor", "translator"] as const;
+export const projectRoleValues = ["admin", "editor", "translator", "client"] as const;
 export type ProjectRole = (typeof projectRoleValues)[number];
 
 export const projects = sqliteTable("projects", {
@@ -13,6 +13,8 @@ export const projects = sqliteTable("projects", {
   defaultBranch: text("default_branch").notNull().default("main"),
   /** Shell command for dev preview; use `{port}` or `$PORT`. Empty = auto-detect from package.json */
   previewDevCommand: text("preview_dev_command"),
+  /** Optional URL of a logo shown on the branded client login page */
+  logoUrl: text("logo_url"),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),
@@ -21,6 +23,39 @@ export const projects = sqliteTable("projects", {
     .$onUpdate(() => new Date())
     .notNull(),
 });
+
+/** Custom session for client-role users authenticated via email code (no GitHub) */
+export const clientSessions = sqliteTable(
+  "client_sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    projectId: text("project_id").notNull(),
+    token: text("token").notNull().unique(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("client_sessions_token_idx").on(table.token)],
+);
+
+/** One-time email codes used by the branded client login flow */
+export const clientLoginCodes = sqliteTable(
+  "client_login_codes",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    email: text("email").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("client_login_codes_project_email_idx").on(table.projectId, table.email)],
+);
 
 export const projectMembers = sqliteTable(
   "project_members",

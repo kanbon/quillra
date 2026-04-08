@@ -135,6 +135,39 @@ function buildCanUseTool(role: ProjectRole) {
       return { behavior: "deny", message: "Tool not allowed for editors.", toolUseID: id };
     }
 
+    if (role === "client") {
+      // Clients are non-technical end users (the website owner). They get
+      // the most restrictive sandbox: read anything, but only edit content
+      // files (text/markdown/json) and image assets. No code, no config,
+      // no shell, no git.
+      if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
+        return { behavior: "allow", toolUseID: id };
+      }
+      if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
+        const fp = String(
+          (input as { file_path?: string }).file_path ??
+            (input as { path?: string }).path ??
+            "",
+        ).replace(/\\/g, "/");
+        // Allow content paths and asset paths only
+        const isContentPath = /(^|\/)(content|data|public|src\/content|src\/data|src\/assets|assets)\//i.test(fp);
+        const isContentExt = /\.(md|markdown|mdx|txt|json|yaml|yml|html|htm)$/i.test(fp);
+        const isImageExt = /\.(jpe?g|png|gif|webp|svg|avif)$/i.test(fp);
+        if ((isContentPath && (isContentExt || isImageExt)) || (isContentExt && isContentPath)) {
+          return { behavior: "allow", toolUseID: id };
+        }
+        return {
+          behavior: "deny",
+          message: "Clients can only edit content files (text, images) inside content/ or assets/ directories.",
+          toolUseID: id,
+        };
+      }
+      if (toolName === "Bash") {
+        return { behavior: "deny", message: "Clients cannot run shell commands.", toolUseID: id };
+      }
+      return { behavior: "deny", message: "Tool not allowed for clients.", toolUseID: id };
+    }
+
     if (role === "translator") {
       if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
         return { behavior: "allow", toolUseID: id };

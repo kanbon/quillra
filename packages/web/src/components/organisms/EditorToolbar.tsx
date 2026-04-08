@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { SettingsModal } from "@/components/organisms/SettingsModal";
-import { authClient } from "@/lib/auth-client";
+import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
@@ -35,6 +35,8 @@ export function EditorToolbar({
   onPublish,
 }: Props) {
   const { t } = useT();
+  const me = useCurrentUser();
+  const isClient = me.kind === "client";
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const { data: framework } = useQuery({
@@ -48,21 +50,29 @@ export function EditorToolbar({
     <header className="border-b border-neutral-200/90 bg-white/95 backdrop-blur-sm">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <Link
-            to="/dashboard"
-            className="flex shrink-0 items-center gap-2 rounded-lg no-underline hover:bg-neutral-50"
-            title={t("toolbar.allSites")}
-          >
-            <LogoMark size={22} />
-          </Link>
-          <div className="hidden h-8 w-px bg-neutral-200 sm:block" />
-          <div className="min-w-0 flex-1">
+          {isClient ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <LogoMark size={22} />
+            </div>
+          ) : (
             <Link
               to="/dashboard"
-              className="mb-0.5 block text-[11px] font-medium uppercase tracking-wider text-neutral-400 no-underline hover:text-brand"
+              className="flex shrink-0 items-center gap-2 rounded-lg no-underline hover:bg-neutral-50"
+              title={t("toolbar.allSites")}
             >
-              {t("toolbar.allSites")}
+              <LogoMark size={22} />
             </Link>
+          )}
+          <div className="hidden h-8 w-px bg-neutral-200 sm:block" />
+          <div className="min-w-0 flex-1">
+            {!isClient && (
+              <Link
+                to="/dashboard"
+                className="mb-0.5 block text-[11px] font-medium uppercase tracking-wider text-neutral-400 no-underline hover:text-brand"
+              >
+                {t("toolbar.allSites")}
+              </Link>
+            )}
             <div className="flex items-center gap-2">
               <Heading as="h2" className="truncate text-base font-semibold tracking-tight text-neutral-900">
                 {projectName}
@@ -79,17 +89,19 @@ export function EditorToolbar({
           </div>
         </div>
 
-        <nav
-          className="flex w-full items-center gap-1 rounded-xl bg-neutral-100/90 p-1 sm:w-auto"
-          aria-label={t("toolbar.project")}
-        >
-          <NavLink to={`/p/${projectId}`} end className={tabClass}>
-            {t("toolbar.editor")}
-          </NavLink>
-          <NavLink to={`/p/${projectId}/settings`} className={tabClass}>
-            {t("toolbar.project")}
-          </NavLink>
-        </nav>
+        {!isClient && (
+          <nav
+            className="flex w-full items-center gap-1 rounded-xl bg-neutral-100/90 p-1 sm:w-auto"
+            aria-label={t("toolbar.project")}
+          >
+            <NavLink to={`/p/${projectId}`} end className={tabClass}>
+              {t("toolbar.editor")}
+            </NavLink>
+            <NavLink to={`/p/${projectId}/settings`} className={tabClass}>
+              {t("toolbar.project")}
+            </NavLink>
+          </nav>
+        )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {canPublish && (
@@ -134,7 +146,7 @@ export function EditorToolbar({
           </button>
           <button
             type="button"
-            onClick={() => authClient.signOut({ fetchOptions: { credentials: "include" } })}
+            onClick={() => signOutUnified(me.kind === "client" ? "client" : "github")}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
             title={t("toolbar.signOut")}
             aria-label={t("toolbar.signOut")}

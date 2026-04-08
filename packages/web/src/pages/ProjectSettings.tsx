@@ -16,7 +16,8 @@ import { useT } from "@/i18n/i18n";
 
 const inviteSchema = z.object({
   email: z.string().email(),
-  role: z.enum(["admin", "editor", "translator"]),
+  role: z.enum(["admin", "editor", "translator", "client"]),
+  name: z.string().max(120).optional(),
 });
 
 type InviteForm = z.infer<typeof inviteSchema>;
@@ -26,6 +27,7 @@ const projectSchema = z.object({
   githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   defaultBranch: z.string().min(1).max(255),
   previewDevCommand: z.string().max(2000).optional(),
+  logoUrl: z.string().url().max(2048).optional().or(z.literal("")),
 });
 
 type ProjectForm = z.infer<typeof projectSchema>;
@@ -45,6 +47,11 @@ export function ProjectSettingsPage() {
   const qc = useQueryClient();
   const [preferManualGit, setPreferManualGit] = useState(false);
   const [displayNameMode, setDisplayNameMode] = useState<"repo" | "full" | "custom">("repo");
+  const [inviteResult, setInviteResult] = useState<
+    | null
+    | { ok: true; emailSent: boolean; inviteLink: string; role: string; emailError: string | null }
+    | { ok: false; error: string }
+  >(null);
 
   const projectQ = useQuery({
     queryKey: ["project", id],
@@ -56,6 +63,7 @@ export function ProjectSettingsPage() {
         githubRepoFullName: string;
         defaultBranch: string;
         previewDevCommand: string | null;
+        logoUrl: string | null;
       }>(`/api/projects/${id}`),
   });
 
@@ -79,7 +87,7 @@ export function ProjectSettingsPage() {
     formState: { isSubmitting: inviteSubmitting },
   } = useForm<InviteForm>({
     resolver: zodResolver(inviteSchema),
-    defaultValues: { email: "", role: "editor" },
+    defaultValues: { email: "", role: "editor", name: "" },
   });
 
   const {
@@ -96,6 +104,7 @@ export function ProjectSettingsPage() {
       githubRepoFullName: "",
       defaultBranch: "main",
       previewDevCommand: "",
+      logoUrl: "",
     },
   });
 
@@ -111,6 +120,7 @@ export function ProjectSettingsPage() {
       githubRepoFullName: p.githubRepoFullName,
       defaultBranch: p.defaultBranch,
       previewDevCommand: p.previewDevCommand ?? "",
+      logoUrl: p.logoUrl ?? "",
     });
     setDisplayNameMode(inferDisplayNameMode(p.name, p.githubRepoFullName));
     setPreferManualGit(false);
@@ -133,6 +143,7 @@ export function ProjectSettingsPage() {
       githubRepoFullName: string;
       defaultBranch: string;
       previewDevCommand: string | null;
+      logoUrl: string | null;
     }) => apiJson(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["project", id] });
@@ -172,6 +183,7 @@ export function ProjectSettingsPage() {
                   githubRepoFullName: v.githubRepoFullName.trim(),
                   defaultBranch: v.defaultBranch.trim(),
                   previewDevCommand: v.previewDevCommand?.trim() || null,
+                  logoUrl: v.logoUrl?.trim() || null,
                 });
               })}
             >
@@ -225,6 +237,14 @@ export function ProjectSettingsPage() {
               </div>
 
               <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600">Project logo URL</label>
+                <Input placeholder="https://yourcompany.com/logo.png" {...registerProject("logoUrl")} />
+                <p className="mt-1 text-xs text-neutral-500">
+                  Shown on the branded client login page. Square images work best.
+                </p>
+              </div>
+
+              <div>
                 <label className="mb-1 block text-xs font-medium text-neutral-600">
                   {t("connectForm.devCommandLabel")}
                 </label>
@@ -267,27 +287,96 @@ export function ProjectSettingsPage() {
             <form
               className="flex flex-col gap-3"
               onSubmit={handleInviteSubmit(async (v) => {
-                const res = await apiJson<{ inviteLink: string }>(`/api/team/projects/${id}/invites`, {
-                  method: "POST",
-                  body: JSON.stringify(v),
-                });
-                alert(`Invite created. Link:\n${res.inviteLink}`);
-                resetInvite();
-                void membersQ.refetch();
+                setInviteResult(null);
+                try {
+                  const res = await apiJson<{
+                    inviteLink: string;
+                    emailSent: boolean;
+                    emailError: string | null;
+                    role: string;
+                  }>(`/api/team/projects/${id}/invites`, {
+                    method: "POST",
+                    body: JSON.stringify(v),
+                  });
+                  setInviteResult({ ok: true, ...res });
+                  resetInvite();
+                  void membersQ.refetch();
+                } catch (e) {
+                  setInviteResult({ ok: false, error: e instanceof Error ? e.message : "Failed" });
+                }
               })}
             >
-              <Input type="email" placeholder={t("projectSettings.emailPlaceholder")} {...registerInvite("email")} />
-              <select
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
-                {...registerInvite("role")}
-              >
-                <option value="editor">{t("projectSettings.roleEditor")}</option>
-                <option value="translator">{t("projectSettings.roleTranslator")}</option>
-                <option value="admin">{t("projectSettings.roleAdmin")}</option>
-              </select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Input
+                  type="email"
+                  placeholder={t("projectSettings.emailPlaceholder")}
+                  {...registerInvite("email")}
+                />
+                <Input placeholder="Their name (optional)" {...registerInvite("name")} />
+              </div>
+
+              {/* Role picker as cards so the difference is visible */}
+              <div className="grid gap-2 sm:grid-cols-2">
+                {[
+                  { value: "client", title: "Client", desc: "Branded login. Edits text and images via chat. Sees only this site." },
+                  { value: "editor", title: "Collaborator", desc: "Full access. Signs in with GitHub. Sees all sites they belong to." },
+                  { value: "admin", title: "Admin", desc: "Collaborator + can manage members and project settings." },
+                  { value: "translator", title: "Translator", desc: "Edits content in non-English locales only." },
+                ].map((r) => (
+                  <label
+                    key={r.value}
+                    className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-neutral-200 bg-neutral-50/60 p-3 text-left transition-colors hover:border-neutral-300 hover:bg-white has-[:checked]:border-brand has-[:checked]:bg-brand/5"
+                  >
+                    <input
+                      type="radio"
+                      value={r.value}
+                      className="mt-1 accent-brand"
+                      {...registerInvite("role")}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-neutral-900">{r.title}</p>
+                      <p className="mt-0.5 text-[12px] leading-snug text-neutral-500">{r.desc}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
               <Button type="submit" disabled={inviteSubmitting}>
-                {t("projectSettings.createInvite")}
+                {inviteSubmitting ? "Sending invite…" : t("projectSettings.createInvite")}
               </Button>
+
+              {inviteResult && inviteResult.ok && (
+                <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm">
+                  {inviteResult.emailSent ? (
+                    <p className="text-green-700">
+                      ✓ Invite email sent. They'll get a {inviteResult.role === "client" ? "branded sign-in page" : "GitHub sign-in link"} in their inbox.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-amber-700">
+                        Email isn't configured on this server. Copy the link and send it yourself:
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <code className="flex-1 truncate rounded-lg border border-neutral-200 bg-white px-2 py-1.5 font-mono text-[11px] text-neutral-700">
+                          {inviteResult.inviteLink}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(inviteResult.inviteLink);
+                          }}
+                          className="rounded-md bg-neutral-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-neutral-700"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {inviteResult && !inviteResult.ok && (
+                <p className="text-sm text-red-600">{inviteResult.error}</p>
+              )}
             </form>
           </div>
         )}
