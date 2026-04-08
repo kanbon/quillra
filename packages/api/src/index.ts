@@ -64,16 +64,16 @@ function previewBootHtml(port: string | number): string {
   .step.active { color: #262626; opacity: 1; }
   .step.done { color: #525252; opacity: 1; }
   .step.failed { color: #b91c1c; opacity: 1; }
-  .bullet { width: 18px; height: 18px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
-  .bullet .dot { width: 6px; height: 6px; border-radius: 50%; background: #d4d4d4; }
-  .bullet .spinner { width: 14px; height: 14px; border: 2px solid #e5e5e5; border-top-color: #262626; border-radius: 50%; animation: spin 0.9s linear infinite; }
-  .bullet .check { width: 18px; height: 18px; color: #22c55e; }
-  .bullet .x { width: 18px; height: 18px; color: #ef4444; }
+  .bullet { width: 18px; height: 18px; flex-shrink: 0; position: relative; }
+  .bullet > * { position: absolute; inset: 0; margin: auto; display: none; }
+  .bullet .dot { width: 6px; height: 6px; border-radius: 50%; background: #d4d4d4; display: block; }
+  .bullet .spinner { width: 14px; height: 14px; border: 2px solid #e5e5e5; border-top-color: #262626; border-radius: 50%; animation: spin 0.9s linear infinite; box-sizing: border-box; }
+  .bullet .check, .bullet .x { width: 18px; height: 18px; }
+  .bullet .check { color: #22c55e; }
+  .bullet .x { color: #ef4444; }
   .step.active .dot, .step.done .dot, .step.failed .dot { display: none; }
-  .step:not(.active) .spinner, .step:not(.active) .check, .step:not(.active) .x { display: none; }
-  .step.done .spinner, .step.done .x, .step.done .dot { display: none; }
+  .step.active .spinner { display: block; }
   .step.done .check { display: block; }
-  .step.failed .spinner, .step.failed .check, .step.failed .dot { display: none; }
   .step.failed .x { display: block; }
   .detail { margin: 22px 0 0; font-size: 12px; line-height: 1.5; color: #a3a3a3; text-align: center; min-height: 1.2em; }
   .retry { display: block; margin: 22px auto 0; padding: 8px 18px; font-size: 12px; font-weight: 500; background: #262626; color: white; border: none; border-radius: 8px; cursor: pointer; }

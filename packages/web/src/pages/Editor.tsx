@@ -116,7 +116,7 @@ export function EditorPage() {
 
   const { lines, busy, error, send } = useProjectChat(id || undefined, conversationId, refreshPreview, handleConversationCreated);
 
-  // Auto-start preview on mount
+  // Auto-start preview on mount via the mutation so PreviewPane sees `starting`
   useEffect(() => {
     if (!id || previewStarted.current) return;
     previewStarted.current = true;
@@ -126,13 +126,10 @@ export function EditorPage() {
           `/api/projects/${id}/preview-meta`,
         );
         setPreviewLabel(meta.previewLabel);
-        const res = await apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, {
-          method: "POST",
-        });
-        setPreviewSrc(res.url);
-        setPreviewLabel(res.previewLabel);
-      } catch { /* user can start manually */ }
+      } catch { /* not critical */ }
+      previewMut.mutate();
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const openPublishModal = useCallback(async () => {
