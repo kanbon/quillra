@@ -194,6 +194,10 @@ export function sendMessage(
       const newK = key(projectId, newConvId);
       const currentSnap = getSnap(oldK);
       snapshots.set(newK, { ...currentSnap, conversationId: newConvId });
+      // Mark history as loaded so the useEffect-driven loadHistory call
+      // (triggered by the conversationId change in the parent component)
+      // doesn't overwrite the live in-memory state and wipe attachments.
+      internal.historyLoaded = true;
       internals.set(newK, internal);
       // Copy listeners
       const oldSubs = listeners.get(oldK);

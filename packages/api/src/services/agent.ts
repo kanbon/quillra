@@ -187,6 +187,10 @@ export async function* runProjectAgent(params: {
   const abortController = new AbortController();
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
+  // Symbol thrown internally to trigger a retry without resume when the
+  // SDK can't find the persisted session ID.
+  const SESSION_LOST = Symbol("session_lost");
+
   async function* run(sessionId: string | null): AsyncGenerator<Record<string, unknown>> {
     const q = query({
       prompt: params.prompt,
@@ -207,24 +211,55 @@ export async function* runProjectAgent(params: {
         permissionMode: "acceptEdits",
       },
     });
+    let yieldedAny = false;
     for await (const msg of q) {
       if ("session_id" in msg && typeof msg.session_id === "string" && msg.session_id) {
         params.onSessionId?.(msg.session_id);
       }
       const out = mapSdkMessageToClient(msg);
-      if (out) yield out;
+      if (!out) continue;
+      // Detect "session not found / no conversation" coming through as a result error.
+      // If we have nothing else to show the user yet AND we were resuming a session,
+      // treat it as a recoverable session-loss instead of streaming the raw error.
+      if (
+        out.type === "error" &&
+        sessionId &&
+        !yieldedAny &&
+        typeof out.message === "string" &&
+        /no conversation found|session id|session not found/i.test(out.message)
+      ) {
+        throw SESSION_LOST;
+      }
+      yieldedAny = true;
+      yield out;
     }
   }
 
   try {
     yield* run(params.agentSessionId ?? null);
   } catch (e) {
+    if (e === SESSION_LOST) {
+      // Session is gone — clear it on the server side so future runs start fresh,
+      // then retry this run without `resume`.
+      params.onSessionId?.("");
+      try {
+        yield* run(null);
+        return;
+      } catch (retryErr) {
+        if (retryErr === SESSION_LOST) {
+          yield { type: "error", message: "Could not start agent session" };
+          return;
+        }
+        yield { type: "error", message: retryErr instanceof Error ? retryErr.message : String(retryErr) };
+        return;
+      }
+    }
     const name = e instanceof Error ? e.name : "";
     if (name === "AbortError") {
       yield { type: "error", message: "Aborted" };
       return;
     }
-    // If session expired/not found, retry without resume
+    // Fallback: legacy thrown-exception path
     const msg = e instanceof Error ? e.message : String(e);
     if (params.agentSessionId && /session|not found/i.test(msg)) {
       try {
