@@ -5,6 +5,7 @@
  * the same in every email client. The shared shell wraps a small content
  * block in a clean white card with a subtle accent line.
  */
+import { getOrganizationInfo } from "./instance-settings.js";
 
 const BRAND_COLOR = "#C1121F";
 
@@ -17,15 +18,42 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function renderOperatorFooter(): string {
+  const org = getOrganizationInfo();
+  // Who's operating this Quillra instance. Every email carries the
+  // operator's name/company/contact so recipients know where it's
+  // coming from and how to reach a human — also satisfies Impressum
+  // / "sender identity" requirements in DE/AT and makes Gmail happier.
+  const nameLine = org.company
+    ? `${escapeHtml(org.company)}${org.operatorName ? ` · ${escapeHtml(org.operatorName)}` : ""}`
+    : org.operatorName
+      ? escapeHtml(org.operatorName)
+      : null;
+  const contactParts: string[] = [];
+  if (org.email) contactParts.push(`<a href="mailto:${escapeHtml(org.email)}" style="color:#737373;text-decoration:underline">${escapeHtml(org.email)}</a>`);
+  if (org.website) contactParts.push(`<a href="${escapeHtml(org.website)}" style="color:#737373;text-decoration:underline">${escapeHtml(org.website.replace(/^https?:\/\//, ""))}</a>`);
+  const contactLine = contactParts.length > 0 ? contactParts.join(" · ") : "";
+
+  if (!nameLine && !org.address && !contactLine) {
+    return `<p style="margin:18px 0 0 0;font-size:11px;color:#a3a3a3">Sent by Quillra</p>`;
+  }
+
+  return `
+    ${nameLine ? `<p style="margin:18px 0 2px 0;font-size:11px;color:#737373"><strong style="color:#525252">${nameLine}</strong></p>` : ""}
+    ${org.address ? `<p style="margin:0 0 2px 0;font-size:11px;color:#a3a3a3;white-space:pre-line">${escapeHtml(org.address)}</p>` : ""}
+    ${contactLine ? `<p style="margin:0 0 0 0;font-size:11px;color:#a3a3a3">${contactLine}</p>` : ""}
+    <p style="margin:10px 0 0 0;font-size:10px;color:#d4d4d4">Sent via Quillra · ${escapeHtml(org.instanceName)}</p>
+  `;
+}
+
 function shell(opts: {
   title: string;
   preheader: string;
   brandName: string;
   brandLogoUrl?: string | null;
   bodyHtml: string;
-  footerNote?: string;
 }): string {
-  const { title, preheader, brandName, brandLogoUrl, bodyHtml, footerNote } = opts;
+  const { title, preheader, brandName, brandLogoUrl, bodyHtml } = opts;
   const logoBlock = brandLogoUrl
     ? `<img src="${escapeHtml(brandLogoUrl)}" alt="${escapeHtml(brandName)}" width="56" height="56" style="display:block;border-radius:14px;object-fit:cover" />`
     : `<div style="width:56px;height:56px;border-radius:14px;background:${BRAND_COLOR};color:#fff;display:flex;align-items:center;justify-content:center;font-family:-apple-system,system-ui,sans-serif;font-weight:600;font-size:22px">${escapeHtml(brandName.charAt(0).toUpperCase())}</div>`;
@@ -49,7 +77,7 @@ function shell(opts: {
         ${bodyHtml}
       </td></tr>
       <tr><td style="padding:0 36px 28px 36px;border-top:1px solid #f1f1f1">
-        <p style="margin:18px 0 0 0;font-size:11px;color:#a3a3a3">${escapeHtml(footerNote ?? `${brandName} — sent by Quillra`)}</p>
+        ${renderOperatorFooter()}
       </td></tr>
     </table>
   </td></tr>

@@ -131,7 +131,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
           return c.json({ error: "User already has a non-client role on this project" }, 409);
         }
       }
-      acceptUrl = `${base}/c/${projectId}`;
+      acceptUrl = `${base}/c/${projectId}?email=${encodeURIComponent(inviteEmail)}`;
     } else {
       // Collaborator-style invites still use the token-based accept flow
       await db.insert(projectInvites).values({

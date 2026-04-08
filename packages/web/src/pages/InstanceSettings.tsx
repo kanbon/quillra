@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
@@ -7,6 +7,15 @@ import { Input } from "@/components/atoms/Input";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
+
+type Organization = {
+  instanceName: string;
+  operatorName: string | null;
+  company: string | null;
+  email: string | null;
+  address: string | null;
+  website: string | null;
+};
 
 type Member = {
   id: string;
@@ -28,6 +37,58 @@ export function InstanceSettingsPage() {
   const qc = useQueryClient();
   const [email, setEmail] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [org, setOrg] = useState<Organization>({
+    instanceName: "Quillra",
+    operatorName: "",
+    company: "",
+    email: "",
+    address: "",
+    website: "",
+  });
+  const [orgFeedback, setOrgFeedback] = useState<string | null>(null);
+  const [orgSaving, setOrgSaving] = useState(false);
+
+  // Load organization info once on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const o = await apiJson<Organization>("/api/instance/organization");
+        setOrg({
+          instanceName: o.instanceName ?? "Quillra",
+          operatorName: o.operatorName ?? "",
+          company: o.company ?? "",
+          email: o.email ?? "",
+          address: o.address ?? "",
+          website: o.website ?? "",
+        });
+      } catch { /* ignore */ }
+    })();
+  }, []);
+
+  async function saveOrg() {
+    setOrgSaving(true);
+    setOrgFeedback(null);
+    try {
+      await apiJson("/api/setup/save", {
+        method: "POST",
+        body: JSON.stringify({
+          values: {
+            INSTANCE_NAME: org.instanceName.trim() || null,
+            INSTANCE_OPERATOR_NAME: (org.operatorName ?? "").trim() || null,
+            INSTANCE_OPERATOR_COMPANY: (org.company ?? "").trim() || null,
+            INSTANCE_OPERATOR_EMAIL: (org.email ?? "").trim() || null,
+            INSTANCE_OPERATOR_ADDRESS: (org.address ?? "").trim() || null,
+            INSTANCE_OPERATOR_WEBSITE: (org.website ?? "").trim() || null,
+          },
+        }),
+      });
+      setOrgFeedback("Saved.");
+    } catch (e) {
+      setOrgFeedback(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setOrgSaving(false);
+    }
+  }
 
   const { data: members } = useQuery({
     queryKey: ["admin-members"],
@@ -68,7 +129,7 @@ export function InstanceSettingsPage() {
   return (
     <div className="min-h-screen bg-neutral-50">
       <header className="border-b border-neutral-200 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-2xl items-center gap-3">
+        <div className="mx-auto flex max-w-3xl items-center gap-3">
           <Link to="/dashboard" className="flex items-center gap-2 no-underline">
             <LogoMark size={22} />
           </Link>
@@ -77,7 +138,92 @@ export function InstanceSettingsPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-2xl space-y-8 px-6 py-8">
+      <div className="mx-auto max-w-3xl space-y-8 px-6 py-8">
+        <section className="rounded-2xl border border-neutral-200 bg-white p-6">
+          <Heading as="h2" className="mb-1 text-base font-semibold">Organisation</Heading>
+          <p className="mb-4 text-sm text-neutral-500">
+            Contact details for whoever operates this Quillra instance.
+          </p>
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[12px] leading-relaxed text-amber-800">
+            <strong className="font-semibold">Publicly visible.</strong> These values appear in every email footer and on the public{" "}
+            <Link to="/impressum" className="underline-offset-2 hover:underline">/impressum</Link> page.
+          </div>
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                Instance name
+              </label>
+              <Input
+                value={org.instanceName}
+                onChange={(e) => setOrg({ ...org, instanceName: e.target.value })}
+                placeholder="Quillra"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                  Your name
+                </label>
+                <Input
+                  value={org.operatorName ?? ""}
+                  onChange={(e) => setOrg({ ...org, operatorName: e.target.value })}
+                  placeholder="Jane Doe"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                  Company
+                </label>
+                <Input
+                  value={org.company ?? ""}
+                  onChange={(e) => setOrg({ ...org, company: e.target.value })}
+                  placeholder="Acme Studio GmbH"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                Contact email
+              </label>
+              <Input
+                type="email"
+                value={org.email ?? ""}
+                onChange={(e) => setOrg({ ...org, email: e.target.value })}
+                placeholder="hello@yourdomain.com"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                Postal address
+              </label>
+              <textarea
+                rows={3}
+                value={org.address ?? ""}
+                onChange={(e) => setOrg({ ...org, address: e.target.value })}
+                placeholder={"Musterstraße 1\n1010 Vienna\nAustria"}
+                className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                Website
+              </label>
+              <Input
+                type="url"
+                value={org.website ?? ""}
+                onChange={(e) => setOrg({ ...org, website: e.target.value })}
+                placeholder="https://yourdomain.com"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <Button type="button" onClick={saveOrg} disabled={orgSaving}>
+                {orgSaving ? "Saving…" : "Save organisation"}
+              </Button>
+              {orgFeedback && <p className="text-sm text-neutral-500">{orgFeedback}</p>}
+            </div>
+          </div>
+        </section>
+
         <section className="rounded-2xl border border-neutral-200 bg-white p-6">
           <Heading as="h2" className="mb-1 text-base font-semibold">{t("instanceSettings.inviteUser")}</Heading>
           <p className="mb-4 text-sm text-neutral-500">

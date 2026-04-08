@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
@@ -36,12 +36,18 @@ function initialsOf(name: string): string {
 
 export function ClientLoginPage() {
   const { projectId = "" } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
   const nav = useNavigate();
 
   const [branding, setBranding] = useState<Branding | null>(null);
   const [brandingErr, setBrandingErr] = useState<string | null>(null);
   const [step, setStep] = useState<"email" | "code">("email");
-  const [email, setEmail] = useState("");
+  // Prefill email from ?email= query param so recipients clicking through
+  // from the invite email don't have to re-type it.
+  const [email, setEmail] = useState(() => {
+    const raw = searchParams.get("email") ?? "";
+    return raw.trim().toLowerCase();
+  });
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

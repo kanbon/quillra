@@ -29,6 +29,13 @@ export const SETTABLE_KEYS = [
   "SMTP_USER",
   "SMTP_PASSWORD",
   "SMTP_SECURE",
+  // Instance identity / Impressum — publicly visible (email footer, /impressum)
+  "INSTANCE_NAME",
+  "INSTANCE_OPERATOR_NAME",
+  "INSTANCE_OPERATOR_COMPANY",
+  "INSTANCE_OPERATOR_EMAIL",
+  "INSTANCE_OPERATOR_ADDRESS",
+  "INSTANCE_OPERATOR_WEBSITE",
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
@@ -69,6 +76,31 @@ export function setInstanceSetting(key: SettableKey, value: string | null): void
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     )
     .run(key, value, Date.now());
+}
+
+/**
+ * Public operator / Impressum info — set via the wizard, rendered in email
+ * footers, the branded client login page, and the /impressum route. Never
+ * secret.
+ */
+export type OrganizationInfo = {
+  instanceName: string;
+  operatorName: string | null;
+  company: string | null;
+  email: string | null;
+  address: string | null;
+  website: string | null;
+};
+
+export function getOrganizationInfo(): OrganizationInfo {
+  return {
+    instanceName: getInstanceSetting("INSTANCE_NAME") || "Quillra",
+    operatorName: getInstanceSetting("INSTANCE_OPERATOR_NAME") ?? null,
+    company: getInstanceSetting("INSTANCE_OPERATOR_COMPANY") ?? null,
+    email: getInstanceSetting("INSTANCE_OPERATOR_EMAIL") ?? null,
+    address: getInstanceSetting("INSTANCE_OPERATOR_ADDRESS") ?? null,
+    website: getInstanceSetting("INSTANCE_OPERATOR_WEBSITE") ?? null,
+  };
 }
 
 /**

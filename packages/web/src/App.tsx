@@ -11,6 +11,7 @@ import { LoginPage } from "@/pages/Login";
 import { InstanceSettingsPage } from "@/pages/InstanceSettings";
 import { ProjectSettingsPage } from "@/pages/ProjectSettings";
 import { SetupPage } from "@/pages/Setup";
+import { ImpressumPage } from "@/pages/Impressum";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -24,6 +25,7 @@ export function App() {
         <SetupGate>
         <Routes>
           <Route path="/setup" element={<SetupPage />} />
+          <Route path="/impressum" element={<ImpressumPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/accept-invite" element={<AcceptInvitePage />} />
           <Route path="/c/:projectId" element={<ClientLoginPage />} />

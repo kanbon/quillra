@@ -18,6 +18,7 @@ import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
 import { setupRouter } from "./routes/setup.js";
+import { instanceRouter } from "./routes/instance.js";
 import { runProjectAgent } from "./services/agent.js";
 import { ensureRepoCloned, getPreviewSubdomainPort } from "./services/workspace.js";
 import { getProjectByPort, getPreviewStatus, describeStage } from "./services/preview-status.js";
@@ -398,6 +399,7 @@ app.route("/api/github", githubRouter);
 app.route("/api/team", teamRouter);
 app.route("/api/clients", clientsRouter);
 app.route("/api/setup", setupRouter);
+app.route("/api/instance", instanceRouter);
 
 app.get(
   "/ws/chat/:projectId",
