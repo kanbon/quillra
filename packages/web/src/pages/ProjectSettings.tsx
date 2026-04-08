@@ -697,10 +697,14 @@ export function ProjectSettingsPage() {
           <button
             type="button"
             onClick={() => deleteProject.mutate()}
-            disabled={deleteProject.isPending || deleteConfirm.trim() !== (projectQ.data?.name ?? "")}
+            disabled={
+              deleteProject.isPending ||
+              deleteConfirm.trim().toLowerCase() !== (projectQ.data?.name ?? "").trim().toLowerCase()
+            }
             className={cn(
               "inline-flex h-10 items-center gap-1.5 rounded-lg bg-red-600 px-4 text-[13px] font-semibold text-white shadow-sm transition-all",
-              deleteProject.isPending || deleteConfirm.trim() !== (projectQ.data?.name ?? "")
+              deleteProject.isPending ||
+                deleteConfirm.trim().toLowerCase() !== (projectQ.data?.name ?? "").trim().toLowerCase()
                 ? "cursor-not-allowed opacity-50"
                 : "hover:bg-red-700 hover:shadow",
             )}
