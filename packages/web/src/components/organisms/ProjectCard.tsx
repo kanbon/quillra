@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { Heading } from "@/components/atoms/Heading";
 import { useT } from "@/i18n/i18n";
 
 type Props = {
@@ -15,11 +14,21 @@ function formatUpdated(ts?: number) {
   try {
     return new Intl.DateTimeFormat(undefined, {
       dateStyle: "medium",
-      timeStyle: "short",
     }).format(ts);
   } catch {
     return "";
   }
+}
+
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() ?? "")
+      .join("") || "·"
+  );
 }
 
 export function ProjectCard({ id, name, repo, role, updatedAt }: Props) {
@@ -27,15 +36,24 @@ export function ProjectCard({ id, name, repo, role, updatedAt }: Props) {
   return (
     <Link
       to={`/p/${id}`}
-      className="flex flex-col rounded-xl border border-neutral-200 bg-white p-5 transition-colors hover:border-neutral-400"
+      className="group flex flex-col rounded-2xl border border-neutral-200/80 bg-white p-5 no-underline shadow-sm transition-all hover:-translate-y-0.5 hover:border-neutral-300 hover:shadow-md"
     >
-      <Heading as="h3" className="mb-1 text-lg">
-        {name}
-      </Heading>
-      <p className="font-mono text-xs text-neutral-500">{repo}</p>
-      <div className="mt-4 flex items-center justify-between text-xs text-neutral-400">
-        <span className="uppercase tracking-wide">{role}</span>
-        {updatedAt ? <span>{t("dashboard.updated", { date: formatUpdated(updatedAt) })}</span> : null}
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand/10 to-brand/5 text-[13px] font-semibold text-brand ring-1 ring-brand/20">
+          {initialsOf(name)}
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-[15px] font-semibold tracking-tight text-neutral-900">{name}</h3>
+          <p className="truncate font-mono text-[11px] text-neutral-400">{repo}</p>
+        </div>
+      </div>
+      <div className="mt-auto flex items-center justify-between text-[11px]">
+        <span className="rounded-full bg-neutral-100 px-2 py-0.5 font-medium uppercase tracking-wide text-neutral-500 group-hover:bg-neutral-200">
+          {role}
+        </span>
+        {updatedAt ? (
+          <span className="text-neutral-400">{t("dashboard.updated", { date: formatUpdated(updatedAt) })}</span>
+        ) : null}
       </div>
     </Link>
   );
