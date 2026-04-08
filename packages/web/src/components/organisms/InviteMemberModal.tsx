@@ -9,10 +9,11 @@
  * On success shows a "Sent!" state with a copy-link fallback if the
  * mailer isn't configured.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Modal } from "@/components/atoms/Modal";
 import { Input } from "@/components/atoms/Input";
 import { apiJson } from "@/lib/api";
+import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
 type Role = "client" | "editor" | "admin" | "translator";
@@ -24,52 +25,34 @@ type Props = {
   onInvited?: () => void;
 };
 
-const ROLES: {
-  value: Role;
-  title: string;
-  shortDesc: string;
-  longDesc: string;
-  color: string;
-}[] = [
-  {
-    value: "client",
-    title: "Client",
-    shortDesc: "Edit content via chat",
-    longDesc:
-      "Branded sign-in page. Can edit text and images through the AI chat. Sees only this project. Best for the person paying you for the site.",
-    color: "#A855F7",
-  },
-  {
-    value: "editor",
-    title: "Collaborator",
-    shortDesc: "Full access without admin",
-    longDesc:
-      "Signs in with GitHub. Full edit access across their assigned projects. Cannot manage members or delete the project.",
-    color: "#3B82F6",
-  },
-  {
-    value: "admin",
-    title: "Admin",
-    shortDesc: "Collaborator + can manage settings",
-    longDesc:
-      "Everything a collaborator can do, plus inviting and removing members, editing project settings, and deleting the project.",
-    color: "#EF4444",
-  },
-  {
-    value: "translator",
-    title: "Translator",
-    shortDesc: "Locale content only",
-    longDesc:
-      "Can only edit content in non-English locale folders (e.g. /content/de, /content/fr). Cannot touch source English content or code.",
-    color: "#10B981",
-  },
-];
+const ROLE_COLORS: Record<Role, string> = {
+  client: "#A855F7",
+  editor: "#3B82F6",
+  admin: "#EF4444",
+  translator: "#10B981",
+};
+const ROLE_ORDER: Role[] = ["client", "editor", "admin", "translator"];
 
 type Step = "role" | "details" | "sent";
 
 export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props) {
+  const { t } = useT();
   const [step, setStep] = useState<Step>("role");
   const [role, setRole] = useState<Role>("client");
+
+  // Roles pulled from i18n so both titles and long descriptions are
+  // localised and future languages don't need code changes.
+  const ROLES = useMemo(
+    () =>
+      ROLE_ORDER.map((value) => ({
+        value,
+        title: t(`invite.role${value === "editor" ? "Editor" : value === "admin" ? "Admin" : value === "client" ? "Client" : "Translator"}Title`),
+        shortDesc: t(`invite.role${value === "editor" ? "Editor" : value === "admin" ? "Admin" : value === "client" ? "Client" : "Translator"}Desc`),
+        longDesc: t(`invite.role${value === "editor" ? "Editor" : value === "admin" ? "Admin" : value === "client" ? "Client" : "Translator"}Long`),
+        color: ROLE_COLORS[value],
+      })),
+    [t],
+  );
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -116,19 +99,19 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
       <div className="mb-5 flex items-start justify-between">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-            {step === "sent" ? "Invite sent" : "Invite a new member"}
+            {step === "sent" ? t("invite.sent") : t("invite.title")}
           </h2>
           <p className="mt-0.5 text-[13px] text-neutral-500">
-            {step === "role" && "Pick what this person should be able to do."}
-            {step === "details" && "Who are you inviting?"}
-            {step === "sent" && "They can now sign in."}
+            {step === "role" && t("invite.stepRoleSubtitle")}
+            {step === "details" && t("invite.stepDetailsSubtitle")}
+            {step === "sent" && t("invite.stepSentSubtitle")}
           </p>
         </div>
         <button
           type="button"
           onClick={() => !submitting && onClose()}
           className="-mr-2 -mt-1 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
-          aria-label="Close"
+          aria-label={t("invite.close")}
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -192,11 +175,11 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
         <div className="space-y-4">
           <div>
             <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-              Email
+              {t("invite.emailLabel")}
             </label>
             <Input
               type="email"
-              placeholder="client@example.com"
+              placeholder={t("projectSettings.emailPlaceholder")}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoFocus
@@ -204,17 +187,22 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
           </div>
           <div>
             <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-              Name (optional)
+              {t("invite.nameLabel")}
             </label>
             <Input
-              placeholder="Alex Müller"
+              placeholder={t("invite.namePlaceholder")}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="rounded-lg bg-neutral-50 px-3 py-2 text-[12px] text-neutral-600">
-            They will be added as a <strong>{ROLES.find((r) => r.value === role)?.title}</strong>.
-          </div>
+          <div className="rounded-lg bg-neutral-50 px-3 py-2 text-[12px] text-neutral-600"
+            // eslint-disable-next-line react/no-danger
+            dangerouslySetInnerHTML={{
+              __html: t("invite.addAs", {
+                role: `<strong>${ROLES.find((r) => r.value === role)?.title ?? ""}</strong>`,
+              }),
+            }}
+          />
           {error && <p className="text-sm text-red-600">{error}</p>}
         </div>
       )}
@@ -229,12 +217,16 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[14px] font-semibold text-green-900">
-                {result.emailSent ? "Email delivered" : "Invite created"}
+                {result.emailSent ? t("invite.emailDelivered") : t("invite.inviteCreated")}
               </p>
               <p className="mt-0.5 text-[12px] leading-relaxed text-green-800/80">
                 {result.emailSent
-                  ? `We emailed ${email} a ${role === "client" ? "branded sign-in link" : "GitHub sign-in link"}.`
-                  : "Email isn't configured on this server — copy the link below and send it yourself."}
+                  ? t("invite.deliveredDescription", {
+                      email,
+                      linkType:
+                        role === "client" ? t("invite.brandedSignInLink") : t("invite.githubSignInLink"),
+                    })
+                  : t("invite.copyFallback")}
               </p>
             </div>
           </div>
@@ -248,7 +240,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
                 onClick={() => void navigator.clipboard.writeText(result.inviteLink)}
                 className="rounded-md bg-neutral-900 px-3 py-2 text-[11px] font-medium text-white hover:bg-neutral-700"
               >
-                Copy
+                {t("invite.copy")}
               </button>
             </div>
           )}
@@ -265,7 +257,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
           disabled={submitting}
           className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-50"
         >
-          {step === "details" ? "Back" : step === "sent" ? "Close" : "Cancel"}
+          {step === "details" ? t("invite.back") : step === "sent" ? t("invite.close") : t("invite.cancel")}
         </button>
 
         {step === "role" && (
@@ -274,7 +266,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
             onClick={() => setStep("details")}
             className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-neutral-900 px-5 text-[13px] font-semibold text-white shadow-sm hover:bg-neutral-800"
           >
-            Continue
+            {t("invite.continueBtn")}
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
@@ -294,10 +286,10 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
             {submitting ? (
               <>
                 <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Sending…
+                {t("invite.sending")}
               </>
             ) : (
-              "Send invite"
+              t("invite.sendInvite")
             )}
           </button>
         )}
@@ -313,7 +305,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
             }}
             className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-4 text-[13px] font-semibold text-neutral-700 hover:bg-neutral-50"
           >
-            Invite another
+            {t("invite.inviteAnother")}
           </button>
         )}
       </div>

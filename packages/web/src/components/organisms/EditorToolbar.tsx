@@ -51,8 +51,8 @@ export function EditorToolbar({
   });
 
   return (
-    <header className="border-b border-neutral-200/90 bg-white/95 backdrop-blur-sm">
-      <div className="relative flex items-center gap-x-4 px-4 py-2.5">
+    <header className="h-14 shrink-0 border-b border-neutral-200/90 bg-white/95 backdrop-blur-sm">
+      <div className="relative flex h-full items-center gap-x-4 px-4">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {isClient ? (
             <div className="flex shrink-0 items-center gap-2">

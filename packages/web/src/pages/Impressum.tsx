@@ -54,8 +54,8 @@ export function ImpressumPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-neutral-50 to-neutral-100">
-      <header className="border-b border-neutral-200 bg-white/80 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-2xl items-center gap-3 px-6 py-4">
+      <header className="flex h-14 shrink-0 items-center border-b border-neutral-200 bg-white/80 backdrop-blur-sm">
+        <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-6">
           <Link to="/" className="flex items-center gap-2 no-underline">
             <LogoMark size={22} />
             <span className="font-brand text-lg font-bold text-neutral-900">{org.instanceName}</span>

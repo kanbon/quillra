@@ -145,13 +145,13 @@ export function InstanceSettingsPage() {
 
   return (
     <div className="min-h-screen bg-neutral-50">
-      <header className="border-b border-neutral-200 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-3xl items-center gap-3">
+      <header className="flex h-14 shrink-0 items-center border-b border-neutral-200 bg-white px-4">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
           <Link to="/dashboard" className="flex items-center gap-2 no-underline">
             <LogoMark size={22} />
           </Link>
           <div className="h-6 w-px bg-neutral-200" />
-          <Heading as="h1" className="text-lg font-semibold">{t("instanceSettings.title")}</Heading>
+          <Heading as="h1" className="text-base font-semibold">{t("instanceSettings.title")}</Heading>
         </div>
       </header>
 

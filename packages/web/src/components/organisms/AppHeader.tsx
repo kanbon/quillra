@@ -25,7 +25,7 @@ export function AppHeader({ showNav, projectId }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <header className="flex h-12 items-center justify-between border-b border-neutral-200/90 bg-white px-4">
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200/90 bg-white px-4">
       <Link to="/dashboard" className="flex items-center gap-2 no-underline hover:opacity-90">
         <LogoMark size={22} />
         <span className="font-brand text-lg font-bold text-neutral-900">{t("login.appName")}</span>

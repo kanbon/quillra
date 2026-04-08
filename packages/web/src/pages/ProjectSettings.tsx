@@ -69,16 +69,16 @@ function initialsOf(name: string): string {
   );
 }
 
-function roleBadgeColor(role: string): { bg: string; text: string; label: string } {
+function roleBadgeColor(role: string, t: (k: string) => string): { bg: string; text: string; label: string } {
   switch (role) {
     case "admin":
-      return { bg: "bg-red-100", text: "text-red-700", label: "Admin" };
+      return { bg: "bg-red-100", text: "text-red-700", label: t("projectSettings.roleAdmin") };
     case "editor":
-      return { bg: "bg-blue-100", text: "text-blue-700", label: "Collaborator" };
+      return { bg: "bg-blue-100", text: "text-blue-700", label: t("projectSettings.roleCollaborator") };
     case "client":
-      return { bg: "bg-purple-100", text: "text-purple-700", label: "Client" };
+      return { bg: "bg-purple-100", text: "text-purple-700", label: t("projectSettings.roleClient") };
     case "translator":
-      return { bg: "bg-emerald-100", text: "text-emerald-700", label: "Translator" };
+      return { bg: "bg-emerald-100", text: "text-emerald-700", label: t("projectSettings.roleTranslator") };
     default:
       return { bg: "bg-neutral-100", text: "text-neutral-700", label: role };
   }
@@ -276,7 +276,7 @@ export function ProjectSettingsPage() {
         {/* Page heading */}
         <div className="mb-8">
           <Heading as="h1" className="text-[26px] font-semibold tracking-tight text-neutral-900">
-            Project settings
+            {t("projectSettings.pageTitle")}
           </Heading>
           <p className="mt-1 text-sm text-neutral-500">
             {projectQ.data?.name ?? "…"} — {projectQ.data?.githubRepoFullName ?? ""}
@@ -287,8 +287,8 @@ export function ProjectSettingsPage() {
           {/* Brand section */}
           {isAdmin && (
             <SectionCard
-              title="Brand"
-              description="Name and logo your clients see on the branded sign-in page."
+              title={t("projectSettings.brandSection")}
+              description={t("projectSettings.brandDescription")}
             >
               <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                 <div className="flex flex-col items-center gap-2">
@@ -389,8 +389,8 @@ export function ProjectSettingsPage() {
           {/* Git connection section */}
           {isAdmin && (
             <SectionCard
-              title="Git connection"
-              description="Which repository and branch this project edits. Changing these reclones the workspace."
+              title={t("projectSettings.gitConnection")}
+              description={t("projectSettings.gitConnectionDescription")}
             >
               <div className="space-y-5" >
                 <GitHubRepoBranchFields
@@ -473,7 +473,7 @@ export function ProjectSettingsPage() {
                     form="project-form"
                     disabled={projectSubmitting || patchProject.isPending}
                   >
-                    {patchProject.isPending ? "Saving…" : "Save changes"}
+                    {patchProject.isPending ? t("projectSettings.saving") : t("projectSettings.saveChanges")}
                   </Button>
                 </div>
               </div>
@@ -482,20 +482,21 @@ export function ProjectSettingsPage() {
 
           {/* Team section */}
           <SectionCard
-            title="Team"
+            title={t("projectSettings.teamSection")}
             description={
               isAdmin
-                ? "Everyone who can edit this site. Invite clients or collaborators."
-                : "Everyone who can edit this site."
+                ? t("projectSettings.teamSectionDescriptionAdmin")
+                : t("projectSettings.teamSectionDescriptionViewer")
             }
           >
             {/* Header row with count + invite button */}
             <div className="mb-3 flex items-center justify-between">
               <p className="text-[12px] font-medium text-neutral-500">
-                {(membersQ.data?.members ?? []).length}{" "}
-                {(membersQ.data?.members ?? []).length === 1 ? "member" : "members"}
+                {(membersQ.data?.members ?? []).length === 1
+                  ? t("projectSettings.memberCount")
+                  : t("projectSettings.membersCount", { count: (membersQ.data?.members ?? []).length })}
                 {pendingInvitesQ.data && pendingInvitesQ.data.invites.length > 0 && (
-                  <> · {pendingInvitesQ.data.invites.length} pending</>
+                  <> · {pendingInvitesQ.data.invites.length} {t("projectSettings.pendingInvites").toLowerCase()}</>
                 )}
               </p>
               {isAdmin && (
@@ -507,7 +508,7 @@ export function ProjectSettingsPage() {
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
-                  Invite
+                  {t("projectSettings.inviteButton")}
                 </button>
               )}
             </div>
@@ -515,10 +516,10 @@ export function ProjectSettingsPage() {
             {/* Members table */}
             <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 bg-white">
               {(membersQ.data?.members ?? []).length === 0 ? (
-                <p className="px-4 py-6 text-center text-[12px] text-neutral-400">No members yet.</p>
+                <p className="px-4 py-6 text-center text-[12px] text-neutral-400">{t("projectSettings.noMembers")}</p>
               ) : (
                 (membersQ.data?.members ?? []).map((m) => {
-                  const badge = roleBadgeColor(m.role);
+                  const badge = roleBadgeColor(m.role, t);
                   return (
                     <div key={m.id} className="flex items-center gap-3 px-4 py-3">
                       {m.image ? (
@@ -539,14 +540,14 @@ export function ProjectSettingsPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (confirm(`Remove ${m.name || m.email} from this project?`)) {
+                            if (confirm(`${t("projectSettings.removeMember")}?`)) {
                               removeMember.mutate(m.id);
                             }
                           }}
                           disabled={removeMember.isPending}
                           className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-                          title="Remove from project"
-                          aria-label="Remove from project"
+                          title={t("projectSettings.removeMember")}
+                          aria-label={t("projectSettings.removeMember")}
                         >
                           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -563,11 +564,11 @@ export function ProjectSettingsPage() {
             {isAdmin && pendingInvitesQ.data && pendingInvitesQ.data.invites.length > 0 && (
               <div className="mt-4">
                 <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
-                  Pending invites
+                  {t("projectSettings.pendingInvites")}
                 </p>
                 <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-dashed border-neutral-200 bg-neutral-50/50">
                   {pendingInvitesQ.data.invites.map((inv) => {
-                    const badge = roleBadgeColor(inv.role);
+                    const badge = roleBadgeColor(inv.role, t);
                     return (
                       <div key={inv.id} className="flex items-center gap-3 px-4 py-3">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-dashed border-neutral-300 text-neutral-400">
@@ -578,7 +579,7 @@ export function ProjectSettingsPage() {
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-[13px] font-medium text-neutral-800">{inv.email}</p>
                           <p className="text-[11px] text-neutral-400">
-                            Expires {new Date(inv.expiresAt).toLocaleDateString()}
+                            {t("projectSettings.expires", { date: new Date(inv.expiresAt).toLocaleDateString() })}
                           </p>
                         </div>
                         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", badge.bg, badge.text)}>
@@ -590,7 +591,7 @@ export function ProjectSettingsPage() {
                           disabled={revokeInvite.isPending}
                           className="text-[11px] font-medium text-neutral-500 underline-offset-2 hover:text-red-600 hover:underline disabled:opacity-50"
                         >
-                          Revoke
+                          {t("projectSettings.revoke")}
                         </button>
                       </div>
                     );
@@ -604,18 +605,17 @@ export function ProjectSettingsPage() {
           {isAdmin && projectQ.data && (
             <div className="overflow-hidden rounded-2xl border border-red-200 bg-red-50/40 shadow-sm">
               <header className="border-b border-red-200 bg-red-50/60 px-6 py-4">
-                <h2 className="text-[15px] font-semibold tracking-tight text-red-900">Danger zone</h2>
+                <h2 className="text-[15px] font-semibold tracking-tight text-red-900">{t("projectSettings.dangerZone")}</h2>
                 <p className="mt-0.5 text-[13px] text-red-800/80">
-                  Destructive actions. These cannot be undone.
+                  {t("projectSettings.dangerZoneDescription")}
                 </p>
               </header>
               <div className="p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[14px] font-medium text-red-900">Delete this project</p>
+                    <p className="text-[14px] font-medium text-red-900">{t("projectSettings.deleteProject")}</p>
                     <p className="mt-1 text-[13px] text-red-800/80">
-                      Removes the project from Quillra, stops the live preview, and wipes its cloned workspace.{" "}
-                      <strong>Your GitHub repository is not touched.</strong>
+                      {t("projectSettings.deleteProjectDescription")}
                     </p>
                   </div>
                   <button
@@ -626,7 +626,7 @@ export function ProjectSettingsPage() {
                     }}
                     className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3.5 text-[13px] font-semibold text-red-700 transition-colors hover:bg-red-50"
                   >
-                    Delete
+                    {t("projectSettings.deleteButton")}
                   </button>
                 </div>
               </div>
@@ -658,16 +658,15 @@ export function ProjectSettingsPage() {
             </svg>
           </div>
           <div>
-            <h3 className="text-[17px] font-semibold tracking-tight text-neutral-900">Delete this project?</h3>
+            <h3 className="text-[17px] font-semibold tracking-tight text-neutral-900">{t("projectSettings.deleteModalTitle")}</h3>
             <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">
-              This cannot be undone. The project, its conversations, members, and local workspace will all be
-              removed. Your GitHub repository is not affected.
+              {t("projectSettings.deleteModalBody")}
             </p>
           </div>
         </div>
         <div>
           <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-            To confirm, type{" "}
+            {t("projectSettings.deleteConfirmLabel")}{" "}
             <code className="rounded bg-neutral-100 px-1 font-mono text-[11px] text-neutral-700">
               {projectQ.data?.name ?? ""}
             </code>
@@ -682,7 +681,7 @@ export function ProjectSettingsPage() {
         </div>
         {deleteProject.isError && (
           <p className="mt-2 text-sm text-red-600">
-            {(deleteProject.error as Error)?.message ?? "Failed to delete"}
+            {(deleteProject.error as Error)?.message ?? t("projectSettings.deleteFailed")}
           </p>
         )}
         <div className="mt-6 flex items-center justify-end gap-2">
@@ -712,10 +711,10 @@ export function ProjectSettingsPage() {
             {deleteProject.isPending ? (
               <>
                 <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Deleting…
+                {t("projectSettings.deleteButtonLoading")}
               </>
             ) : (
-              "Delete forever"
+              t("projectSettings.deleteButtonFinal")
             )}
           </button>
         </div>
