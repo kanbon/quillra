@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { account } from "../db/auth-schema.js";
+import { account, user } from "../db/auth-schema.js";
 import { conversations, messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
@@ -450,17 +450,60 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
+
+    // Visibility rules:
+    //   - clients only see their own conversations
+    //   - admins / editors / translators see every conversation in the
+    //     project, with an optional ?userId=... filter for the UI's
+    //     "show only this person" dropdown
+    const filterUserId = c.req.query("userId");
+    const whereExpr =
+      m.role === "client"
+        ? and(eq(conversations.projectId, projectId), eq(conversations.createdByUserId, r.user.id))
+        : filterUserId
+          ? and(eq(conversations.projectId, projectId), eq(conversations.createdByUserId, filterUserId))
+          : eq(conversations.projectId, projectId);
+
     const rows = await db
-      .select()
+      .select({
+        id: conversations.id,
+        title: conversations.title,
+        updatedAt: conversations.updatedAt,
+        createdByUserId: conversations.createdByUserId,
+      })
       .from(conversations)
-      .where(eq(conversations.projectId, projectId))
+      .where(whereExpr)
       .orderBy(desc(conversations.updatedAt))
-      .limit(50);
+      .limit(100);
+
+    // Enrich with the creator's name/email so the UI can show who wrote
+    // each chat without a second round-trip. Only do the join for non-
+    // client roles — clients already know it's all themselves.
+    type Author = { id: string; name: string; email: string; image: string | null };
+    const authors = new Map<string, Author>();
+    if (m.role !== "client") {
+      const uniqueUserIds = Array.from(
+        new Set(rows.map((r) => r.createdByUserId).filter((v): v is string => !!v)),
+      );
+      if (uniqueUserIds.length > 0) {
+        const users = await db
+          .select({ id: user.id, name: user.name, email: user.email, image: user.image })
+          .from(user);
+        for (const u of users) {
+          if (uniqueUserIds.includes(u.id)) authors.set(u.id, u);
+        }
+      }
+    }
+
     return c.json({
+      viewerRole: m.role,
+      canSeeAll: m.role !== "client",
       conversations: rows.map((x) => ({
         id: x.id,
         title: x.title,
         updatedAt: x.updatedAt.getTime(),
+        createdByUserId: x.createdByUserId,
+        author: x.createdByUserId ? authors.get(x.createdByUserId) ?? null : null,
       })),
     });
   })

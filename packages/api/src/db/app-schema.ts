@@ -110,6 +110,12 @@ export const conversations = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    /**
+     * The user who started the conversation. Drives visibility rules:
+     * clients see only their own conversations, admins/editors see every
+     * member's conversations (with a user filter in the UI).
+     */
+    createdByUserId: text("created_by_user_id"),
     title: text("title"),
     agentSessionId: text("agent_session_id"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })

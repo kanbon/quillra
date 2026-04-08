@@ -482,6 +482,7 @@ app.get(
             await db.insert(conversations).values({
               id: convId,
               projectId,
+              createdByUserId: session.user.id,
               title: parsed.content.slice(0, 100),
               createdAt: new Date(),
               updatedAt: new Date(),

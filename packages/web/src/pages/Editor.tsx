@@ -28,10 +28,18 @@ type PublishStatus = {
   summary?: string;
 };
 
+type ConvAuthor = { id: string; name: string; email: string; image: string | null };
 type Conversation = {
   id: string;
   title: string | null;
   updatedAt: number;
+  createdByUserId: string | null;
+  author: ConvAuthor | null;
+};
+type ConversationsResponse = {
+  viewerRole: string;
+  canSeeAll: boolean;
+  conversations: Conversation[];
 };
 
 export function EditorPage() {
@@ -80,10 +88,34 @@ export function EditorPage() {
     enabled: Boolean(id),
   });
 
+  const [convFilterUserId, setConvFilterUserId] = useState<string | null>(null);
   const { data: convList } = useQuery({
-    queryKey: ["conversations", id],
-    queryFn: () => apiJson<{ conversations: Conversation[] }>(`/api/projects/${id}/conversations`),
+    queryKey: ["conversations", id, convFilterUserId],
+    queryFn: () =>
+      apiJson<ConversationsResponse>(
+        convFilterUserId
+          ? `/api/projects/${id}/conversations?userId=${encodeURIComponent(convFilterUserId)}`
+          : `/api/projects/${id}/conversations`,
+      ),
     enabled: Boolean(id),
+  });
+
+  // Project members list — only fetched when the current viewer can see
+  // other people's chats, so clients don't waste a request on a list
+  // they can't use anyway.
+  const membersQ = useQuery({
+    queryKey: ["members", id],
+    enabled: Boolean(id) && Boolean(convList?.canSeeAll),
+    queryFn: () =>
+      apiJson<{
+        members: {
+          id: string;
+          userId: string;
+          name: string;
+          email: string;
+          role: string;
+        }[];
+      }>(`/api/team/projects/${id}/members`),
   });
 
   // Auto-select the most recent conversation on initial load only
@@ -250,25 +282,69 @@ export function EditorPage() {
           {/* History sidebar (overlay) */}
           {showHistory && (
             <div className="border-b border-neutral-200 bg-white">
-              <div className="max-h-48 overflow-y-auto">
+              {/* Admin/editor/translator user filter — clients never see this */}
+              {convList?.canSeeAll && (
+                <div className="flex items-center gap-2 border-b border-neutral-100 bg-neutral-50/50 px-3 py-2">
+                  <svg className="h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                  <select
+                    value={convFilterUserId ?? ""}
+                    onChange={(e) => setConvFilterUserId(e.target.value || null)}
+                    className="h-7 flex-1 rounded-md border border-neutral-200 bg-white px-2 text-xs text-neutral-700 focus:border-neutral-900 focus:outline-none focus:ring-0"
+                  >
+                    <option value="">All members</option>
+                    {membersQ.data?.members.map((m) => (
+                      <option key={m.id} value={m.userId}>
+                        {m.name || m.email} · {m.role}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="max-h-64 overflow-y-auto">
                 {convList?.conversations?.length ? (
                   convList.conversations.map((conv) => (
                     <button
                       key={conv.id}
                       type="button"
-                      className={`flex w-full items-center gap-2 border-b border-neutral-100 px-3 py-2.5 text-left text-xs transition-colors hover:bg-neutral-50 ${conv.id === conversationId ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600"}`}
+                      className={`flex w-full items-start gap-2.5 border-b border-neutral-100 px-3 py-2.5 text-left text-xs transition-colors hover:bg-neutral-50 ${conv.id === conversationId ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600"}`}
                       onClick={() => {
                         setConversationId(conv.id);
                         setShowHistory(false);
                       }}
                     >
-                      <svg className="h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                      </svg>
-                      <span className="min-w-0 truncate">{conv.title || t("chat.untitled")}</span>
-                      <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
-                        {new Date(conv.updatedAt).toLocaleDateString()}
-                      </span>
+                      {/* Author avatar (admin view only) */}
+                      {convList?.canSeeAll && conv.author ? (
+                        conv.author.image ? (
+                          <img
+                            src={conv.author.image}
+                            alt=""
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-neutral-200 to-neutral-300 text-[8px] font-semibold text-neutral-600">
+                            {(conv.author.name?.[0] ?? conv.author.email[0] ?? "?").toUpperCase()}
+                          </div>
+                        )
+                      ) : (
+                        <svg className="mt-1 h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                        </svg>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate">{conv.title || t("chat.untitled")}</span>
+                          <span className="shrink-0 text-[10px] text-neutral-400">
+                            {new Date(conv.updatedAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        {convList?.canSeeAll && conv.author && (
+                          <p className="mt-0.5 truncate text-[10px] text-neutral-400">
+                            {conv.author.name || conv.author.email}
+                          </p>
+                        )}
+                      </div>
                     </button>
                   ))
                 ) : (
