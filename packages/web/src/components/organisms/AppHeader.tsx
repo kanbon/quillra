@@ -2,6 +2,7 @@ import { Link, NavLink } from "react-router-dom";
 import { Button } from "@/components/atoms/Button";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { authClient } from "@/lib/auth-client";
+import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -18,19 +19,20 @@ const tabClass = ({ isActive }: { isActive: boolean }) =>
   );
 
 export function AppHeader({ showNav, projectId }: Props) {
+  const { t } = useT();
   return (
     <header className="flex h-12 items-center justify-between border-b border-neutral-200/90 bg-white px-4">
       <Link to="/dashboard" className="flex items-center gap-2 no-underline hover:opacity-90">
         <LogoMark size={22} />
-        <span className="font-brand text-lg font-bold text-neutral-900">Quillra</span>
+        <span className="font-brand text-lg font-bold text-neutral-900">{t("login.appName")}</span>
       </Link>
       {showNav && projectId && (
-        <nav className="flex items-center gap-1 rounded-xl bg-neutral-100/90 p-1" aria-label="Project">
+        <nav className="flex items-center gap-1 rounded-xl bg-neutral-100/90 p-1" aria-label={t("toolbar.project")}>
           <NavLink to={`/p/${projectId}`} end className={tabClass}>
-            Editor
+            {t("toolbar.editor")}
           </NavLink>
           <NavLink to={`/p/${projectId}/settings`} className={tabClass}>
-            Project
+            {t("toolbar.project")}
           </NavLink>
         </nav>
       )}
@@ -40,7 +42,7 @@ export function AppHeader({ showNav, projectId }: Props) {
         className="text-xs text-neutral-500"
         onClick={() => authClient.signOut({ fetchOptions: { credentials: "include" } })}
       >
-        Sign out
+        {t("toolbar.signOut")}
       </Button>
     </header>
   );

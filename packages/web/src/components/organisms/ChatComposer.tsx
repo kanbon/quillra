@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { Textarea } from "@/components/atoms/Textarea";
+import { useT } from "@/i18n/i18n";
 import type { Attachment } from "@/lib/chat-store";
 
 type StagedFile = {
@@ -32,6 +33,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   { projectId, onSend, disabled },
   ref,
 ) {
+  const { t } = useT();
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -151,14 +153,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
                 )}
                 {s.status === "error" && (
                   <div className="absolute inset-0 flex items-center justify-center bg-red-500/80 text-[10px] font-medium text-white">
-                    Failed
+                    {t("composer.failed")}
                   </div>
                 )}
                 <button
                   type="button"
                   onClick={() => removeStaged(s.id)}
                   className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900/70 text-xs leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
-                  aria-label="Remove"
+                  aria-label={t("composer.remove")}
                 >
                   ×
                 </button>
@@ -171,7 +173,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Ask Quillra to edit your site…"
+          placeholder={t("composer.placeholder")}
           disabled={disabled}
           rows={1}
           className="block w-full resize-none border-0 bg-transparent px-5 pb-2 pt-4 text-[15px] leading-6 text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
@@ -190,8 +192,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled}
               className="flex h-9 w-9 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-40"
-              title="Attach images"
-              aria-label="Attach images"
+              title={t("composer.attachImages")}
+              aria-label={t("composer.attachImages")}
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -215,8 +217,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             onClick={submit}
             disabled={!canSend}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-neutral-900 text-white shadow-sm transition-all hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 disabled:shadow-none"
-            title={uploadingCount > 0 ? "Uploading…" : "Send"}
-            aria-label="Send"
+            title={uploadingCount > 0 ? t("composer.uploading") : t("composer.send")}
+            aria-label={t("composer.send")}
           >
             {uploadingCount > 0 ? (
               <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />

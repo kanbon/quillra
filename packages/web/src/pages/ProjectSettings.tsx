@@ -12,6 +12,7 @@ import { AppHeader } from "@/components/organisms/AppHeader";
 import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchFields";
 import { apiJson } from "@/lib/api";
 import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
+import { useT } from "@/i18n/i18n";
 
 const inviteSchema = z.object({
   email: z.string().email(),
@@ -38,6 +39,7 @@ function inferDisplayNameMode(name: string, repoFull: string): "repo" | "full" |
 }
 
 export function ProjectSettingsPage() {
+  const { t } = useT();
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
   const qc = useQueryClient();
@@ -148,20 +150,19 @@ export function ProjectSettingsPage() {
       <AppHeader showNav projectId={id} />
       <main className="mx-auto max-w-lg px-4 py-10">
         <Heading as="h1" className="mb-2 text-2xl font-semibold tracking-tight">
-          Team & project
+          {t("projectSettings.teamProjectHeading")}
         </Heading>
         <p className="mb-8 text-sm text-neutral-600">
-          Invites are scoped to this repository only—not a separate organization product.
+          {t("projectSettings.teamProjectHelp")}
         </p>
 
         {isAdmin && (
           <div className="mb-10 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
             <Heading as="h2" className="mb-1 text-base font-semibold">
-              Git connection
+              {t("projectSettings.gitConnection")}
             </Heading>
             <p className="mb-4 text-sm text-neutral-600">
-              Changing the repository or branch clears the server workspace and reclones on next preview or
-              agent action.
+              {t("projectSettings.gitConnectionHelp")}
             </p>
             <form
               className="flex flex-col gap-4"
@@ -193,21 +194,21 @@ export function ProjectSettingsPage() {
               )}
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">Project display name</label>
+                <label className="mb-1 block text-xs font-medium text-neutral-600">{t("connectForm.displayName")}</label>
                 <select
                   className={selectLikeInputClassName()}
                   value={displayNameMode}
                   disabled={projectSubmitting || patchProject.isPending}
                   onChange={(e) => setDisplayNameMode(e.target.value as "repo" | "full" | "custom")}
                 >
-                  <option value="repo">Use repository name ({slug})</option>
-                  <option value="full">Use owner / repository ({fullPretty})</option>
-                  <option value="custom">Custom…</option>
+                  <option value="repo">{t("connectForm.useRepoName", { slug })}</option>
+                  <option value="full">{t("connectForm.useOwnerRepo", { fullPretty })}</option>
+                  <option value="custom">{t("connectForm.custom")}</option>
                 </select>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-neutral-600">
-                  {displayNameMode === "custom" ? "Custom name" : "Shown in the app"}
+                  {displayNameMode === "custom" ? t("connectForm.customName") : t("connectForm.shownInApp")}
                 </label>
                 {displayNameMode === "custom" ? (
                   <>
@@ -225,17 +226,17 @@ export function ProjectSettingsPage() {
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-neutral-600">
-                  Dev preview command (optional)
+                  {t("connectForm.devCommandLabel")}
                 </label>
                 <Textarea
                   rows={2}
                   className="font-mono text-xs"
-                  placeholder="Leave empty for auto-detect"
+                  placeholder={t("projectSettings.devCommandPlaceholder")}
                   {...registerProject("previewDevCommand")}
                 />
               </div>
               <Button type="submit" disabled={projectSubmitting || patchProject.isPending}>
-                Save project
+                {t("projectSettings.saveProject")}
               </Button>
             </form>
           </div>
@@ -243,7 +244,7 @@ export function ProjectSettingsPage() {
 
         <div className="mb-8">
           <Heading as="h2" className="mb-3 text-base font-semibold">
-            Members
+            {t("projectSettings.members")}
           </Heading>
           <ul className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
             {(membersQ.data?.members ?? []).map((m) => (
@@ -258,10 +259,10 @@ export function ProjectSettingsPage() {
         {isAdmin && (
           <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
             <Heading as="h2" className="mb-1 text-base font-semibold">
-              Invite by email
+              {t("projectSettings.inviteByEmail")}
             </Heading>
             <p className="mb-4 text-sm text-neutral-600">
-              They must sign in with GitHub using the same email (or accept via your configured flow).
+              {t("projectSettings.inviteByEmailHelp")}
             </p>
             <form
               className="flex flex-col gap-3"
@@ -275,17 +276,17 @@ export function ProjectSettingsPage() {
                 void membersQ.refetch();
               })}
             >
-              <Input type="email" placeholder="client@example.com" {...registerInvite("email")} />
+              <Input type="email" placeholder={t("projectSettings.emailPlaceholder")} {...registerInvite("email")} />
               <select
                 className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
                 {...registerInvite("role")}
               >
-                <option value="editor">Editor</option>
-                <option value="translator">Translator</option>
-                <option value="admin">Admin</option>
+                <option value="editor">{t("projectSettings.roleEditor")}</option>
+                <option value="translator">{t("projectSettings.roleTranslator")}</option>
+                <option value="admin">{t("projectSettings.roleAdmin")}</option>
               </select>
               <Button type="submit" disabled={inviteSubmitting}>
-                Create invite
+                {t("projectSettings.createInvite")}
               </Button>
             </form>
           </div>

@@ -5,6 +5,7 @@ import { AppHeader } from "@/components/organisms/AppHeader";
 import { ConnectProjectForm } from "@/components/organisms/ConnectProjectForm";
 import { ProjectCard } from "@/components/organisms/ProjectCard";
 import { apiJson } from "@/lib/api";
+import { useT } from "@/i18n/i18n";
 
 type ProjectRow = {
   id: string;
@@ -15,6 +16,7 @@ type ProjectRow = {
 };
 
 export function DashboardPage() {
+  const { t } = useT();
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiJson<{ projects: ProjectRow[] }>("/api/projects"),
@@ -24,7 +26,7 @@ export function DashboardPage() {
     return (
       <div className="min-h-screen bg-neutral-50">
         <AppHeader />
-        <div className="flex justify-center p-12 text-sm text-neutral-500">Loading…</div>
+        <div className="flex justify-center p-12 text-sm text-neutral-500">{t("common.loading")}</div>
       </div>
     );
   }
@@ -38,14 +40,12 @@ export function DashboardPage() {
       <main className="mx-auto max-w-5xl px-4 py-10">
         {empty ? (
           <div className="mx-auto max-w-xl rounded-2xl border border-neutral-200/80 bg-white p-8 shadow-sm">
-            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-brand">Self-hosted</p>
+            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-brand">{t("dashboard.selfHosted")}</p>
             <Heading as="h1" className="mb-2 text-2xl font-semibold tracking-tight">
-              Connect your first site
+              {t("dashboard.connectFirst")}
             </Heading>
             <p className="mb-8 text-sm leading-relaxed text-neutral-600">
-              Point Quillra at a GitHub repository you control. After you sign in, the server clones it,
-              runs a dev preview when you ask, and can push commits so your existing host (Pages, Vercel,
-              Netlify, your VPS) deploys from Git—no multi-tenant SaaS layer required.
+              {t("dashboard.connectFirstDescription")}
             </p>
             <ConnectProjectForm
               onCreated={() => {
@@ -58,9 +58,9 @@ export function DashboardPage() {
             <div className="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <Heading as="h1" className="text-2xl font-semibold tracking-tight">
-                  Sites
+                  {t("dashboard.sitesHeading")}
                 </Heading>
-                <p className="text-sm text-neutral-600">Open a project to chat, preview, and publish.</p>
+                <p className="text-sm text-neutral-600">{t("dashboard.sitesSubheading")}</p>
               </div>
             </div>
 
@@ -79,10 +79,10 @@ export function DashboardPage() {
 
             <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
               <Heading as="h2" className="mb-1 text-lg font-semibold">
-                Connect another repository
+                {t("dashboard.connectAnother")}
               </Heading>
               <p className="mb-4 text-sm text-neutral-600">
-                Same instance—each repo is a separate project with its own team access.
+                {t("dashboard.connectAnotherDescription")}
               </p>
               <ConnectProjectForm
                 onCreated={() => {
@@ -95,7 +95,7 @@ export function DashboardPage() {
 
         <p className="mt-10 text-center">
           <Link to="/accept-invite" className="text-sm text-neutral-600 underline-offset-4 hover:underline">
-            Have an invite link?
+            {t("dashboard.haveInvite")}
           </Link>
         </p>
       </main>

@@ -4,8 +4,10 @@ import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { authClient } from "@/lib/auth-client";
+import { useT } from "@/i18n/i18n";
 
 export function LoginPage() {
+  const { t } = useT();
   const nav = useNavigate();
   const { data, isPending } = authClient.useSession();
 
@@ -19,11 +21,11 @@ export function LoginPage() {
         <div className="mb-6 flex items-center gap-2">
           <LogoMark size={32} />
           <Heading as="h1" className="font-brand text-2xl font-bold">
-            Quillra
+            {t("login.appName")}
           </Heading>
         </div>
         <p className="mb-6 text-sm leading-relaxed text-neutral-600">
-          Sign in to edit repos you have connected on this instance—chat, live preview, and publish to GitHub.
+          {t("login.intro")}
         </p>
         <Button
           className="w-full"
@@ -36,7 +38,7 @@ export function LoginPage() {
             })
           }
         >
-          Continue with GitHub
+          {t("login.continueWithGithub")}
         </Button>
       </div>
     </div>

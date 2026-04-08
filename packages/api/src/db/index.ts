@@ -30,5 +30,8 @@ function ensureColumn(table: string, column: string, definition: string) {
 try {
   ensureColumn("messages", "attachments", "TEXT");
 } catch { /* table may not exist yet on a fresh init */ }
+try {
+  ensureColumn("user", "language", "TEXT");
+} catch { /* table may not exist yet on a fresh init */ }
 
 export const db = drizzle(sqlite, { schema });

@@ -9,6 +9,7 @@ import { Textarea } from "@/components/atoms/Textarea";
 import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchFields";
 import { apiJson } from "@/lib/api";
 import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
+import { useT } from "@/i18n/i18n";
 
 const schema = z.object({
   name: z.string().min(1, "Name required"),
@@ -25,6 +26,7 @@ type Form = z.infer<typeof schema>;
 type Props = { onCreated: () => void };
 
 export function ConnectProjectForm({ onCreated }: Props) {
+  const { t } = useT();
   const [preferManualGit, setPreferManualGit] = useState(false);
   const [displayNameMode, setDisplayNameMode] = useState<"repo" | "full" | "custom">("repo");
   const seededRepo = useRef(false);
@@ -112,25 +114,25 @@ export function ConnectProjectForm({ onCreated }: Props) {
       </div>
 
       <div className="sm:col-span-1">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Project display name</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">{t("connectForm.displayName")}</label>
         <select
           className={selectLikeInputClassName()}
           value={displayNameMode}
           disabled={isSubmitting}
           onChange={(e) => setDisplayNameMode(e.target.value as "repo" | "full" | "custom")}
         >
-          <option value="repo">Use repository name ({slug})</option>
-          <option value="full">Use owner / repository ({fullPretty})</option>
-          <option value="custom">Custom…</option>
+          <option value="repo">{t("connectForm.useRepoName", { slug })}</option>
+          <option value="full">{t("connectForm.useOwnerRepo", { fullPretty })}</option>
+          <option value="custom">{t("connectForm.custom")}</option>
         </select>
       </div>
       <div className="sm:col-span-1">
         <label className="mb-1 block text-xs font-medium text-neutral-600">
-          {displayNameMode === "custom" ? "Custom name" : "Shown in the app"}
+          {displayNameMode === "custom" ? t("connectForm.customName") : t("connectForm.shownInApp")}
         </label>
         {displayNameMode === "custom" ? (
           <>
-            <Input placeholder="Client homepage" {...register("name")} />
+            <Input placeholder={t("connectForm.clientHomepage")} {...register("name")} />
             {errors.name && <p className="mt-1 text-xs text-red-600">{errors.name.message}</p>}
           </>
         ) : (
@@ -148,21 +150,21 @@ export function ConnectProjectForm({ onCreated }: Props) {
 
       <div className="sm:col-span-2">
         <label className="mb-1 block text-xs font-medium text-neutral-600">
-          Dev preview command (optional)
+          {t("connectForm.devCommandLabel")}
         </label>
         <Textarea
           rows={2}
-          placeholder={`Leave empty to auto-detect (Astro, Next.js, Vite, or npm/yarn run dev).\nCustom example: npx vite --host 0.0.0.0 --port {port}`}
+          placeholder={t("connectForm.devCommandPlaceholder")}
           className="font-mono text-xs"
           {...register("previewDevCommand")}
         />
         <p className="mt-1 text-xs text-neutral-500">
-          Use <code className="rounded bg-neutral-100 px-1">{`{port}`}</code> where the server should listen.
+          {t("connectForm.devCommandHelp", { portCode: "{port}" })}
         </p>
       </div>
       <div className="flex items-end sm:col-span-2">
         <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Connecting…" : "Connect repository"}
+          {isSubmitting ? t("connectForm.connecting") : t("connectForm.connect")}
         </Button>
       </div>
     </form>

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { I18nProvider } from "@/i18n/i18n";
 import { RequireAuth } from "@/components/templates/RequireAuth";
 import { AcceptInvitePage } from "@/pages/AcceptInvite";
 import { DashboardPage } from "@/pages/Dashboard";
@@ -15,6 +16,7 @@ const qc = new QueryClient({
 export function App() {
   return (
     <QueryClientProvider client={qc}>
+      <I18nProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -55,6 +57,7 @@ export function App() {
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>
+      </I18nProvider>
     </QueryClientProvider>
   );
 }

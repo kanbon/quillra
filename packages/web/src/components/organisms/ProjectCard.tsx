@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
+import { useT } from "@/i18n/i18n";
 
 type Props = {
   id: string;
@@ -22,6 +23,7 @@ function formatUpdated(ts?: number) {
 }
 
 export function ProjectCard({ id, name, repo, role, updatedAt }: Props) {
+  const { t } = useT();
   return (
     <Link
       to={`/p/${id}`}
@@ -33,7 +35,7 @@ export function ProjectCard({ id, name, repo, role, updatedAt }: Props) {
       <p className="font-mono text-xs text-neutral-500">{repo}</p>
       <div className="mt-4 flex items-center justify-between text-xs text-neutral-400">
         <span className="uppercase tracking-wide">{role}</span>
-        {updatedAt ? <span>Updated {formatUpdated(updatedAt)}</span> : null}
+        {updatedAt ? <span>{t("dashboard.updated", { date: formatUpdated(updatedAt) })}</span> : null}
       </div>
     </Link>
   );

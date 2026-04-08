@@ -328,8 +328,28 @@ app.get("/api/caddy-check", (c) => {
 app.get("/api/session", async (c) => {
   const sessionUser = c.get("user");
   if (!sessionUser) return c.json({ user: null });
-  const [row] = await db.select({ instanceRole: user.instanceRole }).from(user).where(eq(user.id, sessionUser.id)).limit(1);
-  return c.json({ user: { ...sessionUser, instanceRole: row?.instanceRole ?? null } });
+  const [row] = await db
+    .select({ instanceRole: user.instanceRole, language: user.language })
+    .from(user)
+    .where(eq(user.id, sessionUser.id))
+    .limit(1);
+  return c.json({
+    user: {
+      ...sessionUser,
+      instanceRole: row?.instanceRole ?? null,
+      language: row?.language ?? null,
+    },
+  });
+});
+
+app.patch("/api/session/language", async (c) => {
+  const sessionUser = c.get("user");
+  if (!sessionUser) return c.json({ error: "Unauthorized" }, 401);
+  const body = await c.req.json().catch(() => null) as { language?: string } | null;
+  const lang = body?.language;
+  if (lang !== "en" && lang !== "de") return c.json({ error: "Invalid language" }, 400);
+  await db.update(user).set({ language: lang }).where(eq(user.id, sessionUser.id));
+  return c.json({ ok: true, language: lang });
 });
 
 app.route("/api/admin", adminRouter);

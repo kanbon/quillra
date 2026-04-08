@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChatBubble } from "@/components/molecules/ChatBubble";
 import { ToolEventRow } from "@/components/molecules/ToolEventRow";
 import { Spinner } from "@/components/atoms/Spinner";
+import { useT } from "@/i18n/i18n";
 import type { ChatLine } from "@/hooks/useProjectChat";
 
 type Props = {
@@ -11,6 +12,7 @@ type Props = {
 };
 
 function ThinkingCard({ text, durationMs, streaming }: { text: string; durationMs?: number; streaming?: boolean }) {
+  const { t } = useT();
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
   // Expanded by default while streaming, collapsed after
@@ -51,8 +53,8 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
           <span className="h-2 w-2 shrink-0 rounded-full bg-neutral-300 transition-colors duration-300" />
         )}
         <span className="font-medium text-neutral-600 transition-colors duration-200">
-          {streaming ? "Thinking" : "Thought"}
-          {seconds > 0 && ` for ${seconds}s`}
+          {streaming ? t("chat.thinking") : t("chat.thought")}
+          {seconds > 0 && ` ${t("chat.forSeconds", { seconds })}`}
           {streaming && "…"}
         </span>
         {text && (
@@ -78,6 +80,7 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
 }
 
 export function ChatTranscript({ lines, busy, onNewChat }: Props) {
+  const { t } = useT();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Derive a scroll key that changes when content grows (not just line count)
@@ -110,7 +113,7 @@ export function ChatTranscript({ lines, busy, onNewChat }: Props) {
     <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-4">
       {grouped.length === 0 && !busy && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
-          <p className="text-sm text-neutral-400">No messages yet</p>
+          <p className="text-sm text-neutral-400">{t("chat.noMessages")}</p>
           {onNewChat && (
             <button
               type="button"
@@ -120,7 +123,7 @@ export function ChatTranscript({ lines, busy, onNewChat }: Props) {
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              New chat
+              {t("chat.newChat")}
             </button>
           )}
         </div>
@@ -192,7 +195,7 @@ export function ChatTranscript({ lines, busy, onNewChat }: Props) {
       {busy && !lines.some((l) => l.kind === "thinking" && "streaming" in l && l.streaming) && !lines.some((l) => l.kind === "tool_active") && (
         <div className="flex animate-[fadeIn_0.2s_ease-out] items-center gap-2 text-xs text-neutral-500">
           <Spinner />
-          Working…
+          {t("chat.working")}
         </div>
       )}
       <div ref={bottomRef} />

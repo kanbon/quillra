@@ -12,6 +12,8 @@ export const user = sqliteTable("user", {
     .notNull(),
   image: text("image"),
   instanceRole: text("instance_role").$type<InstanceRole>(),
+  /** UI language preference, e.g. "en" / "de" */
+  language: text("language"),
   createdAt: integer("createdAt", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),

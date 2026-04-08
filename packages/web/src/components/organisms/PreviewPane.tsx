@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
+import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -22,6 +23,7 @@ export function PreviewPane({
   startLabel,
   errorMessage,
 }: Props) {
+  const { t } = useT();
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [bannerDismissed, setBannerDismissed] = useState(() => {
@@ -53,14 +55,14 @@ export function PreviewPane({
       <div className="flex items-center justify-between border-b border-neutral-200 bg-white px-4 py-3">
         <div>
           <Heading as="h3" className="text-[15px] font-semibold tracking-tight text-neutral-900">
-            Live preview
+            {t("preview.title")}
           </Heading>
           {engineLabel && engineLabel !== "—" ? (
             <p className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.12em] text-neutral-400">
               {engineLabel}
             </p>
           ) : (
-            <p className="mt-0.5 text-[11px] text-neutral-400">Local dev server in your repo</p>
+            <p className="mt-0.5 text-[11px] text-neutral-400">{t("preview.subtitle")}</p>
           )}
         </div>
         {hasFrame && (
@@ -75,8 +77,8 @@ export function PreviewPane({
                   ? "hover:bg-neutral-50 hover:text-neutral-900"
                   : "pointer-events-none opacity-40",
               )}
-              title="Open in new tab"
-              aria-label="Open in new tab"
+              title={t("preview.openInNewTab")}
+              aria-label={t("preview.openInNewTab")}
               onClick={(e) => { if (!ready) e.preventDefault(); }}
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -89,8 +91,8 @@ export function PreviewPane({
               onClick={onRefresh}
               disabled={starting || !hasFrame || !ready}
               className="flex h-8 w-9 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-40 disabled:hover:bg-transparent"
-              title="Refresh preview"
-              aria-label="Refresh preview"
+              title={t("preview.refresh")}
+              aria-label={t("preview.refresh")}
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
@@ -105,7 +107,7 @@ export function PreviewPane({
           <>
             {!bannerDismissed && (
               <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-amber-50/95 px-3 py-1.5 text-xs text-amber-700 backdrop-blur-sm">
-                <span>Dev preview — may be slower than production</span>
+                <span>{t("preview.devBanner")}</span>
                 <button
                   type="button"
                   className="ml-2 rounded px-1.5 py-0.5 text-amber-500 hover:bg-amber-100 hover:text-amber-700"
@@ -117,7 +119,7 @@ export function PreviewPane({
             )}
             <iframe
               ref={iframeRef}
-              title="Site preview"
+              title={t("preview.iframeTitle")}
               src={src!}
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
@@ -144,11 +146,10 @@ export function PreviewPane({
               </svg>
             </div>
             <Heading as="h3" className="mb-2 text-center text-lg font-semibold tracking-tight text-neutral-900">
-              No preview yet
+              {t("preview.noPreview")}
             </Heading>
             <p className="mb-8 max-w-sm text-center text-sm leading-relaxed text-neutral-500">
-              Spin up the dev server to see your site here. The first run may take a minute while dependencies
-              install.
+              {t("preview.noPreviewHelp")}
             </p>
             {errorMessage ? (
               <p className="mb-4 max-w-sm text-center text-sm text-red-600">{errorMessage}</p>

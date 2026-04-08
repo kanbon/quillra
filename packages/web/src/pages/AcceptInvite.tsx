@@ -6,6 +6,7 @@ import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { Input } from "@/components/atoms/Input";
 import { apiJson } from "@/lib/api";
+import { useT } from "@/i18n/i18n";
 
 const schema = z.object({
   token: z.string().min(10),
@@ -14,6 +15,7 @@ const schema = z.object({
 type Form = z.infer<typeof schema>;
 
 export function AcceptInvitePage() {
+  const { t } = useT();
   const [params] = useSearchParams();
   const nav = useNavigate();
   const defaultToken = params.get("token") ?? "";
@@ -31,10 +33,10 @@ export function AcceptInvitePage() {
     <div className="flex min-h-screen items-center justify-center bg-white px-4">
       <div className="w-full max-w-md rounded-2xl border border-neutral-200 p-8">
         <Heading as="h1" className="mb-2 text-xl">
-          Accept invite
+          {t("acceptInvite.title")}
         </Heading>
         <p className="mb-6 text-sm text-neutral-600">
-          Sign in with GitHub first (same window), then paste the token from your invite link.
+          {t("acceptInvite.help")}
         </p>
         <form
           onSubmit={handleSubmit(async (v) => {
@@ -46,9 +48,9 @@ export function AcceptInvitePage() {
           })}
           className="flex flex-col gap-3"
         >
-          <Input {...register("token")} placeholder="Invite token" />
+          <Input {...register("token")} placeholder={t("acceptInvite.tokenPlaceholder")} />
           <Button type="submit" disabled={isSubmitting}>
-            Join project
+            {t("acceptInvite.join")}
           </Button>
         </form>
       </div>

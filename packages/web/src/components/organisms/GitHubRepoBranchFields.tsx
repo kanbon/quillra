@@ -3,6 +3,7 @@ import { useEffect, useMemo } from "react";
 import type { GithubRepoRow } from "@/lib/github";
 import { parseRepoFullName, selectLikeInputClassName } from "@/lib/github";
 import { apiJson } from "@/lib/api";
+import { useT } from "@/i18n/i18n";
 
 type BranchPayload = { branches: string[]; defaultBranch: string };
 
@@ -26,6 +27,7 @@ export function GitHubRepoBranchFields({
   preferManual,
   setPreferManual,
 }: Props) {
+  const { t } = useT();
   const reposQ = useQuery({
     queryKey: ["github-repos"],
     queryFn: () => apiJson<{ repos: GithubRepoRow[] }>("/api/github/repos"),
@@ -66,28 +68,28 @@ export function GitHubRepoBranchFields({
     return (
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-1">
-          <label className="mb-1 block text-xs font-medium text-neutral-600">GitHub repository</label>
+          <label className="mb-1 block text-xs font-medium text-neutral-600">{t("github.repository")}</label>
           <input
             className={selectLikeInputClassName()}
-            placeholder="owner/repo"
+            placeholder={t("github.repoPlaceholder")}
             value={repoFullName}
             onChange={(e) => onRepoChange(e.target.value.trim(), branch || "main")}
             disabled={disabled}
           />
           {reposQ.isError ? (
             <p className="mt-1 text-xs text-neutral-500">
-              API unavailable (check server <code className="rounded bg-neutral-100 px-1">GITHUB_TOKEN</code>).
+              {t("github.apiUnavailable")}
             </p>
           ) : null}
           {reposQ.isSuccess && repos.length === 0 ? (
-            <p className="mt-1 text-xs text-neutral-500">No repositories returned for this token.</p>
+            <p className="mt-1 text-xs text-neutral-500">{t("github.noRepos")}</p>
           ) : null}
         </div>
         <div className="sm:col-span-1">
-          <label className="mb-1 block text-xs font-medium text-neutral-600">Branch</label>
+          <label className="mb-1 block text-xs font-medium text-neutral-600">{t("github.branch")}</label>
           <input
             className={selectLikeInputClassName()}
-            placeholder="main"
+            placeholder={t("github.branchPlaceholder")}
             value={branch}
             onChange={(e) => onBranchChange(e.target.value.trim())}
             disabled={disabled}
@@ -100,7 +102,7 @@ export function GitHubRepoBranchFields({
               className="text-xs text-brand underline-offset-2 hover:underline"
               onClick={() => setPreferManual(false)}
             >
-              Use list picker instead
+              {t("github.useListPicker")}
             </button>
           </div>
         ) : null}
@@ -111,7 +113,7 @@ export function GitHubRepoBranchFields({
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="sm:col-span-1">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">GitHub repository</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">{t("github.repository")}</label>
         <select
           className={selectLikeInputClassName()}
           value={repoFullName}
@@ -122,7 +124,7 @@ export function GitHubRepoBranchFields({
             onRepoChange(v, row?.defaultBranch ?? "main");
           }}
         >
-          <option value="">Select repository…</option>
+          <option value="">{t("github.selectRepo")}</option>
           {repos.map((r) => (
             <option key={r.fullName} value={r.fullName}>
               {r.fullName}
@@ -135,23 +137,23 @@ export function GitHubRepoBranchFields({
             className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-800 hover:underline"
             onClick={() => setPreferManual(true)}
           >
-            Enter owner/repo manually
+            {t("github.enterManually")}
           </button>
         </div>
       </div>
       <div className="sm:col-span-1">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Branch</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">{t("github.branch")}</label>
         {repoFullName && branchesQ.isError ? (
           <>
             <input
               className={selectLikeInputClassName()}
-              placeholder="main"
+              placeholder={t("github.branchPlaceholder")}
               value={branch}
               onChange={(e) => onBranchChange(e.target.value.trim())}
               disabled={disabled}
             />
             <p className="mt-1 text-xs text-neutral-500">
-              Type the branch name (API could not list branches).
+              {t("github.branchTypeHelp")}
             </p>
           </>
         ) : (
@@ -162,12 +164,12 @@ export function GitHubRepoBranchFields({
             onChange={(e) => onBranchChange(e.target.value)}
           >
             {!branches.length && repoFullName && branchesQ.isLoading ? (
-              <option value="">Loading branches…</option>
+              <option value="">{t("github.loadingBranches")}</option>
             ) : null}
             {branches.map((b) => (
               <option key={b} value={b}>
                 {b}
-                {b === apiDefault ? " (default)" : ""}
+                {b === apiDefault ? ` ${t("github.defaultSuffix")}` : ""}
               </option>
             ))}
           </select>

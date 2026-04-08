@@ -6,6 +6,7 @@ import { Heading } from "@/components/atoms/Heading";
 import { Input } from "@/components/atoms/Input";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { apiJson } from "@/lib/api";
+import { useT } from "@/i18n/i18n";
 
 type Member = {
   id: string;
@@ -23,6 +24,7 @@ type Invite = {
 };
 
 export function InstanceSettingsPage() {
+  const { t } = useT();
   const qc = useQueryClient();
   const [email, setEmail] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -71,15 +73,15 @@ export function InstanceSettingsPage() {
             <LogoMark size={22} />
           </Link>
           <div className="h-6 w-px bg-neutral-200" />
-          <Heading as="h1" className="text-lg font-semibold">Instance Settings</Heading>
+          <Heading as="h1" className="text-lg font-semibold">{t("instanceSettings.title")}</Heading>
         </div>
       </header>
 
       <div className="mx-auto max-w-2xl space-y-8 px-6 py-8">
         <section className="rounded-2xl border border-neutral-200 bg-white p-6">
-          <Heading as="h2" className="mb-1 text-base font-semibold">Invite user</Heading>
+          <Heading as="h2" className="mb-1 text-base font-semibold">{t("instanceSettings.inviteUser")}</Heading>
           <p className="mb-4 text-sm text-neutral-500">
-            Only invited users can sign into this instance.
+            {t("instanceSettings.inviteHelp")}
           </p>
           <form
             className="flex gap-2"
@@ -93,13 +95,13 @@ export function InstanceSettingsPage() {
           >
             <Input
               type="email"
-              placeholder="user@example.com"
+              placeholder={t("instanceSettings.emailPlaceholder")}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="flex-1"
             />
             <Button type="submit" className="bg-brand text-white hover:bg-brand/90" disabled={inviteMut.isPending}>
-              Invite
+              {t("instanceSettings.invite")}
             </Button>
           </form>
           {feedback && (
@@ -109,14 +111,14 @@ export function InstanceSettingsPage() {
 
         {invites?.invites && invites.invites.length > 0 && (
           <section className="rounded-2xl border border-neutral-200 bg-white p-6">
-            <Heading as="h2" className="mb-4 text-base font-semibold">Pending invites</Heading>
+            <Heading as="h2" className="mb-4 text-base font-semibold">{t("instanceSettings.pendingInvites")}</Heading>
             <ul className="space-y-3">
               {invites.invites.map((inv) => (
                 <li key={inv.id} className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-neutral-900">{inv.email}</p>
                     <p className="text-xs text-neutral-400">
-                      Expires {new Date(inv.expiresAt).toLocaleDateString()}
+                      {t("instanceSettings.expires", { date: new Date(inv.expiresAt).toLocaleDateString() })}
                     </p>
                   </div>
                   <Button
@@ -125,7 +127,7 @@ export function InstanceSettingsPage() {
                     onClick={() => revokeInviteMut.mutate(inv.id)}
                     disabled={revokeInviteMut.isPending}
                   >
-                    Revoke
+                    {t("instanceSettings.revoke")}
                   </Button>
                 </li>
               ))}
@@ -134,7 +136,7 @@ export function InstanceSettingsPage() {
         )}
 
         <section className="rounded-2xl border border-neutral-200 bg-white p-6">
-          <Heading as="h2" className="mb-4 text-base font-semibold">Members</Heading>
+          <Heading as="h2" className="mb-4 text-base font-semibold">{t("instanceSettings.members")}</Heading>
           <ul className="space-y-3">
             {members?.members.map((m) => (
               <li key={m.id} className="flex items-center gap-3">
@@ -159,7 +161,7 @@ export function InstanceSettingsPage() {
                     onClick={() => removeMut.mutate(m.id)}
                     disabled={removeMut.isPending}
                   >
-                    Remove
+                    {t("common.remove")}
                   </Button>
                 )}
               </li>

@@ -12,6 +12,7 @@ import { PreviewPane } from "@/components/organisms/PreviewPane";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
 import { clearNewChat } from "@/lib/chat-store";
+import { useT } from "@/i18n/i18n";
 
 type ProjectDetail = {
   id: string;
@@ -33,6 +34,7 @@ type Conversation = {
 };
 
 export function EditorPage() {
+  const { t } = useT();
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
   const qc = useQueryClient();
@@ -160,7 +162,9 @@ export function EditorPage() {
 
   const canPublish = project?.role === "admin" || project?.role === "editor";
   const startLabel =
-    previewLabel && previewLabel !== "—" ? `Start ${previewLabel} preview` : "Start live preview";
+    previewLabel && previewLabel !== "—"
+      ? t("preview.startSpecific", { framework: previewLabel })
+      : t("preview.startLive");
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-white">
@@ -205,7 +209,7 @@ export function EditorPage() {
           {chatDragging && (
             <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-brand bg-brand/5 backdrop-blur-sm">
               <p className="rounded-full bg-white px-4 py-2 text-sm font-medium text-brand shadow-lg">
-                Drop images to attach
+                {t("composer.dropImages")}
               </p>
             </div>
           )}
@@ -216,26 +220,26 @@ export function EditorPage() {
                 type="button"
                 className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
                 onClick={() => setShowHistory((s) => !s)}
-                title="Chat history"
+                title={t("chat.history")}
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </button>
               <div>
-                <p className="text-xs font-medium text-neutral-700">Assistant</p>
+                <p className="text-xs font-medium text-neutral-700">{t("chat.assistant")}</p>
               </div>
             </div>
             <button
               type="button"
               className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
               onClick={startNewChat}
-              title="New chat"
+              title={t("chat.newChat")}
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              New
+              {t("chat.new")}
             </button>
           </div>
 
@@ -257,14 +261,14 @@ export function EditorPage() {
                       <svg className="h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                       </svg>
-                      <span className="min-w-0 truncate">{conv.title || "Untitled"}</span>
+                      <span className="min-w-0 truncate">{conv.title || t("chat.untitled")}</span>
                       <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
                         {new Date(conv.updatedAt).toLocaleDateString()}
                       </span>
                     </button>
                   ))
                 ) : (
-                  <p className="px-3 py-4 text-center text-xs text-neutral-400">No conversations yet</p>
+                  <p className="px-3 py-4 text-center text-xs text-neutral-400">{t("chat.noConversations")}</p>
                 )}
               </div>
             </div>
@@ -309,12 +313,12 @@ export function EditorPage() {
       </div>
 
       <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>
-        <h3 className="mb-1 text-lg font-semibold text-neutral-900">Go live</h3>
+        <h3 className="mb-1 text-lg font-semibold text-neutral-900">{t("publish.modalTitle")}</h3>
 
         {publishStatusLoading && (
           <div className="flex flex-col items-center py-6">
             <Spinner className="mb-3 size-5" />
-            <p className="text-sm text-neutral-500">Reviewing your changes…</p>
+            <p className="text-sm text-neutral-500">{t("publish.reviewing")}</p>
           </div>
         )}
 
@@ -328,7 +332,7 @@ export function EditorPage() {
                   </div>
                 ) : (
                   <p className="mb-4 mt-1 text-sm text-neutral-500">
-                    Your recent edits are ready to go live.
+                    {t("publish.readyDescription")}
                   </p>
                 )}
                 <Button
@@ -336,13 +340,13 @@ export function EditorPage() {
                   className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
                   onClick={() => publishMut.mutate()}
                 >
-                  Publish now
+                  {t("publish.publishNow")}
                 </Button>
               </>
             ) : (
               <>
                 <p className="mb-6 mt-2 text-sm text-neutral-500">
-                  Your site is up to date — nothing new to publish.
+                  {t("publish.upToDate")}
                 </p>
                 <Button
                   type="button"
@@ -350,7 +354,7 @@ export function EditorPage() {
                   className="w-full rounded-xl py-3 text-[15px]"
                   onClick={() => setShowPublishModal(false)}
                 >
-                  Close
+                  {t("common.close")}
                 </Button>
               </>
             )}
@@ -360,8 +364,8 @@ export function EditorPage() {
         {publishMut.isPending && (
           <div className="flex flex-col items-center py-8">
             <Spinner className="mb-4 size-6" />
-            <p className="text-sm font-medium text-neutral-700">Publishing your changes…</p>
-            <p className="mt-1 text-xs text-neutral-400">Your site will update in a few moments.</p>
+            <p className="text-sm font-medium text-neutral-700">{t("publish.publishingHeading")}</p>
+            <p className="mt-1 text-xs text-neutral-400">{t("publish.publishingSubtext")}</p>
           </div>
         )}
 
@@ -369,14 +373,14 @@ export function EditorPage() {
           <>
             <div className="mb-4 mt-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
               <span className="text-green-600">&#10003;</span>
-              <p className="text-sm text-green-700">Your changes are live! It may take a minute for the update to appear on your site.</p>
+              <p className="text-sm text-green-700">{t("publish.success")}</p>
             </div>
             <Button
               type="button"
               className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
               onClick={() => setShowPublishModal(false)}
             >
-              Done
+              {t("common.done")}
             </Button>
           </>
         )}
@@ -384,14 +388,14 @@ export function EditorPage() {
         {publishMut.isError && (
           <>
             <p className="mb-6 mt-2 text-sm text-red-600">
-              Something went wrong while publishing. Please try again.
+              {t("publish.error")}
             </p>
             <Button
               type="button"
               className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
               onClick={() => publishMut.mutate()}
             >
-              Try again
+              {t("common.tryAgain")}
             </Button>
           </>
         )}
