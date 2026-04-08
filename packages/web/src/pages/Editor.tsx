@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/atoms/Button";
 import { Modal } from "@/components/atoms/Modal";
@@ -11,6 +11,7 @@ import { EditorToolbar } from "@/components/organisms/EditorToolbar";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
+import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
 import { clearNewChat } from "@/lib/chat-store";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
@@ -45,6 +46,8 @@ type ConversationsResponse = {
 
 export function EditorPage() {
   const { t } = useT();
+  const me = useCurrentUser();
+  const isClient = me.kind === "client";
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
   const qc = useQueryClient();
@@ -255,34 +258,75 @@ export function EditorPage() {
               </p>
             </div>
           )}
-          {/* Chat header with history toggle + new chat */}
+          {/* Chat header with history toggle + new chat.
+              On mobile the toolbar is hidden, so we also surface:
+              preview, back-to-dashboard (non-clients), and sign-out. */}
           <div className="flex items-center justify-between border-b border-neutral-200 bg-neutral-50/80 px-3 py-2">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              {!isClient && (
+                <Link
+                  to="/dashboard"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-400 no-underline transition-colors hover:bg-neutral-200 hover:text-neutral-700 md:hidden"
+                  title={t("toolbar.allSites")}
+                  aria-label={t("toolbar.allSites")}
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </Link>
+              )}
               <button
                 type="button"
-                className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
                 onClick={() => setShowHistory((s) => !s)}
                 title={t("chat.history")}
+                aria-label={t("chat.history")}
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </button>
-              <div>
-                <p className="text-xs font-medium text-neutral-700">{t("chat.assistant")}</p>
-              </div>
+              <p className="truncate text-xs font-medium text-neutral-700">{t("chat.assistant")}</p>
             </div>
-            <button
-              type="button"
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
-              onClick={startNewChat}
-              title={t("chat.newChat")}
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              {t("chat.new")}
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
+                onClick={startNewChat}
+                title={t("chat.newChat")}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                <span className="hidden sm:inline">{t("chat.new")}</span>
+              </button>
+              {/* Mobile-only: open preview bottom sheet */}
+              <button
+                type="button"
+                className="flex items-center gap-1 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-neutral-800 md:hidden"
+                onClick={() => setMobilePreviewOpen(true)}
+                title={t("preview.mobileOpenAria")}
+                aria-label={t("preview.mobileOpenAria")}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                {t("preview.mobileOpen")}
+              </button>
+              {/* Mobile-only: sign out */}
+              <button
+                type="button"
+                onClick={() => signOutUnified(me.kind === "client" ? "client" : "github")}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-700 md:hidden"
+                title={t("toolbar.signOut")}
+                aria-label={t("toolbar.signOut")}
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* History sidebar (overlay) */}
@@ -419,19 +463,7 @@ export function EditorPage() {
         </section>
       </div>
 
-      {/* Mobile-only: floating Preview button + bottom-sheet iframe */}
-      <button
-        type="button"
-        onClick={() => setMobilePreviewOpen(true)}
-        className="fixed bottom-5 right-5 z-40 flex h-14 items-center gap-2 rounded-full bg-neutral-900 px-5 text-[14px] font-semibold text-white shadow-xl ring-1 ring-black/5 transition-transform active:scale-95 md:hidden"
-        aria-label={t("preview.mobileOpenAria")}
-      >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-        {t("preview.mobileOpen")}
-      </button>
+      {/* Mobile-only: preview bottom sheet (opened via chat-header button). */}
       <MobilePreviewSheet open={mobilePreviewOpen} onClose={() => setMobilePreviewOpen(false)}>
         <PreviewPane
           projectId={id}
