@@ -431,6 +431,7 @@ app.get(
             userId: session.user.id,
             role: "user",
             content: parsed.content,
+            attachments: attachments.length > 0 ? JSON.stringify(attachments) : null,
             createdAt: new Date(),
           });
 

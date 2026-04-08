@@ -327,13 +327,50 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       .orderBy(desc(messages.id))
       .limit(100);
     return c.json({
-      messages: rows.reverse().map((x) => ({
-        id: x.id,
-        role: x.role,
-        content: x.content,
-        conversationId: x.conversationId,
-        createdAt: x.createdAt.getTime(),
-      })),
+      messages: rows.reverse().map((x) => {
+        let attachments: { path: string; originalName: string }[] | undefined;
+        if (x.attachments) {
+          try { attachments = JSON.parse(x.attachments); } catch { /* ignore */ }
+        }
+        return {
+          id: x.id,
+          role: x.role,
+          content: x.content,
+          conversationId: x.conversationId,
+          createdAt: x.createdAt.getTime(),
+          attachments,
+        };
+      }),
+    });
+  })
+  .get("/:id/file", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    const rel = (c.req.query("path") ?? "").replace(/^\/+/, "");
+    if (!rel) return c.json({ error: "path required" }, 400);
+    const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+    const resolved = path.resolve(repoPath, rel);
+    if (!resolved.startsWith(path.resolve(repoPath) + path.sep)) {
+      return c.json({ error: "Invalid path" }, 400);
+    }
+    if (!fs.existsSync(resolved)) return c.json({ error: "Not found" }, 404);
+    const ext = path.extname(resolved).toLowerCase().slice(1);
+    const mime: Record<string, string> = {
+      jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+      gif: "image/gif", svg: "image/svg+xml", avif: "image/avif",
+    };
+    const buf = fs.readFileSync(resolved);
+    return new Response(new Uint8Array(buf), {
+      status: 200,
+      headers: {
+        "content-type": mime[ext] ?? "application/octet-stream",
+        "cache-control": "private, max-age=300",
+      },
     });
   })
   .get("/:id/framework", async (c) => {

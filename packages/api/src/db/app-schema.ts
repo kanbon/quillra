@@ -100,6 +100,8 @@ export const messages = sqliteTable(
     userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
     role: text("role").notNull(),
     content: text("content").notNull(),
+    /** JSON-encoded array of {path, originalName} for image attachments */
+    attachments: text("attachments"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),

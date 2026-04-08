@@ -17,4 +17,18 @@ fs.mkdirSync(path.dirname(resolved), { recursive: true });
 const sqlite = new Database(resolved);
 sqlite.pragma("journal_mode = WAL");
 
+/**
+ * Lightweight bootstrap for additive schema changes that don't ship via
+ * drizzle-kit migrate. Each block must be idempotent.
+ */
+function ensureColumn(table: string, column: string, definition: string) {
+  const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+try {
+  ensureColumn("messages", "attachments", "TEXT");
+} catch { /* table may not exist yet on a fresh init */ }
+
 export const db = drizzle(sqlite, { schema });

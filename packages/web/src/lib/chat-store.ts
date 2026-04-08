@@ -100,12 +100,29 @@ export async function loadHistory(projectId: string, conversationId: string | nu
   try {
     const query = conversationId ? `?conversationId=${conversationId}` : "";
     const res = await apiJson<{
-      messages: { id: number; role: string; content: string; conversationId?: string; createdAt: number }[];
+      messages: {
+        id: number;
+        role: string;
+        content: string;
+        conversationId?: string;
+        createdAt: number;
+        attachments?: { path: string; originalName: string }[];
+      }[];
     }>(`/api/projects/${projectId}/messages${query}`);
     const mapped: ChatLine[] = [];
     for (const m of res.messages) {
       if (m.role === "user") {
-        mapped.push({ id: `h-${m.id}`, kind: "user", text: m.content });
+        const atts: Attachment[] | undefined = m.attachments?.map((a) => ({
+          path: a.path,
+          originalName: a.originalName,
+          previewUrl: `/api/projects/${projectId}/file?path=${encodeURIComponent(a.path)}`,
+        }));
+        mapped.push({
+          id: `h-${m.id}`,
+          kind: "user",
+          text: m.content,
+          ...(atts && atts.length > 0 ? { attachments: atts } : {}),
+        });
       } else if (m.role === "assistant") {
         mapped.push({ id: `h-${m.id}`, kind: "assistant", text: m.content, streaming: false });
       }
