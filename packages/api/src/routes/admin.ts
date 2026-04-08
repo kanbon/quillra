@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { user } from "../db/auth-schema.js";
-import { instanceInvites } from "../db/app-schema.js";
+import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
 import type { SessionUser } from "../lib/auth.js";
 
 type Variables = { user: SessionUser | null };
@@ -27,6 +27,8 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
   .get("/members", async (c) => {
     const r = await requireOwner(c);
     if ("error" in r) return r.error;
+
+    // 1) Fetch every user on the instance
     const members = await db
       .select({
         id: user.id,
@@ -37,7 +39,34 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
         createdAt: user.createdAt,
       })
       .from(user);
-    return c.json({ members });
+
+    // 2) Fetch every project membership + project name in a single join
+    //    so we can group by userId without N+1 queries.
+    const memberships = await db
+      .select({
+        userId: projectMembers.userId,
+        projectId: projects.id,
+        projectName: projects.name,
+        role: projectMembers.role,
+      })
+      .from(projectMembers)
+      .innerJoin(projects, eq(projects.id, projectMembers.projectId));
+
+    // 3) Index by userId
+    type ProjectBadge = { id: string; name: string; role: string };
+    const byUser = new Map<string, ProjectBadge[]>();
+    for (const m of memberships) {
+      const arr = byUser.get(m.userId) ?? [];
+      arr.push({ id: m.projectId, name: m.projectName, role: m.role });
+      byUser.set(m.userId, arr);
+    }
+
+    return c.json({
+      members: members.map((m) => ({
+        ...m,
+        projects: (byUser.get(m.id) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+      })),
+    });
   })
   .post("/invites", async (c) => {
     const r = await requireOwner(c);

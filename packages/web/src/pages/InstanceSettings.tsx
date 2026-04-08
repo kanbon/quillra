@@ -17,6 +17,7 @@ type Organization = {
   website: string | null;
 };
 
+type ProjectBadge = { id: string; name: string; role: string };
 type Member = {
   id: string;
   name: string;
@@ -24,7 +25,23 @@ type Member = {
   image: string | null;
   instanceRole: string | null;
   createdAt: number;
+  projects?: ProjectBadge[];
 };
+
+function roleBadgeTint(role: string): { bg: string; text: string; label: string } {
+  switch (role) {
+    case "admin":
+      return { bg: "bg-red-100", text: "text-red-700", label: "Admin" };
+    case "editor":
+      return { bg: "bg-blue-100", text: "text-blue-700", label: "Collaborator" };
+    case "client":
+      return { bg: "bg-purple-100", text: "text-purple-700", label: "Client" };
+    case "translator":
+      return { bg: "bg-emerald-100", text: "text-emerald-700", label: "Translator" };
+    default:
+      return { bg: "bg-neutral-100", text: "text-neutral-700", label: role };
+  }
+}
 
 type Invite = {
   id: string;
@@ -282,37 +299,74 @@ export function InstanceSettingsPage() {
         )}
 
         <section className="rounded-2xl border border-neutral-200 bg-white p-6">
-          <Heading as="h2" className="mb-4 text-base font-semibold">{t("instanceSettings.members")}</Heading>
-          <ul className="space-y-3">
-            {members?.members.map((m) => (
-              <li key={m.id} className="flex items-center gap-3">
-                {m.image ? (
-                  <img src={m.image} alt="" className="h-8 w-8 rounded-full" />
-                ) : (
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-200 text-xs font-medium text-neutral-600">
-                    {m.name?.[0]?.toUpperCase() ?? "?"}
+          <Heading as="h2" className="mb-1 text-base font-semibold">{t("instanceSettings.members")}</Heading>
+          <p className="mb-4 text-sm text-neutral-500">
+            Everyone who has a Quillra account on this instance, and which projects they can access.
+          </p>
+          <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+            {(members?.members ?? []).length === 0 ? (
+              <p className="px-4 py-6 text-center text-[12px] text-neutral-400">No members yet.</p>
+            ) : (
+              (members?.members ?? []).map((m) => (
+                <div key={m.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start">
+                  {m.image ? (
+                    <img src={m.image} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-neutral-100 to-neutral-200 text-[11px] font-semibold text-neutral-500">
+                      {m.name?.[0]?.toUpperCase() ?? "?"}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-[13px] font-semibold text-neutral-900">{m.name || m.email}</p>
+                      {m.instanceRole === "owner" && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                          Instance owner
+                        </span>
+                      )}
+                    </div>
+                    <p className="truncate text-[11px] text-neutral-500">{m.email}</p>
+                    {/* Per-project badges */}
+                    {m.projects && m.projects.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {m.projects.map((p) => {
+                          const tint = roleBadgeTint(p.role);
+                          return (
+                            <Link
+                              key={p.id}
+                              to={`/p/${p.id}/settings`}
+                              className={`inline-flex items-center gap-1 rounded-md ${tint.bg} px-2 py-0.5 text-[10px] font-semibold no-underline ${tint.text} hover:opacity-80`}
+                              title={`Manage this member on ${p.name}`}
+                            >
+                              <span className="max-w-[140px] truncate">{p.name}</span>
+                              <span className="opacity-60">·</span>
+                              <span className="uppercase tracking-wide opacity-80">{tint.label}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-1.5 text-[10px] italic text-neutral-400">Not a member of any project yet.</p>
+                    )}
                   </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-neutral-900">{m.name}</p>
-                  <p className="truncate text-xs text-neutral-500">{m.email}</p>
+                  {m.instanceRole !== "owner" && (
+                    <Button
+                      variant="ghost"
+                      className="shrink-0 text-xs text-red-500"
+                      onClick={() => {
+                        if (confirm(`Remove ${m.name || m.email} from this instance? This revokes access to all projects.`)) {
+                          removeMut.mutate(m.id);
+                        }
+                      }}
+                      disabled={removeMut.isPending}
+                    >
+                      {t("common.remove")}
+                    </Button>
+                  )}
                 </div>
-                <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
-                  {m.instanceRole ?? "—"}
-                </span>
-                {m.instanceRole !== "owner" && (
-                  <Button
-                    variant="ghost"
-                    className="text-xs text-red-500"
-                    onClick={() => removeMut.mutate(m.id)}
-                    disabled={removeMut.isPending}
-                  >
-                    {t("common.remove")}
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+              ))
+            )}
+          </div>
         </section>
       </div>
     </div>

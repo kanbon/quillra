@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Modal } from "@/components/atoms/Modal";
 import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import type { Language } from "@/i18n/dictionaries";
 
@@ -13,8 +16,29 @@ const LANGUAGE_OPTIONS: { code: Language; flag: string; nativeName: string }[] =
   { code: "de", flag: "🇩🇪", nativeName: "Deutsch" },
 ];
 
+/**
+ * User-scope settings (language, links to instance-wide admin screens).
+ * The gear icon on the dashboard opens this — it has nothing to do with
+ * project-level settings.
+ */
 export function SettingsModal({ open, onClose }: Props) {
   const { t, language, setLanguage } = useT();
+  const nav = useNavigate();
+  const [isOwner, setIsOwner] = useState(false);
+
+  // Check the current user's instanceRole so we can show the
+  // 'Instance settings' shortcut only to owners.
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const me = await apiJson<{ user: { instanceRole?: string | null } | null }>("/api/session");
+        setIsOwner(me.user?.instanceRole === "owner");
+      } catch {
+        setIsOwner(false);
+      }
+    })();
+  }, [open]);
 
   return (
     <Modal open={open} onClose={onClose} className="max-w-lg">
@@ -71,6 +95,41 @@ export function SettingsModal({ open, onClose }: Props) {
           })}
         </div>
       </section>
+
+      {/* Owner-only shortcut into /admin */}
+      {isOwner && (
+        <section className="mt-6 border-t border-neutral-100 pt-6">
+          <h3 className="mb-1 text-[13px] font-semibold uppercase tracking-wider text-neutral-500">
+            Instance administration
+          </h3>
+          <p className="mb-3 text-sm text-neutral-500">
+            Organisation details, instance members, email provider, tokens.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              nav("/admin");
+            }}
+            className="group flex w-full items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3 text-left transition-colors hover:border-neutral-300 hover:bg-neutral-50"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-900 text-white">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-neutral-900">Open instance settings</p>
+                <p className="text-[11px] text-neutral-500">Members, organisation, invites</p>
+              </div>
+            </div>
+            <svg className="h-4 w-4 text-neutral-400 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </section>
+      )}
     </Modal>
   );
 }
