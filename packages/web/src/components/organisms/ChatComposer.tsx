@@ -10,12 +10,32 @@ import { Textarea } from "@/components/atoms/Textarea";
 import { useT } from "@/i18n/i18n";
 import type { Attachment } from "@/lib/chat-store";
 
+const CONTENT_EXTS = new Set(["txt", "md", "markdown", "html", "htm", "csv", "json", "xml", "yaml", "yml"]);
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/");
+}
+
+function isContentFile(file: File): boolean {
+  if (file.type.startsWith("text/")) return true;
+  if (file.type === "application/json" || file.type === "application/xml") return true;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return CONTENT_EXTS.has(ext);
+}
+
+function isAcceptedFile(file: File): boolean {
+  return isImageFile(file) || isContentFile(file);
+}
+
 type StagedFile = {
   id: string;
   file: File;
   previewUrl: string;
+  /** Image preview blob URL or null for non-images */
+  imageThumbUrl: string | null;
   status: "uploading" | "done" | "error";
   serverPath?: string;
+  serverKind?: "image" | "content";
 };
 
 export type ChatComposerHandle = {
@@ -42,7 +62,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   // Cleanup object URLs on unmount
   useEffect(() => {
     return () => {
-      staged.forEach((s) => URL.revokeObjectURL(s.previewUrl));
+      staged.forEach((s) => {
+        if (s.imageThumbUrl) URL.revokeObjectURL(s.imageThumbUrl);
+      });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -58,8 +80,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   const uploadFile = useCallback(
     async (file: File) => {
       const id = crypto.randomUUID();
-      const previewUrl = URL.createObjectURL(file);
-      setStaged((prev) => [...prev, { id, file, previewUrl, status: "uploading" }]);
+      const imageThumbUrl = isImageFile(file) ? URL.createObjectURL(file) : null;
+      setStaged((prev) => [
+        ...prev,
+        { id, file, previewUrl: imageThumbUrl ?? "", imageThumbUrl, status: "uploading" },
+      ]);
 
       try {
         const fd = new FormData();
@@ -70,11 +95,17 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
           credentials: "include",
         });
         if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-        const data = (await res.json()) as { items?: { path: string; originalName: string }[] };
+        const data = (await res.json()) as {
+          items?: { path: string; originalName: string; kind?: "image" | "content" }[];
+        };
         const item = data.items?.[0];
         if (!item) throw new Error("No item returned");
         setStaged((prev) =>
-          prev.map((s) => (s.id === id ? { ...s, status: "done", serverPath: item.path } : s)),
+          prev.map((s) =>
+            s.id === id
+              ? { ...s, status: "done", serverPath: item.path, serverKind: item.kind ?? (s.imageThumbUrl ? "image" : "content") }
+              : s,
+          ),
         );
       } catch {
         setStaged((prev) => prev.map((s) => (s.id === id ? { ...s, status: "error" } : s)));
@@ -87,7 +118,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     async (id: string) => {
       const item = staged.find((s) => s.id === id);
       if (!item) return;
-      URL.revokeObjectURL(item.previewUrl);
+      if (item.imageThumbUrl) URL.revokeObjectURL(item.imageThumbUrl);
       setStaged((prev) => prev.filter((s) => s.id !== id));
       if (item.serverPath) {
         try {
@@ -105,7 +136,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
 
   const addFiles = useCallback(
     (files: FileList | File[]) => {
-      const arr = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      const arr = Array.from(files).filter(isAcceptedFile);
       arr.forEach(uploadFile);
     },
     [uploadFile],
@@ -123,7 +154,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     const attachments: Attachment[] = completed.map((s) => ({
       path: s.serverPath!,
       originalName: s.file.name,
-      previewUrl: s.previewUrl,
+      kind: s.serverKind,
+      previewUrl: s.imageThumbUrl ?? undefined,
     }));
 
     onSend(trimmed, attachments.length > 0 ? attachments : undefined);
@@ -140,32 +172,66 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
       <div className="relative rounded-[26px] border border-neutral-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-shadow focus-within:border-neutral-300 focus-within:shadow-[0_4px_16px_rgba(0,0,0,0.06)]">
         {staged.length > 0 && (
           <div className="flex flex-wrap gap-2 px-4 pb-1 pt-3">
-            {staged.map((s) => (
-              <div
-                key={s.id}
-                className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50"
-              >
-                <img src={s.previewUrl} alt={s.file.name} className="h-full w-full object-cover" />
-                {s.status === "uploading" && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/70">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-brand" />
-                  </div>
-                )}
-                {s.status === "error" && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-red-500/80 text-[10px] font-medium text-white">
-                    {t("composer.failed")}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => removeStaged(s.id)}
-                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900/70 text-xs leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
-                  aria-label={t("composer.remove")}
+            {staged.map((s) => {
+              const isImage = Boolean(s.imageThumbUrl);
+              return isImage ? (
+                <div
+                  key={s.id}
+                  className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50"
                 >
-                  ×
-                </button>
-              </div>
-            ))}
+                  <img src={s.imageThumbUrl!} alt={s.file.name} className="h-full w-full object-cover" />
+                  {s.status === "uploading" && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-brand" />
+                    </div>
+                  )}
+                  {s.status === "error" && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-red-500/80 text-[10px] font-medium text-white">
+                      {t("composer.failed")}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeStaged(s.id)}
+                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900/70 text-xs leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-label={t("composer.remove")}
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={s.id}
+                  className="group relative flex h-16 max-w-[220px] items-center gap-2.5 rounded-xl border border-neutral-200 bg-neutral-50 px-3 pr-8"
+                >
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-neutral-500 ring-1 ring-neutral-200">
+                    {s.status === "uploading" ? (
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-brand" />
+                    ) : (
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[12px] font-medium text-neutral-800">{s.file.name}</p>
+                    <p className="text-[11px] uppercase tracking-wide text-neutral-400">
+                      {s.status === "error"
+                        ? t("composer.failed")
+                        : (s.file.name.split(".").pop() ?? "FILE").toUpperCase()}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeStaged(s.id)}
+                    className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900/70 text-xs leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-label={t("composer.remove")}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -202,7 +268,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,text/*,.md,.markdown,.html,.htm,.csv,.json,.xml,.yaml,.yml"
               multiple
               className="hidden"
               onChange={(e) => {

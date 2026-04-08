@@ -162,21 +162,42 @@ export function ChatTranscript({ lines, busy, onNewChat }: Props) {
             <div key={entry.id} className="flex animate-[fadeIn_0.2s_ease-out] flex-col items-end gap-1.5">
               {entry.attachments && entry.attachments.length > 0 && (
                 <div className="flex max-w-[min(100%,42rem)] flex-wrap justify-end gap-1.5">
-                  {entry.attachments.map((a, idx) => (
-                    <div
-                      key={`${entry.id}-att-${idx}`}
-                      className="h-20 w-20 overflow-hidden rounded-md border border-neutral-200 bg-neutral-50"
-                      title={a.originalName}
-                    >
-                      {a.previewUrl ? (
-                        <img src={a.previewUrl} alt={a.originalName} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-400">
-                          {a.originalName.split(".").pop()?.toUpperCase() ?? "IMG"}
+                  {entry.attachments.map((a, idx) => {
+                    const isImage = a.kind === "image" || (!a.kind && Boolean(a.previewUrl));
+                    return isImage ? (
+                      <div
+                        key={`${entry.id}-att-${idx}`}
+                        className="h-20 w-20 overflow-hidden rounded-md border border-neutral-200 bg-neutral-50"
+                        title={a.originalName}
+                      >
+                        {a.previewUrl ? (
+                          <img src={a.previewUrl} alt={a.originalName} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-400">
+                            {a.originalName.split(".").pop()?.toUpperCase() ?? "IMG"}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        key={`${entry.id}-att-${idx}`}
+                        className="flex h-12 max-w-[260px] items-center gap-2.5 rounded-lg border border-neutral-200 bg-white px-3"
+                        title={a.originalName}
+                      >
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-neutral-50 text-neutral-500 ring-1 ring-neutral-200">
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[12px] font-medium text-neutral-800">{a.originalName}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-neutral-400">
+                            {a.originalName.split(".").pop()?.toUpperCase() ?? "FILE"}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {entry.text && <ChatBubble role="user">{entry.text}</ChatBubble>}

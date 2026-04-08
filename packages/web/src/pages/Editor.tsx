@@ -53,17 +53,19 @@ export function EditorPage() {
   const chatDragDepth = useRef(0);
   const [chatDragging, setChatDragging] = useState(false);
 
-  // Window-level paste handler so images can be pasted from anywhere on the editor
+  // Window-level paste handler so files can be pasted from anywhere on the editor
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement | null;
       // Don't hijack paste when typing in inputs that aren't the composer
       if (target && target.tagName === "INPUT") return;
       const items = Array.from(e.clipboardData?.items ?? []);
-      const imageItems = items.filter((i) => i.type.startsWith("image/"));
-      if (imageItems.length === 0) return;
+      const fileItems = items.filter(
+        (i) => i.kind === "file" && (i.type.startsWith("image/") || i.type.startsWith("text/")),
+      );
+      if (fileItems.length === 0) return;
       e.preventDefault();
-      const files = imageItems.map((i) => i.getAsFile()).filter((f): f is File => !!f);
+      const files = fileItems.map((i) => i.getAsFile()).filter((f): f is File => !!f);
       composerRef.current?.addFiles(files);
     };
     window.addEventListener("paste", onPaste);

@@ -5,7 +5,13 @@
 
 import { apiJson } from "@/lib/api";
 
-export type Attachment = { path: string; originalName: string; previewUrl?: string };
+export type Attachment = {
+  path: string;
+  originalName: string;
+  /** "image" or "content" — content files (txt/md/html) render as a chip */
+  kind?: "image" | "content";
+  previewUrl?: string;
+};
 
 export type ChatLine =
   | { id: string; kind: "user"; text: string; attachments?: Attachment[] }
@@ -106,17 +112,27 @@ export async function loadHistory(projectId: string, conversationId: string | nu
         content: string;
         conversationId?: string;
         createdAt: number;
-        attachments?: { path: string; originalName: string }[];
+        attachments?: { path: string; originalName: string; kind?: "image" | "content" }[];
       }[];
     }>(`/api/projects/${projectId}/messages${query}`);
     const mapped: ChatLine[] = [];
     for (const m of res.messages) {
       if (m.role === "user") {
-        const atts: Attachment[] | undefined = m.attachments?.map((a) => ({
-          path: a.path,
-          originalName: a.originalName,
-          previewUrl: `/api/projects/${projectId}/file?path=${encodeURIComponent(a.path)}`,
-        }));
+        const atts: Attachment[] | undefined = m.attachments?.map((a) => {
+          // If kind isn't stored, infer from extension
+          const ext = a.path.split(".").pop()?.toLowerCase() ?? "";
+          const inferredKind: "image" | "content" =
+            a.kind ?? (["jpg", "jpeg", "png", "webp", "gif", "svg", "avif"].includes(ext) ? "image" : "content");
+          return {
+            path: a.path,
+            originalName: a.originalName,
+            kind: inferredKind,
+            previewUrl:
+              inferredKind === "image"
+                ? `/api/projects/${projectId}/file?path=${encodeURIComponent(a.path)}`
+                : undefined,
+          };
+        });
         mapped.push({
           id: `h-${m.id}`,
           kind: "user",
@@ -189,7 +205,11 @@ export function sendMessage(
       type: "message",
       content: text,
       conversationId,
-      attachments: attachments?.map((a) => ({ path: a.path, originalName: a.originalName })),
+      attachments: attachments?.map((a) => ({
+        path: a.path,
+        originalName: a.originalName,
+        kind: a.kind,
+      })),
     }));
   };
 

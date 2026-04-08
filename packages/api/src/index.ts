@@ -385,7 +385,7 @@ app.get(
             type?: string;
             content?: string;
             conversationId?: string;
-            attachments?: { path: string; originalName: string }[];
+            attachments?: { path: string; originalName: string; kind?: "image" | "content" }[];
           };
           if (parsed.type !== "message" || typeof parsed.content !== "string" || !parsed.content.trim()) {
             ws.send(JSON.stringify({ type: "error", message: "Invalid message payload" }));
@@ -458,15 +458,29 @@ app.get(
           // Build the prompt — if attachments are present, prepend a clear note for the agent
           let promptText = parsed.content;
           if (attachments.length > 0) {
-            const list = attachments
-              .map((a) => `- ${a.path} (originally: ${a.originalName})`)
-              .join("\n");
-            promptText =
-              `The user attached ${attachments.length} image${attachments.length > 1 ? "s" : ""}, ` +
-              `already saved to the repo at the following paths (relative to repo root):\n${list}\n\n` +
-              `Use these images where the user describes. Reference them via the framework's image system ` +
-              `when applicable. Do not re-create or move them unless asked.\n\n` +
-              `User message:\n${parsed.content}`;
+            const images = attachments.filter((a) => a.kind !== "content");
+            const contents = attachments.filter((a) => a.kind === "content");
+            const lines: string[] = [];
+            if (images.length > 0) {
+              lines.push(
+                `${images.length} image${images.length > 1 ? "s" : ""} were attached and are already saved to the repo at:`,
+              );
+              for (const a of images) lines.push(`- ${a.path} (originally: ${a.originalName})`);
+              lines.push(
+                "Use these images where the user describes. Reference them via the framework's image system when applicable. Do not re-create or move them unless asked.",
+              );
+            }
+            if (contents.length > 0) {
+              if (images.length > 0) lines.push("");
+              lines.push(
+                `${contents.length} text/content file${contents.length > 1 ? "s" : ""} were attached and are already saved to the repo at:`,
+              );
+              for (const a of contents) lines.push(`- ${a.path} (originally: ${a.originalName})`);
+              lines.push(
+                "IMPORTANT: do NOT inline or retype the content of these files in any source file you edit. Treat them as assets: the framework should import or include them (e.g. an Astro component reading the file, an MDX import, a fetch from `/content/...`, or a static include). This keeps the source small and the original file the single source of truth.",
+              );
+            }
+            promptText = `${lines.join("\n")}\n\nUser message:\n${parsed.content}`;
           }
 
           // Look up the user's preferred language so the agent can reply in it

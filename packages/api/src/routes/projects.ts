@@ -410,57 +410,114 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const targetDir = path.join(repoPath, fw.assetsDir);
     fs.mkdirSync(targetDir, { recursive: true });
 
-    const items: Array<{ path: string; originalName: string; bytes: number; contentType: string }> = [];
+    // Where text/markdown/html content files land. Kept separate from images
+    // and inside the repo so the agent can import them via the framework's
+    // own asset/content system instead of pasting their full text inline.
+    const contentDir = path.join(repoPath, "src", "content", "uploads");
+
+    type UploadItem = {
+      path: string;
+      originalName: string;
+      bytes: number;
+      contentType: string;
+      kind: "image" | "content";
+    };
+    const items: UploadItem[] = [];
+
+    const CONTENT_EXTS = new Set(["txt", "md", "markdown", "html", "htm", "csv", "json"]);
+    const CONTENT_MIME_PREFIXES = ["text/"];
+    const CONTENT_MIMES = new Set([
+      "application/json",
+      "application/xml",
+      "application/x-yaml",
+      "application/yaml",
+    ]);
+
+    function isContentFile(file: File): boolean {
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (CONTENT_EXTS.has(ext)) return true;
+      if (CONTENT_MIMES.has(file.type)) return true;
+      if (CONTENT_MIME_PREFIXES.some((p) => file.type.startsWith(p))) return true;
+      return false;
+    }
+
+    function safeStem(name: string, fallback: string): string {
+      return (
+        (name.replace(/\.[^.]+$/, "") || fallback)
+          .toLowerCase()
+          .replace(/[^a-z0-9-]+/g, "-")
+          .replace(/(^-|-$)/g, "")
+          .slice(0, 40) || fallback
+      );
+    }
+
     for (const file of files) {
-      if (!file.type.startsWith("image/")) continue;
+      const isImage = file.type.startsWith("image/");
+      const isContent = !isImage && isContentFile(file);
+      if (!isImage && !isContent) continue;
+
       const inputBuf = Buffer.from(await file.arrayBuffer());
       const id = nanoid(10);
-      const safeStem = (file.name.replace(/\.[^.]+$/, "") || "image")
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, "-")
-        .replace(/(^-|-$)/g, "")
-        .slice(0, 40) || "image";
 
-      let outBuf: Buffer;
-      let ext: string;
-      let contentType: string;
-      if (fw.optimizes) {
-        // Framework optimises at build time — preserve original (auto-rotate, cap dimensions)
-        const meta = await sharp(inputBuf).metadata();
-        const isJpeg = meta.format === "jpeg" || meta.format === "jpg";
-        const isPng = meta.format === "png";
-        const pipeline = sharp(inputBuf).rotate().resize(2400, 2400, { fit: "inside", withoutEnlargement: true });
-        if (isJpeg) {
-          outBuf = await pipeline.jpeg({ quality: 90 }).toBuffer();
-          ext = "jpg";
-          contentType = "image/jpeg";
-        } else if (isPng) {
-          outBuf = await pipeline.png({ compressionLevel: 9 }).toBuffer();
-          ext = "png";
-          contentType = "image/png";
+      if (isImage) {
+        const stem = safeStem(file.name, "image");
+        let outBuf: Buffer;
+        let ext: string;
+        let contentType: string;
+        if (fw.optimizes) {
+          const meta = await sharp(inputBuf).metadata();
+          const isJpeg = meta.format === "jpeg" || meta.format === "jpg";
+          const isPng = meta.format === "png";
+          const pipeline = sharp(inputBuf).rotate().resize(2400, 2400, { fit: "inside", withoutEnlargement: true });
+          if (isJpeg) {
+            outBuf = await pipeline.jpeg({ quality: 90 }).toBuffer();
+            ext = "jpg";
+            contentType = "image/jpeg";
+          } else if (isPng) {
+            outBuf = await pipeline.png({ compressionLevel: 9 }).toBuffer();
+            ext = "png";
+            contentType = "image/png";
+          } else {
+            outBuf = await pipeline.webp({ quality: 90 }).toBuffer();
+            ext = "webp";
+            contentType = "image/webp";
+          }
         } else {
-          outBuf = await pipeline.webp({ quality: 90 }).toBuffer();
+          outBuf = await processUploadToWebP(inputBuf);
           ext = "webp";
           contentType = "image/webp";
         }
+        const filename = `${stem}-${id}.${ext}`;
+        fs.writeFileSync(path.join(targetDir, filename), outBuf);
+        items.push({
+          path: `${fw.assetsDir}/${filename}`,
+          originalName: file.name,
+          bytes: outBuf.length,
+          contentType,
+          kind: "image",
+        });
       } else {
-        // No build-time optimisation — convert to webp ourselves
-        outBuf = await processUploadToWebP(inputBuf);
-        ext = "webp";
-        contentType = "image/webp";
+        // Content file: keep the original extension, just sanitize the stem
+        const stem = safeStem(file.name, "content");
+        const rawExt = (file.name.split(".").pop() ?? "txt").toLowerCase();
+        const ext = /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : "txt";
+        // Cap content uploads to 1 MiB so a stray paste can't fill the disk
+        const MAX_CONTENT_BYTES = 1024 * 1024;
+        if (inputBuf.length > MAX_CONTENT_BYTES) continue;
+        fs.mkdirSync(contentDir, { recursive: true });
+        const filename = `${stem}-${id}.${ext}`;
+        fs.writeFileSync(path.join(contentDir, filename), inputBuf);
+        items.push({
+          path: `src/content/uploads/${filename}`,
+          originalName: file.name,
+          bytes: inputBuf.length,
+          contentType: file.type || "text/plain",
+          kind: "content",
+        });
       }
-
-      const filename = `${safeStem}-${id}.${ext}`;
-      fs.writeFileSync(path.join(targetDir, filename), outBuf);
-      items.push({
-        path: `${fw.assetsDir}/${filename}`,
-        originalName: file.name,
-        bytes: outBuf.length,
-        contentType,
-      });
     }
 
-    if (items.length === 0) return c.json({ error: "No image files in upload" }, 400);
+    if (items.length === 0) return c.json({ error: "No supported files in upload" }, 400);
     return c.json({ items, framework: fw });
   })
   .post("/:id/asset-delete", async (c) => {
