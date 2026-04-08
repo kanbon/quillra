@@ -206,20 +206,24 @@ export function EditorPage() {
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-white">
-      <EditorToolbar
-        projectId={id}
-        projectName={project?.name ?? "…"}
-        canPublish={Boolean(canPublish)}
-        publishing={publishMut.isPending}
-        onPublish={openPublishModal}
-      />
+      {/* Editor toolbar is desktop-only on mobile we reclaim the vertical space
+          and drive the UI entirely through the chat + floating preview button. */}
+      <div className="hidden md:block">
+        <EditorToolbar
+          projectId={id}
+          projectName={project?.name ?? "…"}
+          canPublish={Boolean(canPublish)}
+          publishing={publishMut.isPending}
+          onPublish={openPublishModal}
+        />
+      </div>
       {error && (
         <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{error}</div>
       )}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section
-          className="relative flex min-h-0 w-full flex-col md:w-auto md:border-r md:border-neutral-200"
-          style={{ flexBasis: `${split}%`, maxWidth: "100%" }}
+          className="relative flex min-h-0 w-full flex-1 flex-col md:w-auto md:max-w-full md:flex-none md:border-r md:border-neutral-200 md:[flex-basis:var(--chat-split)]"
+          style={{ "--chat-split": `${split}%` } as React.CSSProperties}
           onDragEnter={(e) => {
             if (!Array.from(e.dataTransfer.types).includes("Files")) return;
             e.preventDefault();
