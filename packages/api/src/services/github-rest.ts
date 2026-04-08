@@ -95,3 +95,44 @@ export async function getRepoMeta(
   );
   return { defaultBranch: data.default_branch };
 }
+
+/**
+ * Fetch package.json (parsed) + the list of file names at the root of a
+ * repo on a specific branch, without cloning. Used by the connect modal
+ * to identify the framework before the user submits.
+ */
+export async function fetchRepoManifest(
+  owner: string,
+  repo: string,
+  ref: string,
+): Promise<{
+  packageJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null;
+  rootFiles: string[];
+}> {
+  // 1) List root files
+  let rootFiles: string[] = [];
+  try {
+    const tree = await ghJson<{ name: string; type: string }[]>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?ref=${encodeURIComponent(ref)}`,
+    );
+    rootFiles = tree.map((t) => t.name);
+  } catch {
+    /* repo may be empty or branch missing */
+  }
+
+  // 2) Try to fetch package.json (gracefully nullable)
+  let packageJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
+  if (rootFiles.includes("package.json")) {
+    try {
+      const file = await ghJson<{ content: string; encoding: string }>(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/package.json?ref=${encodeURIComponent(ref)}`,
+      );
+      const raw = file.encoding === "base64" ? Buffer.from(file.content, "base64").toString("utf8") : file.content;
+      packageJson = JSON.parse(raw);
+    } catch {
+      /* malformed package.json — leave null, detector falls back to root files */
+    }
+  }
+
+  return { packageJson, rootFiles };
+}

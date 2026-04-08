@@ -9,7 +9,14 @@ import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
-type FrameworkInfo = { id: string; label: string; assetsDir: string; optimizes: boolean };
+type FrameworkInfo = {
+  id: string;
+  label: string;
+  iconSlug: string;
+  color: string;
+  assetsDir: string;
+  optimizes: boolean;
+};
 
 type Props = {
   projectId: string;
@@ -79,9 +86,20 @@ export function EditorToolbar({
               </Heading>
               {framework && framework.id !== "unknown" && (
                 <span
-                  className="shrink-0 rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white py-1 pl-1 pr-2.5 text-[11px] font-semibold tracking-tight text-neutral-700 shadow-sm ring-1 ring-neutral-200"
                   title={`${framework.label}${framework.optimizes ? " · " + t("toolbar.autoOptimisesImages") : ""}`}
                 >
+                  <span
+                    className="flex h-5 w-5 items-center justify-center rounded-full"
+                    style={{ backgroundColor: framework.color }}
+                  >
+                    <img
+                      src={`https://cdn.simpleicons.org/${framework.iconSlug}/ffffff`}
+                      alt=""
+                      width={11}
+                      height={11}
+                    />
+                  </span>
                   {framework.label}
                 </span>
               )}

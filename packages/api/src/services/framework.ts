@@ -1,14 +1,20 @@
 /**
- * Framework detection. Inspects a project repo to identify which static-site
- * framework (if any) is in use, so we can pick a sensible asset destination
- * and decide whether the framework will optimise images at build time.
+ * Framework detection — thin wrapper around the central registry.
+ *
+ * The registry in framework-registry.ts is the single source of truth for
+ * every framework Quillra supports (label, icon, dev command, assets dir,
+ * detection rules). This file just inspects a cloned repo on disk and
+ * matches it against the registry, with mtime-based caching.
  */
 import fs from "node:fs";
 import path from "node:path";
+import { detectFromManifest, type FrameworkDef } from "./framework-registry.js";
 
 export type FrameworkInfo = {
   id: string;
   label: string;
+  iconSlug: string;
+  color: string;
   /** Repo-relative directory where new image assets should be written */
   assetsDir: string;
   /** True if the framework produces optimised image variants at build time */
@@ -18,73 +24,43 @@ export type FrameworkInfo = {
 const UNKNOWN: FrameworkInfo = {
   id: "unknown",
   label: "Static site",
+  iconSlug: "html5",
+  color: "#737373",
   assetsDir: "images",
   optimizes: false,
 };
 
+function defToInfo(def: FrameworkDef): FrameworkInfo {
+  return {
+    id: def.id,
+    label: def.label,
+    iconSlug: def.iconSlug,
+    color: def.color,
+    assetsDir: def.assetsDir,
+    optimizes: def.optimizes,
+  };
+}
+
 type CacheEntry = { mtimeMs: number; info: FrameworkInfo };
 const cache = new Map<string, CacheEntry>();
 
-function readJson(file: string): Record<string, unknown> | null {
+function readJson(file: string): { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+    return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
     return null;
   }
 }
 
-function hasDep(pkg: Record<string, unknown> | null, name: string): boolean {
-  if (!pkg) return false;
-  const deps = { ...(pkg.dependencies as object), ...(pkg.devDependencies as object) } as Record<string, string>;
-  return name in deps;
-}
-
 function detect(repoPath: string): FrameworkInfo {
   const pkgPath = path.join(repoPath, "package.json");
-  const pkg = fs.existsSync(pkgPath) ? readJson(pkgPath) : null;
-
-  if (hasDep(pkg, "astro")) {
-    return { id: "astro", label: "Astro", assetsDir: "src/assets", optimizes: true };
-  }
-  if (hasDep(pkg, "next")) {
-    return { id: "next", label: "Next.js", assetsDir: "public/images", optimizes: true };
-  }
-  if (hasDep(pkg, "nuxt") || hasDep(pkg, "nuxt3")) {
-    const optimizes = hasDep(pkg, "@nuxt/image");
-    return { id: "nuxt", label: "Nuxt", assetsDir: "public/images", optimizes };
-  }
-  if (hasDep(pkg, "gatsby")) {
-    return { id: "gatsby", label: "Gatsby", assetsDir: "src/images", optimizes: true };
-  }
-  if (hasDep(pkg, "@sveltejs/kit")) {
-    return { id: "sveltekit", label: "SvelteKit", assetsDir: "static/images", optimizes: false };
-  }
-  if (hasDep(pkg, "@11ty/eleventy")) {
-    return { id: "eleventy", label: "Eleventy", assetsDir: "src/images", optimizes: false };
-  }
-  if (hasDep(pkg, "remix") || hasDep(pkg, "@remix-run/react")) {
-    return { id: "remix", label: "Remix", assetsDir: "public/images", optimizes: false };
-  }
-
-  // Non-Node frameworks
-  if (
-    fs.existsSync(path.join(repoPath, "hugo.toml")) ||
-    fs.existsSync(path.join(repoPath, "hugo.yaml")) ||
-    fs.existsSync(path.join(repoPath, "config.toml")) ||
-    fs.existsSync(path.join(repoPath, "config.yaml"))
-  ) {
-    if (fs.existsSync(path.join(repoPath, "content"))) {
-      return { id: "hugo", label: "Hugo", assetsDir: "static/images", optimizes: false };
-    }
-  }
-  if (
-    fs.existsSync(path.join(repoPath, "_config.yml")) ||
-    fs.existsSync(path.join(repoPath, "_config.yaml"))
-  ) {
-    return { id: "jekyll", label: "Jekyll", assetsDir: "assets/images", optimizes: false };
-  }
-
-  return UNKNOWN;
+  const packageJson = fs.existsSync(pkgPath) ? readJson(pkgPath) : null;
+  let rootFiles: string[] = [];
+  try {
+    rootFiles = fs.readdirSync(repoPath);
+  } catch { /* ignore */ }
+  const def = detectFromManifest({ packageJson, rootFiles });
+  return def ? defToInfo(def) : UNKNOWN;
 }
 
 /**

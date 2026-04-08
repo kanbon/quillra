@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import { setPreviewStatus, registerPreviewPort } from "./preview-status.js";
+import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 
 const previewChildren = new Map<string, ChildProcess>();
 
@@ -66,15 +67,29 @@ export async function installDependenciesIfNeeded(repoPath: string, projectId?: 
 
 type DevCmd = { command: string; args: string[]; label: string };
 
+function readPkgJson(repoPath: string) {
+  const p = path.join(repoPath, "package.json");
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf-8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      scripts?: Record<string, string>;
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function resolveDevCommand(
   repoPath: string,
   port: number,
   override: string | null | undefined,
 ): DevCmd {
+  // 1) Project-level override always wins
   const interpolated = (override?.trim() ?? "")
     .replace(/\{port\}/g, String(port))
     .replace(/\$PORT/g, String(port));
-
   if (interpolated) {
     if (process.platform === "win32") {
       return {
@@ -86,60 +101,39 @@ export function resolveDevCommand(
     return { command: "sh", args: ["-c", interpolated], label: "Custom" };
   }
 
-  const pkgPath = path.join(repoPath, "package.json");
-  if (!fs.existsSync(pkgPath)) {
+  // 2) Detect via the central framework registry
+  const pkg = readPkgJson(repoPath);
+  let rootFiles: string[] = [];
+  try {
+    rootFiles = fs.readdirSync(repoPath);
+  } catch { /* ignore */ }
+  const def = detectFromManifest({ packageJson: pkg, rootFiles });
+  if (def) {
     return {
-      command: "npx",
-      args: ["astro", "dev", "--host", "0.0.0.0", "--port", String(port)],
-      label: "Astro (default)",
+      command: def.devCommand.binary,
+      args: def.devCommand.args.map((a) => a.replace(/\{port\}/g, String(port))),
+      label: def.label,
     };
   }
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    scripts?: Record<string, string>;
-  };
-  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-
-  if (deps["astro"]) {
-    return {
-      command: "npx",
-      args: ["astro", "dev", "--host", "0.0.0.0", "--port", String(port)],
-      label: "Astro",
-    };
-  }
-  if (deps["next"]) {
-    return {
-      command: "npx",
-      args: ["next", "dev", "-H", "0.0.0.0", "-p", String(port)],
-      label: "Next.js",
-    };
-  }
-  if (deps["vite"] || deps["@vitejs/plugin-react"] || deps["@vitejs/plugin-vue"]) {
-    return {
-      command: "npx",
-      args: ["vite", "--host", "0.0.0.0", "--port", String(port)],
-      label: "Vite",
-    };
-  }
+  // 3) Fall back to whatever `dev` script is in package.json
   const pm = getPackageManager(repoPath);
-  if (pkg.scripts?.dev) {
-    if (pm === "yarn") {
-      return { command: "yarn", args: ["run", "dev"], label: "yarn dev" };
-    }
-    if (pm === "pnpm") {
-      return { command: "pnpm", args: ["run", "dev"], label: "pnpm dev" };
-    }
+  if (pkg?.scripts?.dev) {
+    if (pm === "yarn") return { command: "yarn", args: ["run", "dev"], label: "yarn dev" };
+    if (pm === "pnpm") return { command: "pnpm", args: ["run", "dev"], label: "pnpm dev" };
     return { command: "npm", args: ["run", "dev"], label: "npm run dev" };
   }
 
+  // 4) Last-resort default
   return {
     command: "npx",
     args: ["vite", "--host", "0.0.0.0", "--port", String(port)],
-    label: "Vite (fallback)",
+    label: "Static site",
   };
 }
+
+// Re-exported so other modules can resolve a framework by id without importing the registry directly
+export { getFrameworkById };
 
 /** Remove cloned workspace so the next ensureRepoCloned does a fresh clone (repo or branch change). */
 export function clearProjectRepoClone(projectId: string): void {
