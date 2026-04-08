@@ -300,6 +300,9 @@ export function sendMessage(
       updated = updated.filter((l) => l.kind !== "tool_active");
       internal.ws = null;
       update(currentK, { lines: updated, busy: false });
+      // Always reload the preview when streaming finishes — the agent
+      // may have edited files and the iframe should reflect the result.
+      onRefreshPreview?.();
       ws.close();
     }
 
