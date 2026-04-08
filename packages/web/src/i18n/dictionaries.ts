@@ -75,6 +75,15 @@ const enDict = {
     noConversations: "No conversations yet",
     assistant: "Assistant",
     greeting: "What should we change?",
+    allMembers: "All members",
+  },
+  versionHistory: {
+    title: "Version history",
+    open: "Version history",
+    latest: "Latest",
+    notPushed: "Not pushed",
+    empty: "No commits yet.",
+    loadError: "Could not read the git history.",
   },
   publish: {
     modalTitle: "Go live",
@@ -331,6 +340,15 @@ export const de: DeepStringRecord = {
     noConversations: "Noch keine Unterhaltungen",
     assistant: "Assistent",
     greeting: "Was sollen wir ändern?",
+    allMembers: "Alle Mitglieder",
+  },
+  versionHistory: {
+    title: "Versionsverlauf",
+    open: "Versionsverlauf",
+    latest: "Aktuell",
+    notPushed: "Nicht gepusht",
+    empty: "Noch keine Commits.",
+    loadError: "Git-Verlauf konnte nicht gelesen werden.",
   },
   publish: {
     modalTitle: "Live schalten",

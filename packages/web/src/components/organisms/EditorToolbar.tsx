@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { NavLink, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
+import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
 import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
@@ -42,6 +44,7 @@ export function EditorToolbar({
   const { t } = useT();
   const me = useCurrentUser();
   const isClient = me.kind === "client";
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const { data: framework } = useQuery({
     queryKey: ["project-framework", projectId],
@@ -121,6 +124,19 @@ export function EditorToolbar({
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {!isClient && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
+              title={t("versionHistory.open")}
+              aria-label={t("versionHistory.open")}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          )}
           {canPublish && (
             <button
               type="button"
@@ -162,6 +178,7 @@ export function EditorToolbar({
           </button>
         </div>
       </div>
+      <VersionHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projectId={projectId} />
     </header>
   );
 }

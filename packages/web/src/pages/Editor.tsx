@@ -293,7 +293,7 @@ export function EditorPage() {
                     onChange={(e) => setConvFilterUserId(e.target.value || null)}
                     className="h-7 flex-1 rounded-md border border-neutral-200 bg-white px-2 text-xs text-neutral-700 focus:border-neutral-900 focus:outline-none focus:ring-0"
                   >
-                    <option value="">All members</option>
+                    <option value="">{t("chat.allMembers")}</option>
                     {membersQ.data?.members.map((m) => (
                       <option key={m.id} value={m.userId}>
                         {m.name || m.email} · {m.role}
