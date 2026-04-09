@@ -88,12 +88,9 @@ export function TeamTab() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-          {t("instanceSettings.tabTeam")}
-        </h2>
-        <p className="mt-1 text-sm text-neutral-500">{t("instanceSettings.teamDescription")}</p>
-      </div>
+      <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
+        {t("instanceSettings.tabTeam")}
+      </h2>
 
       {/* Invite user */}
       <section className="rounded-xl border border-neutral-200 bg-white p-5">

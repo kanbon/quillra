@@ -77,12 +77,9 @@ export function GeneralTab({ status, onSaved }: Props) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-          {t("instanceSettings.tabGeneral")}
-        </h2>
-        <p className="mt-1 text-sm text-neutral-500">{t("instanceSettings.generalDescription")}</p>
-      </div>
+      <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
+        {t("instanceSettings.tabGeneral")}
+      </h2>
 
       <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[12px] leading-relaxed text-amber-800">
         <strong className="font-semibold">{t("instanceSettings.publiclyVisible")}</strong>{" "}

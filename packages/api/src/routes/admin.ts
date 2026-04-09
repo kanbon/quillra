@@ -10,7 +10,10 @@ import type { SessionUser } from "../lib/auth.js";
 import { sendEmail, isMailerEnabled } from "../services/mailer.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
 import { getOrganizationInfo } from "../services/instance-settings.js";
-import { listInstallations as listGithubAppInstallations } from "../services/github-app.js";
+import {
+  listInstallations as listGithubAppInstallations,
+  clearGithubAppCredentials,
+} from "../services/github-app.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -184,18 +187,31 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
    * Owner-only: list the GitHub App's installations. Renders in the
    * Integrations tab as "which GitHub accounts/orgs have granted the App
    * access to which repos". Returns an empty array if the App isn't
-   * configured yet.
+   * configured yet. If the App was deleted on github.com, auto-clears
+   * the stored credentials and signals the frontend via `cleared`.
    */
   .get("/github-app/installations", async (c) => {
     const r = await requireOwner(c);
     if ("error" in r) return r.error;
     try {
-      const installations = await listGithubAppInstallations();
-      return c.json({ installations });
+      const result = await listGithubAppInstallations();
+      return c.json(result);
     } catch (e) {
       return c.json(
-        { error: e instanceof Error ? e.message : "Failed" },
+        { installations: [], error: e instanceof Error ? e.message : "Failed" },
         500,
       );
     }
+  })
+  /**
+   * Owner-only: explicitly reset the GitHub App credentials. Used by
+   * the "Reset" button in the Integrations tab when the owner deleted
+   * the App on github.com and wants to start over, or just wants to
+   * switch to a different App.
+   */
+  .delete("/github-app", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    clearGithubAppCredentials();
+    return c.json({ ok: true });
   });

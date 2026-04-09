@@ -36,6 +36,28 @@ export type GithubAppCreds = {
   webhookSecret: string | null;
 };
 
+/**
+ * Delete every GITHUB_APP_* row from instance_settings. Called both by
+ * the /api/admin/github-app DELETE endpoint (explicit reset) and
+ * automatically when we detect that the App was deleted on github.com
+ * and the stored credentials are orphaned (the App API returns 404
+ * "Integration not found" when authenticating with a JWT for a
+ * deleted App).
+ *
+ * Also wipes the installation-token cache because any cached tokens
+ * are now as dead as the App itself.
+ */
+export function clearGithubAppCredentials(): void {
+  setInstanceSetting("GITHUB_APP_ID", null);
+  setInstanceSetting("GITHUB_APP_SLUG", null);
+  setInstanceSetting("GITHUB_APP_NAME", null);
+  setInstanceSetting("GITHUB_APP_CLIENT_ID", null);
+  setInstanceSetting("GITHUB_APP_CLIENT_SECRET", null);
+  setInstanceSetting("GITHUB_APP_PRIVATE_KEY", null);
+  setInstanceSetting("GITHUB_APP_WEBHOOK_SECRET", null);
+  installationTokenCache.clear();
+}
+
 type InstallationTokenResponse = {
   token: string;
   expires_at: string;
@@ -161,22 +183,50 @@ export async function getInstallationTokenForRepo(
   return getInstallationToken(id);
 }
 
-/** List every installation of the App, used by the Integrations tab. */
-export async function listInstallations(): Promise<
-  Array<{
-    id: number;
-    account: { login: string; type: string; avatar_url?: string | null };
-    repository_selection: "all" | "selected";
-  }>
-> {
-  if (!isGithubAppConfigured()) return [];
-  return ghApp<
-    Array<{
-      id: number;
-      account: { login: string; type: string; avatar_url?: string | null };
-      repository_selection: "all" | "selected";
-    }>
-  >(`/app/installations`);
+type Installation = {
+  id: number;
+  account: { login: string; type: string; avatar_url?: string | null };
+  repository_selection: "all" | "selected";
+};
+
+export type InstallationsResult = {
+  installations: Installation[];
+  /** Set when we auto-wiped the stored credentials because the App
+   *  no longer exists remotely. The caller should refetch setup
+   *  status so the UI transitions to the "Create App" state. */
+  cleared?: "app-deleted";
+};
+
+/**
+ * List every installation of the App, used by the Integrations tab.
+ *
+ * If github.com says "Integration not found" (HTTP 404) the App has
+ * been deleted remotely and our stored credentials are orphaned. We
+ * auto-wipe them so the UI transitions to the fresh "Create App"
+ * state instead of showing a stuck error banner forever.
+ */
+export async function listInstallations(): Promise<InstallationsResult> {
+  if (!isGithubAppConfigured()) return { installations: [] };
+  try {
+    const installations = await ghApp<Installation[]>(`/app/installations`);
+    return { installations };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    // ghApp throws `GitHub App API 404: ...` on 404 responses. Match on
+    // both the HTTP status and the "Integration not found" body, because
+    // some other 404 could mean a different problem (e.g. revoked auth).
+    if (
+      msg.includes("GitHub App API 404") &&
+      msg.toLowerCase().includes("integration not found")
+    ) {
+      console.warn(
+        "[github-app] remote App is gone (404 Integration not found) — clearing stored credentials",
+      );
+      clearGithubAppCredentials();
+      return { installations: [], cleared: "app-deleted" };
+    }
+    throw e;
+  }
 }
 
 /**
@@ -189,7 +239,7 @@ export async function listInstallations(): Promise<
 export async function listRepositoriesAcrossInstallations(): Promise<
   Array<{ fullName: string; defaultBranch: string; installationId: number }>
 > {
-  const installations = await listInstallations();
+  const { installations } = await listInstallations();
   const out: Array<{ fullName: string; defaultBranch: string; installationId: number }> = [];
   for (const inst of installations) {
     try {

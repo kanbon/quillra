@@ -41,17 +41,30 @@ export function IntegrationsTab({ status, onSaved }: Props) {
 
   const [installations, setInstallations] = useState<Installation[] | null>(null);
   const [installationsError, setInstallationsError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (!appConfigured) {
       setInstallations(null);
+      setInstallationsError(null);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const r = await apiJson<{ installations: Installation[] }>("/api/admin/github-app/installations");
-        if (!cancelled) setInstallations(r.installations);
+        const r = await apiJson<{
+          installations: Installation[];
+          cleared?: "app-deleted";
+          error?: string;
+        }>("/api/admin/github-app/installations");
+        if (cancelled) return;
+        // Backend auto-wiped orphaned credentials — refresh the parent
+        // status so the tab re-renders into the "Create App" state.
+        if (r.cleared === "app-deleted") {
+          onSaved();
+          return;
+        }
+        setInstallations(r.installations);
       } catch (e) {
         if (!cancelled) setInstallationsError(e instanceof Error ? e.message : "Failed");
       }
@@ -59,7 +72,20 @@ export function IntegrationsTab({ status, onSaved }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [appConfigured, status]);
+  }, [appConfigured, status, onSaved]);
+
+  async function resetGithubApp() {
+    if (!confirm(t("instanceSettings.ghAppResetConfirm"))) return;
+    setResetting(true);
+    try {
+      await apiJson("/api/admin/github-app", { method: "DELETE" });
+      onSaved();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setResetting(false);
+    }
+  }
 
   const prevClientId = status?.values.GITHUB_CLIENT_ID?.value ?? "";
   const [clientId, setClientId] = useState(prevClientId);
@@ -119,14 +145,9 @@ export function IntegrationsTab({ status, onSaved }: Props) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-          {t("instanceSettings.tabIntegrations")}
-        </h2>
-        <p className="mt-1 text-sm text-neutral-500">
-          {t("instanceSettings.integrationsDescription")}
-        </p>
-      </div>
+      <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
+        {t("instanceSettings.tabIntegrations")}
+      </h2>
 
       {/* GitHub App — the one that commits */}
       <div className="rounded-xl border border-neutral-200 bg-white p-5">
@@ -207,6 +228,14 @@ export function IntegrationsTab({ status, onSaved }: Props) {
                   {t("instanceSettings.ghAppManage")} →
                 </a>
               )}
+              <button
+                type="button"
+                onClick={resetGithubApp}
+                disabled={resetting}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-1.5 text-[12px] font-medium text-red-600 shadow-sm hover:bg-red-50 disabled:opacity-50"
+              >
+                {resetting ? t("instanceSettings.saving") : t("instanceSettings.ghAppReset")}
+              </button>
             </div>
           </div>
         ) : (

@@ -174,12 +174,9 @@ export function EmailTab({ status, onSaved }: Props) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-          {t("instanceSettings.tabEmail")}
-        </h2>
-        <p className="mt-1 text-sm text-neutral-500">{t("instanceSettings.emailDescription")}</p>
-      </div>
+      <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
+        {t("instanceSettings.tabEmail")}
+      </h2>
 
       <div className="space-y-2">
         <label className="text-[12px] font-semibold uppercase tracking-wider text-neutral-600">

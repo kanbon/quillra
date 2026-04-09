@@ -81,12 +81,9 @@ export function ApiKeysTab({ status, onSaved }: Props) {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-          {t("instanceSettings.tabApiKeys")}
-        </h2>
-        <p className="mt-1 text-sm text-neutral-500">{t("instanceSettings.apiKeysDescription")}</p>
-      </div>
+      <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
+        {t("instanceSettings.tabApiKeys")}
+      </h2>
 
       <div className="space-y-6">
         <SecretField
