@@ -176,6 +176,12 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
       // Invalidate the polling publish-status so the "N changes" pill
       // in the header flips back to hidden immediately.
       void qc.invalidateQueries({ queryKey: ["publish-status", projectId] });
+      // Tell the Editor (if mounted) to refresh its preview iframe.
+      // The dev server's file watcher should HMR most edits, but a
+      // hard reset touches a lot of files at once — a cheap iframe
+      // src bump guarantees the user sees the reverted state
+      // without having to manually refresh.
+      window.dispatchEvent(new CustomEvent("quillra:refresh-preview"));
       onClose();
     } catch (e) {
       setDiscardError(e instanceof Error ? e.message : "Failed");

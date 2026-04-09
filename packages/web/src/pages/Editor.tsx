@@ -152,6 +152,18 @@ export function EditorPage() {
     setPreviewSrc((u) => (u ? `${u.split("?")[0]}?t=${Date.now()}` : null));
   }, []);
 
+  // Listen for refresh events fired by components that don't have
+  // direct access to Editor state (e.g. ChangesModal after discarding
+  // changes). The dev server's file watcher should pick up most file
+  // edits automatically, but a hard reset can change a lot of files
+  // at once and some frameworks batch-drop HMR updates under that
+  // load — reloading the iframe is the belt-and-suspenders fix.
+  useEffect(() => {
+    const handler = () => refreshPreview();
+    window.addEventListener("quillra:refresh-preview", handler);
+    return () => window.removeEventListener("quillra:refresh-preview", handler);
+  }, [refreshPreview]);
+
   const handleConversationCreated = useCallback((newId: string) => {
     setConversationId(newId);
     void qc.invalidateQueries({ queryKey: ["conversations", id] });
