@@ -13,8 +13,10 @@ import { NavLink, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
+import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
 import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
 import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
+import { useProjectPresence } from "@/hooks/useProjectPresence";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
@@ -57,6 +59,10 @@ export function ProjectHeader({
   const isClient = me.kind === "client";
   const [historyOpen, setHistoryOpen] = useState(false);
   const showPublish = Boolean(canPublish && onPublish);
+  // Clients beat presence too (so the team can see them viewing), but they
+  // don't get to see who else is here. Only team members read the roster.
+  const presence = useProjectPresence(projectId);
+  const othersVisible = isClient ? [] : presence;
 
   const { data: framework } = useQuery({
     queryKey: ["project-framework", projectId],
@@ -136,6 +142,12 @@ export function ProjectHeader({
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {othersVisible.length > 0 && (
+            <>
+              <PresenceAvatars users={othersVisible} />
+              <div className="h-6 w-px bg-neutral-200" />
+            </>
+          )}
           {!isClient && (
             <button
               type="button"

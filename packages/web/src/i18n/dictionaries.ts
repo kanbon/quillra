@@ -88,6 +88,12 @@ const enDict = {
     empty: "No commits yet.",
     loadError: "Could not read the git history.",
   },
+  presence: {
+    viewing: "Viewing now",
+    clientViewing: "Client · viewing now",
+    peopleHere: "{count} people viewing this project",
+    moreViewers: "+{count} more",
+  },
   publish: {
     modalTitle: "Go live",
     reviewing: "Reviewing your changes…",
@@ -355,6 +361,12 @@ export const de: DeepStringRecord = {
     notPushed: "Nicht gepusht",
     empty: "Noch keine Commits.",
     loadError: "Git-Verlauf konnte nicht gelesen werden.",
+  },
+  presence: {
+    viewing: "Sieht gerade zu",
+    clientViewing: "Kunde · sieht gerade zu",
+    peopleHere: "{count} Personen sehen dieses Projekt gerade an",
+    moreViewers: "+{count} weitere",
   },
   publish: {
     modalTitle: "Live schalten",

@@ -26,12 +26,17 @@ import { getPreviewStatus } from "../services/preview-status.js";
 import { processUploadToWebP } from "../services/image.js";
 import { detectFramework } from "../services/framework.js";
 import { getInstanceSetting } from "../services/instance-settings.js";
+import { beat as presenceBeat, listOthers as presenceListOthers } from "../services/presence.js";
 import sharp from "sharp";
 import { simpleGit } from "simple-git";
 import fs from "node:fs";
 import path from "node:path";
 
-type Variables = { user: SessionUser | null };
+type Variables = {
+  user: SessionUser | null;
+  /** Populated when the request was authenticated via the client session cookie. */
+  clientSession: { projectId: string } | null;
+};
 
 async function requireUser(c: { get: (k: "user") => SessionUser | null; json: (b: unknown, s: number) => Response }) {
   const user = c.get("user");
@@ -851,4 +856,48 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
     await db.update(projects).set({ logoUrl: null, updatedAt: new Date() }).where(eq(projects.id, projectId));
     return c.json({ ok: true });
+  })
+  /**
+   * Presence heartbeat. The frontend hits this every ~10s while a user has a
+   * project open. Upserts the caller into the in-memory presence map and
+   * returns every other active viewer for that project (team members and
+   * clients alike, excluding self).
+   */
+  .post("/:id/presence/beat", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+
+    // Access check: team members (via projectMembers row) OR a client whose
+    // session cookie is pinned to exactly this project.
+    const clientSession = c.get("clientSession");
+    let kind: "team" | "client";
+    if (clientSession && clientSession.projectId === projectId) {
+      kind = "client";
+    } else {
+      const m = await memberForProject(r.user.id, projectId);
+      if (!m) return c.json({ error: "Forbidden" }, 403);
+      kind = "team";
+    }
+
+    presenceBeat(
+      projectId,
+      {
+        id: r.user.id,
+        name: r.user.name ?? r.user.email ?? "Someone",
+        email: r.user.email ?? "",
+        image: r.user.image ?? null,
+      },
+      kind,
+    );
+
+    const others = presenceListOthers(projectId, r.user.id).map((e) => ({
+      userId: e.userId,
+      name: e.name,
+      email: e.email,
+      image: e.image,
+      kind: e.kind,
+      lastSeenAt: e.lastSeenAt,
+    }));
+    return c.json({ others });
   });
