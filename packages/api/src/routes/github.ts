@@ -24,10 +24,9 @@ export const githubRouter = new Hono<{ Variables: Variables }>()
       const repos = await listAccessibleRepos();
       return c.json({ repos });
     } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Failed to list repositories" },
-        e instanceof Error && e.message.includes("GITHUB_TOKEN") ? 503 : 400,
-      );
+      const msg = e instanceof Error ? e.message : "Failed to list repositories";
+      // App not configured → 503 so the UI shows "install the GitHub App"
+      return c.json({ error: msg }, msg.includes("GitHub App") ? 503 : 400);
     }
   })
   .get("/repos/:owner/:repo/branches", async (c) => {

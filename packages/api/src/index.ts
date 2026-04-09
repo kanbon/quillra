@@ -507,7 +507,10 @@ app.get(
             ws.send(
               JSON.stringify({
                 type: "error",
-                message: e instanceof Error ? e.message : "Clone failed (set GITHUB_TOKEN?)",
+                message:
+                  e instanceof Error
+                    ? e.message
+                    : "Clone failed — install the Quillra GitHub App on this repository.",
               }),
             );
             return;

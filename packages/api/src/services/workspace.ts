@@ -4,41 +4,29 @@ import path from "node:path";
 import { simpleGit } from "simple-git";
 import { setPreviewStatus, registerPreviewPort } from "./preview-status.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
-import { getInstanceSetting } from "./instance-settings.js";
 import {
+  getGithubAppCredentials,
   getInstallationTokenForRepo,
   isGithubAppConfigured,
 } from "./github-app.js";
 
 /**
- * Resolve the best available credential for a git operation against a
- * specific GitHub repo. Preference order:
- *
- *   1. GitHub App installation token (if the App is configured and
- *      installed on this repo). Short-lived, scoped to one install,
- *      no human credentials. This is the path we want new installs on.
- *
- *   2. Legacy GITHUB_TOKEN personal access token. Kept for backward
- *      compat with installs that predate the App migration. Deprecated
- *      but still honored so upgrades don't break.
- *
- * Returns null when neither is available, and the caller should surface
- * a helpful error to the user (e.g. "install the GitHub App on this repo").
+ * Resolve a short-lived GitHub App installation token for a specific
+ * repo. Returns null if the App isn't configured OR isn't installed on
+ * the repo — the caller should surface "install the Quillra GitHub App
+ * on this repository" in both cases. No PAT fallback: the App is the
+ * only supported auth path for git operations.
  */
 async function resolveRepoGitToken(githubRepoFullName: string): Promise<string | null> {
-  if (isGithubAppConfigured()) {
-    const [owner, repo] = githubRepoFullName.split("/");
-    if (owner && repo) {
-      try {
-        const token = await getInstallationTokenForRepo(owner, repo);
-        if (token) return token;
-      } catch (e) {
-        console.warn(`[workspace] installation token fetch failed for ${githubRepoFullName}:`, e);
-      }
-    }
+  if (!isGithubAppConfigured()) return null;
+  const [owner, repo] = githubRepoFullName.split("/");
+  if (!owner || !repo) return null;
+  try {
+    return (await getInstallationTokenForRepo(owner, repo)) ?? null;
+  } catch (e) {
+    console.warn(`[workspace] installation token fetch failed for ${githubRepoFullName}:`, e);
+    return null;
   }
-  const legacy = getInstanceSetting("GITHUB_TOKEN");
-  return legacy ?? null;
 }
 
 const previewChildren = new Map<string, ChildProcess>();
@@ -376,18 +364,20 @@ export async function pushToGitHub(
   repoPath: string,
   branch: string,
   githubRepoFullName: string,
-  userToken?: string | null,
-  committer?: { name: string; email: string } | null,
+  author?: { name: string | null; email: string | null } | null,
+  commitMessage?: string | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
-  // Prefer explicit user token (rare, passed from an OAuth linked user),
-  // then a GitHub App installation token scoped to this repo, finally
-  // fall back to the legacy instance-wide GITHUB_TOKEN if the App isn't
-  // configured yet. Throws with a user-facing message if nothing works.
-  const token =
-    userToken?.trim() || (await resolveRepoGitToken(githubRepoFullName));
+  // Always resolve the token via the App → legacy PAT chain. We used
+  // to accept an explicit `userToken` parameter here and the publish
+  // route was passing the signed-in user's OAuth access token — which
+  // (a) meant pushes happened under the human's credentials instead
+  // of the App's bot identity and (b) leaked the user's PAT-level
+  // scope into repos they didn't necessarily intend to push. The App
+  // installation token is always the right credential for a push.
+  const token = await resolveRepoGitToken(githubRepoFullName);
   if (!token) {
     throw new Error(
-      "No GitHub credentials for this repo. Install the Quillra GitHub App on this repository, or set GITHUB_TOKEN as a legacy fallback.",
+      "Quillra GitHub App is not installed on this repository. Open Organization Settings → Integrations and install it, then try again.",
     );
   }
 
@@ -395,17 +385,54 @@ export async function pushToGitHub(
   const authUrl = `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`;
   await g.remote(["set-url", "origin", authUrl]);
 
-  if (committer?.name) await g.addConfig("user.name", committer.name);
-  if (committer?.email) await g.addConfig("user.email", committer.email);
+  // Committer identity. When the App is configured, commits are
+  // *committed by* the App's bot (`<slug>[bot]` — shows on github.com
+  // with the robot icon). The human who drove the change is attached
+  // as the git `author` via `--author=` so attribution stays visible
+  // in `git log` and the GitHub UI ("<name> authored, <slug>[bot]
+  // committed"). Falls back to the legacy human committer identity
+  // only when the App isn't set up yet.
+  const creds = getGithubAppCredentials();
+  let botCommitter = false;
+  if (creds?.slug) {
+    const botName = `${creds.slug}[bot]`;
+    // GitHub Apps use a noreply email format of
+    // `<bot-user-id>+<slug>[bot]@users.noreply.github.com` — we don't
+    // know the bot user id at push time without an extra API round
+    // trip, so fall back to a stable noreply address that still
+    // resolves to the Apps bot user in github.com's email matching.
+    const botEmail = `noreply+${creds.slug}@quillra.app`;
+    await g.addConfig("user.name", botName);
+    await g.addConfig("user.email", botEmail);
+    botCommitter = true;
+  } else if (author?.name) {
+    await g.addConfig("user.name", author.name);
+    if (author.email) await g.addConfig("user.email", author.email);
+  }
 
   const status = await g.status();
   if (!status.isClean()) {
     await g.add("-A");
-    const changed = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
-    const summary = changed.length <= 5
-      ? changed.join(", ")
-      : `${changed.slice(0, 4).join(", ")} +${changed.length - 4} more`;
-    await g.commit(`Update ${summary} via Quillra`);
+    // Fall back to a filename-listing message only when no AI-generated
+    // message was supplied. The caller (routes/projects.ts publish)
+    // generates a real subject + body with Claude Haiku before calling
+    // pushToGitHub, so this branch is rarely hit in practice.
+    let message = commitMessage?.trim();
+    if (!message) {
+      const changed = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
+      const list = changed.length <= 3
+        ? changed.join(", ")
+        : `${changed.slice(0, 3).join(", ")} and ${changed.length - 3} more`;
+      message = `Update ${list}`;
+    }
+    const commitArgs: string[] = [];
+    // When the App bot is the committer, attribute authorship to the
+    // human who triggered the publish so `git log` shows who actually
+    // drove the edit.
+    if (botCommitter && author?.name && author?.email) {
+      commitArgs.push(`--author=${author.name} <${author.email}>`);
+    }
+    await g.commit(message, commitArgs);
   }
 
   const branches = await g.branch(["-r"]);

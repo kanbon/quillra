@@ -1,4 +1,13 @@
-import { getInstanceSetting } from "./instance-settings.js";
+/**
+ * Thin REST client for GitHub calls that the server makes on behalf of
+ * the user (listing repos to connect, resolving the default branch of a
+ * repo, fetching a repo's package.json to detect the framework, etc.).
+ *
+ * Authentication is always via a GitHub App installation token. There
+ * is no personal-access-token fallback — if the App isn't configured
+ * or isn't installed on the target repo, calls throw a clear error and
+ * the UI surfaces "install the Quillra GitHub App on this repo".
+ */
 import {
   isGithubAppConfigured,
   listRepositoriesAcrossInstallations,
@@ -9,28 +18,23 @@ const API = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
 /**
- * Legacy PAT accessor, used by non-repo-scoped calls (branch listing,
- * manifest fetching) as a fallback. Repo-scoped operations should prefer
- * an installation token via {@link getInstallationTokenForRepo}.
- */
-function requireToken(): string {
-  const token = getInstanceSetting("GITHUB_TOKEN");
-  if (!token) {
-    throw new Error("GitHub isn't configured yet — finish the setup wizard.");
-  }
-  return token;
-}
-
-/**
- * Resolve a token for calls scoped to a specific repo. Prefers a
- * GitHub App installation token, falls back to the legacy PAT.
+ * Resolve an installation token for a specific repo. Throws with a
+ * user-facing message when the App isn't installed on that repo, which
+ * lets the route handler surface the "go install the App" prompt.
  */
 async function tokenForRepo(owner: string, repo: string): Promise<string> {
-  if (isGithubAppConfigured()) {
-    const t = await getInstallationTokenForRepo(owner, repo).catch(() => null);
-    if (t) return t;
+  if (!isGithubAppConfigured()) {
+    throw new Error(
+      "Quillra GitHub App is not configured. Finish the setup wizard's GitHub App step.",
+    );
   }
-  return requireToken();
+  const token = await getInstallationTokenForRepo(owner, repo);
+  if (!token) {
+    throw new Error(
+      `Quillra GitHub App is not installed on ${owner}/${repo}. Open Organization Settings → Integrations and install it on this repository.`,
+    );
+  }
+  return token;
 }
 
 export type GithubRepoListItem = {
@@ -39,57 +43,19 @@ export type GithubRepoListItem = {
 };
 
 /**
- * Repositories Quillra can push to.
- *
- * - When the GitHub App is configured, this enumerates the union of repos
- *   across every installation — i.e. "every repo the owner has installed
- *   the Quillra App on". That's the intersection of "can edit" + "owner
- *   actually opted this repo in".
- * - When the legacy PAT path is active, falls back to `/user/repos`,
- *   which returns every repo the owner's PAT can read (much broader,
- *   by design because a PAT doesn't have per-repo opt-in).
+ * Every repo the Quillra GitHub App has been granted access to, across
+ * all installations. This is exactly the set of repos the owner can
+ * create a Quillra project for — the App-install step is where they
+ * opt in repo by repo.
  */
 export async function listAccessibleRepos(): Promise<GithubRepoListItem[]> {
-  if (isGithubAppConfigured()) {
-    const repos = await listRepositoriesAcrossInstallations();
-    return repos.map(({ fullName, defaultBranch }) => ({ fullName, defaultBranch }));
+  if (!isGithubAppConfigured()) {
+    throw new Error(
+      "Quillra GitHub App is not configured. Finish the setup wizard's GitHub App step.",
+    );
   }
-
-  const out: GithubRepoListItem[] = [];
-  let url: string | null = `${API}/user/repos?per_page=100&sort=full_name&affiliation=owner,collaborator,organization_member`;
-
-  for (let page = 0; page < 20 && url; page++) {
-    const token = requireToken();
-    const pageRes: Response = await fetch(url, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "X-GitHub-Api-Version": API_VERSION,
-      },
-    });
-    if (!pageRes.ok) {
-      const text = await pageRes.text();
-      throw new Error(`GitHub API ${pageRes.status}: ${text.slice(0, 200)}`);
-    }
-    const batch = (await pageRes.json()) as {
-      full_name: string;
-      default_branch: string;
-    }[];
-    for (const r of batch) {
-      out.push({ fullName: r.full_name, defaultBranch: r.default_branch });
-    }
-    const linkHeader: string | null = pageRes.headers.get("link");
-    url = null;
-    if (linkHeader) {
-      const nextPart: string | undefined = linkHeader.split(",").find((part: string) => part.includes('rel="next"'));
-      if (nextPart) {
-        const hrefMatch: RegExpMatchArray | null = nextPart.match(/<([^>]+)>/);
-        if (hrefMatch) url = hrefMatch[1];
-      }
-    }
-  }
-  out.sort((a, b) => a.fullName.localeCompare(b.fullName));
-  return out;
+  const repos = await listRepositoriesAcrossInstallations();
+  return repos.map(({ fullName, defaultBranch }) => ({ fullName, defaultBranch }));
 }
 
 async function ghJsonAsRepo<T>(owner: string, repo: string, path: string): Promise<T> {

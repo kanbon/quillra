@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { account, user } from "../db/auth-schema.js";
+import { user } from "../db/auth-schema.js";
 import { conversations, messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
@@ -217,9 +217,13 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       } catch { /* no remote yet */ }
       const hasChanges = dirty.length > 0 || unpushed > 0;
 
-      // Generate a plain-English summary using Claude
+      // Generate a plain-English summary using Claude. This is the
+      // expensive call (an API round-trip and tokens) — only run it when
+      // the caller explicitly asks via ?summary=1, so the header's
+      // changes-pill polling can hit this endpoint cheaply.
+      const wantSummary = c.req.query("summary") === "1";
       let summary = "";
-      if (hasChanges) {
+      if (wantSummary && hasChanges) {
         try {
           const diffOutput = await g.diff(["--stat", "--no-color"]);
           const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
@@ -253,6 +257,127 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
     }
   })
+  /**
+   * Technical change overview. Returns every dirty + untracked file
+   * with its full unified git diff, plus the list of local commits
+   * that aren't on the remote default branch yet. Used by the
+   * "changes pill" in ProjectHeader — the pill itself polls the
+   * lightweight /publish-status endpoint, but when the user clicks
+   * it, THIS endpoint supplies the per-file diff bodies shown in
+   * the ChangesModal.
+   *
+   * Untracked files get a synthetic "everything added" diff via
+   * `git diff --no-index /dev/null <file>` so the UI doesn't have
+   * a weird empty state for brand-new files.
+   */
+  .get("/:id/changes", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    try {
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+      const g = simpleGit(repoPath);
+      const status = await g.status();
+
+      type FileChange = {
+        path: string;
+        status: "modified" | "added" | "deleted" | "untracked" | "renamed";
+        additions: number;
+        deletions: number;
+        diff: string;
+        isBinary: boolean;
+      };
+
+      const files: FileChange[] = [];
+      const seen = new Set<string>();
+      const pushFile = async (
+        path: string,
+        fileStatus: FileChange["status"],
+      ) => {
+        if (seen.has(path)) return;
+        seen.add(path);
+        let diff = "";
+        let isBinary = false;
+        try {
+          if (fileStatus === "untracked") {
+            diff = await g
+              .raw(["diff", "--no-index", "--", "/dev/null", path])
+              .catch(() => "");
+          } else {
+            diff = await g.diff(["--", path]);
+          }
+        } catch {
+          diff = "";
+        }
+        if (/^Binary files /m.test(diff) || diff.includes("\x00")) {
+          isBinary = true;
+          diff = "";
+        }
+        let additions = 0;
+        let deletions = 0;
+        for (const line of diff.split("\n")) {
+          if (line.startsWith("+") && !line.startsWith("+++")) additions++;
+          else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+        }
+        // Hard cap on diff size so a monstrous auto-generated file
+        // doesn't make the modal unusable. 200kB is plenty for real
+        // human edits.
+        if (diff.length > 200_000) {
+          diff = diff.slice(0, 200_000) + "\n… (truncated)";
+        }
+        files.push({ path, status: fileStatus, additions, deletions, diff, isBinary });
+      };
+
+      for (const f of status.deleted) await pushFile(f, "deleted");
+      for (const f of status.modified) await pushFile(f, "modified");
+      for (const f of status.created) await pushFile(f, "added");
+      for (const r of status.renamed) await pushFile(r.to, "renamed");
+      for (const f of status.not_added) await pushFile(f, "untracked");
+
+      // Unpushed commits (local-only vs origin/<default branch>)
+      type CommitEntry = {
+        sha: string;
+        shortSha: string;
+        message: string;
+        author: string;
+        date: string;
+      };
+      const commits: CommitEntry[] = [];
+      try {
+        const branches = await g.branch(["-r"]);
+        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+          const log = await g.log({
+            from: `origin/${p.defaultBranch}`,
+            to: "HEAD",
+            maxCount: 50,
+          });
+          for (const commit of log.all) {
+            commits.push({
+              sha: commit.hash,
+              shortSha: commit.hash.slice(0, 7),
+              message: commit.message,
+              author: commit.author_name,
+              date: commit.date,
+            });
+          }
+        }
+      } catch {
+        /* no remote yet */
+      }
+
+      return c.json({ files, commits });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
+    }
+  })
   .post("/:id/publish", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;
@@ -264,16 +389,80 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const [acct] = await db
-        .select()
-        .from(account)
-        .where(and(eq(account.userId, r.user.id), eq(account.providerId, "github")))
-        .limit(1);
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const result = await pushToGitHub(repoPath, p.defaultBranch, p.githubRepoFullName, acct?.accessToken, {
-        name: r.user.name,
-        email: r.user.email,
-      });
+
+      // Generate a proper commit message from the diff via Claude Haiku.
+      // Falls back to a filename summary inside pushToGitHub if this
+      // errors out or the Anthropic key isn't set.
+      let commitMessage: string | null = null;
+      try {
+        const g = simpleGit(repoPath);
+        const status = await g.status();
+        const dirtyList = [
+          ...status.modified,
+          ...status.created,
+          ...status.not_added,
+          ...status.deleted,
+        ];
+        if (dirtyList.length > 0) {
+          const diffOutput = await g.diff(["--stat", "--no-color"]).catch(() => "");
+          const diffFull = await g.diff(["--no-color"]).catch(() => "");
+          const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
+          if (apiKey && diffOutput) {
+            const res = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 200,
+                messages: [
+                  {
+                    role: "user",
+                    content: `You are writing a git commit message for website edits made through a CMS.
+
+Rules:
+- First line: concise imperative subject in present tense, max 72 chars, no trailing period.
+- Blank line.
+- 1-3 bullet lines (prefix "- "), each describing a concrete change. Keep them short, specific, user-facing where possible.
+- No markdown headings, no code blocks, no "Committed via …" footer.
+- Write it as if a human developer is committing their own work.
+
+Changed files:
+${dirtyList.slice(0, 20).join("\n")}
+
+Diff summary:
+${diffOutput.slice(0, 1500)}
+
+First 3000 chars of the full diff:
+${diffFull.slice(0, 3000)}
+
+Output ONLY the commit message, nothing else.`,
+                  },
+                ],
+              }),
+            });
+            if (res.ok) {
+              const body = (await res.json()) as { content?: { text?: string }[] };
+              const text = body.content?.[0]?.text?.trim();
+              if (text) commitMessage = text;
+            }
+          }
+        }
+      } catch {
+        /* fall back to filename summary inside pushToGitHub */
+      }
+
+      const result = await pushToGitHub(
+        repoPath,
+        p.defaultBranch,
+        p.githubRepoFullName,
+        { name: r.user.name ?? null, email: r.user.email ?? null },
+        commitMessage,
+      );
       return c.json(result);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Publish failed" }, 400);

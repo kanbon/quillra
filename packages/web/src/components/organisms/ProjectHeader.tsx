@@ -14,12 +14,19 @@ import { useQuery } from "@tanstack/react-query";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
+import { ChangesModal } from "@/components/organisms/ChangesModal";
 import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
 import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
 import { useProjectPresence } from "@/hooks/useProjectPresence";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
+
+type PublishStatusLite = {
+  dirty: string[];
+  unpushed: number;
+  hasChanges: boolean;
+};
 
 type FrameworkInfo = {
   id: string;
@@ -58,6 +65,7 @@ export function ProjectHeader({
   const me = useCurrentUser();
   const isClient = me.kind === "client";
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
   const showPublish = Boolean(canPublish && onPublish);
   // Clients beat presence too (so the team can see them viewing), but they
   // don't get to see who else is here. Only team members read the roster.
@@ -70,6 +78,23 @@ export function ProjectHeader({
     enabled: Boolean(projectId),
     staleTime: 5 * 60 * 1000,
   });
+
+  // Light-weight polling of publish-status so the "N changes" pill can
+  // show the current dirty count without hammering the AI-summary path.
+  // Only enabled for users who can actually publish — clients never see
+  // this indicator.
+  const { data: publishStatus } = useQuery({
+    queryKey: ["publish-status", projectId],
+    queryFn: () => apiJson<PublishStatusLite>(`/api/projects/${projectId}/publish-status`),
+    enabled: Boolean(projectId) && showPublish,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: false,
+    staleTime: 10_000,
+  });
+  const pendingCount = publishStatus
+    ? publishStatus.dirty.length + publishStatus.unpushed
+    : 0;
+  const hasChanges = Boolean(publishStatus?.hasChanges);
 
   return (
     <header className="h-14 shrink-0 border-b border-neutral-200/90 bg-white/95 backdrop-blur-sm">
@@ -161,6 +186,17 @@ export function ProjectHeader({
               </svg>
             </button>
           )}
+          {showPublish && hasChanges && (
+            <button
+              type="button"
+              onClick={() => setChangesOpen(true)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 text-[12px] font-semibold text-amber-800 transition-colors hover:bg-amber-100"
+              title={t("changes.openTooltip")}
+            >
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 animate-pulse" />
+              {pendingCount} {pendingCount === 1 ? t("changes.single") : t("changes.plural")}
+            </button>
+          )}
           {showPublish && (
             <button
               type="button"
@@ -207,6 +243,7 @@ export function ProjectHeader({
         </div>
       </div>
       <VersionHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projectId={projectId} />
+      <ChangesModal open={changesOpen} onClose={() => setChangesOpen(false)} projectId={projectId} />
     </header>
   );
 }

@@ -184,7 +184,7 @@ export function EditorPage() {
     setPublishStatusLoading(true);
     setShowPublishModal(true);
     try {
-      const status = await apiJson<PublishStatus>(`/api/projects/${id}/publish-status`);
+      const status = await apiJson<PublishStatus>(`/api/projects/${id}/publish-status?summary=1`);
       setPublishStatus(status);
     } catch {
       setPublishStatus({ dirty: [], unpushed: 0, hasChanges: false });

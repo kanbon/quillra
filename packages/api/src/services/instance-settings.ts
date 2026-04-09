@@ -19,13 +19,13 @@ type Row = { value: string | null };
 
 /** Keys the wizard is allowed to set. Anything else is rejected. */
 export const SETTABLE_KEYS = [
-  // Legacy PAT path — kept for backward compat during the GitHub App
-  // migration window. New installs should use GITHUB_APP_* instead.
   "ANTHROPIC_API_KEY",
-  "GITHUB_TOKEN",
+  // GitHub OAuth app — only for owner wizard sign-in, never for git
+  // operations. `GITHUB_CLIENT_SECRET` is a secret.
   "GITHUB_CLIENT_ID",
   "GITHUB_CLIENT_SECRET",
-  // GitHub App for repo push operations (no human credentials involved)
+  // GitHub App — the only supported credential for repo push operations.
+  // No personal access tokens, no human credentials.
   "GITHUB_APP_ID",
   "GITHUB_APP_SLUG",
   "GITHUB_APP_NAME",
@@ -56,7 +56,6 @@ export type SettableKey = (typeof SETTABLE_KEYS)[number];
  *  the admin UI. */
 export const SECRET_KEYS = new Set<SettableKey>([
   "ANTHROPIC_API_KEY",
-  "GITHUB_TOKEN",
   "GITHUB_CLIENT_SECRET",
   "GITHUB_APP_CLIENT_SECRET",
   "GITHUB_APP_PRIVATE_KEY",
@@ -211,10 +210,10 @@ export function getSetupStatus(): {
   // Core runtime values that gate the wizard
   const missing: string[] = [];
   if (!out.ANTHROPIC_API_KEY.set) missing.push("ANTHROPIC_API_KEY");
-  // GitHub App is required for repo push (legacy GITHUB_TOKEN counts as a fallback)
-  const hasAppOrLegacy =
-    (out.GITHUB_APP_ID.set && out.GITHUB_APP_PRIVATE_KEY.set) || out.GITHUB_TOKEN.set;
-  if (!hasAppOrLegacy) missing.push("GITHUB_APP");
+  // GitHub App is mandatory — no PAT fallback.
+  if (!out.GITHUB_APP_ID.set || !out.GITHUB_APP_PRIVATE_KEY.set) {
+    missing.push("GITHUB_APP");
+  }
 
   // Bootstrap check: is there at least one user row? If not, the setup
   // wizard must also walk the new owner through the GitHub OAuth step.
