@@ -128,16 +128,36 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       redirect_url: `${origin}/api/setup/github-app/callback`,
       // After install GitHub redirects here so Quillra learns the
       // installation id and can immediately start using the App.
-      setup_url: `${origin}/setup?step=githubApp&installed=1`,
+      setup_url: `${origin}/api/setup/github-app/installed`,
       setup_on_update: false,
-      public: false,
+      // PUBLIC — this is required so the owner can install the App on
+      // organizations they admin, not just their personal account. A
+      // private App created under a personal account is installable
+      // only on that personal account, which breaks any self-hosted
+      // setup where repos live in a company org. The "public" tag on
+      // the App just means the install URL is reachable without a
+      // GitHub auth wall; nobody else meaningfully benefits from
+      // installing another org's Quillra App on their own repos.
+      public: true,
       default_permissions: {
+        // read+write access to repository file contents — this is what
+        // github.com's install screen labels "Read and write access to
+        // code". It's the permission that lets Quillra commit and push.
         contents: "write",
+        // required by every GitHub App
         metadata: "read",
+        // needed to open and comment on pull requests
         pull_requests: "write",
+        // GitHub blocks edits to files under .github/workflows/ without
+        // this, even when contents:write is already granted.
         workflows: "write",
+        // lets the agent create/close issues when the chat asks for it
+        issues: "write",
+        // lets the agent read the installation's own metadata (list
+        // repos it can see, etc.) without needing a separate call
+        administration: "read",
       },
-      default_events: ["push", "pull_request"],
+      default_events: ["push", "pull_request", "issues"],
     };
     const manifestJson = JSON.stringify(manifest).replace(/</g, "\\u003c");
 
@@ -175,21 +195,22 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
    * sends back after the user clicks "Create GitHub App", exchange it for
    * the real credentials (id, private key, webhook secret, etc.), persist
    * them through the encrypted instance_settings layer, and redirect the
-   * user into the install-on-repos step of the wizard.
+   * user STRAIGHT to the install-on-repos page on github.com.
+   *
+   * Chained flow: the user never sees an intermediate "ok now click here
+   * to install" button. They approve create → they immediately get the
+   * install chooser → they pick repos → they come back. Two clicks on
+   * github.com, nothing to click in between.
    */
   .get("/github-app/callback", async (c) => {
     const code = c.req.query("code");
     if (!code) return c.text("Missing code", 400);
     try {
       const data = await exchangeManifestCode(code);
-      // Redirect into the wizard with a flag so Setup.tsx knows to show
-      // the "now install on your repos" sub-step.
-      const origin = originFromRequest(c);
-      const installUrl = `${data.html_url}/installations/new`;
-      return c.redirect(
-        `${origin}/setup?step=githubApp&created=1&installUrl=${encodeURIComponent(installUrl)}`,
-        302,
-      );
+      // Bypass the wizard entirely and send them to GitHub's
+      // "Install on repositories" page. GitHub will bounce them back
+      // to the setup_url in the manifest when they're done.
+      return c.redirect(`${data.html_url}/installations/new`, 302);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "unknown error";
       return c.text(
@@ -197,4 +218,26 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
         500,
       );
     }
+  })
+  /**
+   * GitHub App Manifest flow — step 3: GitHub redirects here after the
+   * owner finishes picking repos on github.com/apps/<slug>/installations/new
+   * (this is the `setup_url` baked into the manifest). The URL carries
+   * `installation_id` and `setup_action=install|update`.
+   *
+   * We dispatch back into the app: wizard users land in /setup at the
+   * githubApp step (with success state), standalone flows land in
+   * /admin on the Integrations tab. Since we don't track which origin
+   * kicked off the flow, we check whether the instance still needs
+   * setup — if yes, the user was in the wizard; if no, they were in
+   * Organization Settings.
+   */
+  .get("/github-app/installed", async (c) => {
+    const origin = originFromRequest(c);
+    const installationId = c.req.query("installation_id") ?? "";
+    const status = getSetupStatus();
+    const dest = status.needsSetup
+      ? `${origin}/setup?step=githubApp&installed=1${installationId ? `&installation_id=${installationId}` : ""}`
+      : `${origin}/admin?tab=integrations&installed=1${installationId ? `&installation_id=${installationId}` : ""}`;
+    return c.redirect(dest, 302);
   });
