@@ -1,8 +1,18 @@
 import { getInstanceSetting } from "./instance-settings.js";
+import {
+  isGithubAppConfigured,
+  listRepositoriesAcrossInstallations,
+  getInstallationTokenForRepo,
+} from "./github-app.js";
 
 const API = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
+/**
+ * Legacy PAT accessor, used by non-repo-scoped calls (branch listing,
+ * manifest fetching) as a fallback. Repo-scoped operations should prefer
+ * an installation token via {@link getInstallationTokenForRepo}.
+ */
 function requireToken(): string {
   const token = getInstanceSetting("GITHUB_TOKEN");
   if (!token) {
@@ -11,20 +21,16 @@ function requireToken(): string {
   return token;
 }
 
-async function ghJson<T>(path: string): Promise<T> {
-  const token = requireToken();
-  const res = await fetch(`${API}${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": API_VERSION,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${text.slice(0, 200)}`);
+/**
+ * Resolve a token for calls scoped to a specific repo. Prefers a
+ * GitHub App installation token, falls back to the legacy PAT.
+ */
+async function tokenForRepo(owner: string, repo: string): Promise<string> {
+  if (isGithubAppConfigured()) {
+    const t = await getInstallationTokenForRepo(owner, repo).catch(() => null);
+    if (t) return t;
   }
-  return res.json() as Promise<T>;
+  return requireToken();
 }
 
 export type GithubRepoListItem = {
@@ -32,8 +38,23 @@ export type GithubRepoListItem = {
   defaultBranch: string;
 };
 
-/** Repositories the configured token can access (user repos + org, paginated). */
+/**
+ * Repositories Quillra can push to.
+ *
+ * - When the GitHub App is configured, this enumerates the union of repos
+ *   across every installation — i.e. "every repo the owner has installed
+ *   the Quillra App on". That's the intersection of "can edit" + "owner
+ *   actually opted this repo in".
+ * - When the legacy PAT path is active, falls back to `/user/repos`,
+ *   which returns every repo the owner's PAT can read (much broader,
+ *   by design because a PAT doesn't have per-repo opt-in).
+ */
 export async function listAccessibleRepos(): Promise<GithubRepoListItem[]> {
+  if (isGithubAppConfigured()) {
+    const repos = await listRepositoriesAcrossInstallations();
+    return repos.map(({ fullName, defaultBranch }) => ({ fullName, defaultBranch }));
+  }
+
   const out: GithubRepoListItem[] = [];
   let url: string | null = `${API}/user/repos?per_page=100&sort=full_name&affiliation=owner,collaborator,organization_member`;
 
@@ -71,11 +92,29 @@ export async function listAccessibleRepos(): Promise<GithubRepoListItem[]> {
   return out;
 }
 
+async function ghJsonAsRepo<T>(owner: string, repo: string, path: string): Promise<T> {
+  const token = await tokenForRepo(owner, repo);
+  const res = await fetch(`${API}${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": API_VERSION,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function listBranches(owner: string, repo: string): Promise<string[]> {
   const names: string[] = [];
   let page = 1;
   for (;;) {
-    const batch = await ghJson<{ name: string }[]>(
+    const batch = await ghJsonAsRepo<{ name: string }[]>(
+      owner,
+      repo,
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches?per_page=100&page=${page}`,
     );
     if (batch.length === 0) break;
@@ -92,7 +131,9 @@ export async function getRepoMeta(
   owner: string,
   repo: string,
 ): Promise<{ defaultBranch: string }> {
-  const data = await ghJson<{ default_branch: string }>(
+  const data = await ghJsonAsRepo<{ default_branch: string }>(
+    owner,
+    repo,
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
   );
   return { defaultBranch: data.default_branch };
@@ -114,7 +155,9 @@ export async function fetchRepoManifest(
   // 1) List root files
   let rootFiles: string[] = [];
   try {
-    const tree = await ghJson<{ name: string; type: string }[]>(
+    const tree = await ghJsonAsRepo<{ name: string; type: string }[]>(
+      owner,
+      repo,
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?ref=${encodeURIComponent(ref)}`,
     );
     rootFiles = tree.map((t) => t.name);
@@ -126,7 +169,9 @@ export async function fetchRepoManifest(
   let packageJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
   if (rootFiles.includes("package.json")) {
     try {
-      const file = await ghJson<{ content: string; encoding: string }>(
+      const file = await ghJsonAsRepo<{ content: string; encoding: string }>(
+        owner,
+        repo,
         `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/package.json?ref=${encodeURIComponent(ref)}`,
       );
       const raw = file.encoding === "base64" ? Buffer.from(file.content, "base64").toString("utf8") : file.content;

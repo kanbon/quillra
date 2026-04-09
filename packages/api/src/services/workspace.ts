@@ -5,6 +5,41 @@ import { simpleGit } from "simple-git";
 import { setPreviewStatus, registerPreviewPort } from "./preview-status.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import { getInstanceSetting } from "./instance-settings.js";
+import {
+  getInstallationTokenForRepo,
+  isGithubAppConfigured,
+} from "./github-app.js";
+
+/**
+ * Resolve the best available credential for a git operation against a
+ * specific GitHub repo. Preference order:
+ *
+ *   1. GitHub App installation token (if the App is configured and
+ *      installed on this repo). Short-lived, scoped to one install,
+ *      no human credentials. This is the path we want new installs on.
+ *
+ *   2. Legacy GITHUB_TOKEN personal access token. Kept for backward
+ *      compat with installs that predate the App migration. Deprecated
+ *      but still honored so upgrades don't break.
+ *
+ * Returns null when neither is available, and the caller should surface
+ * a helpful error to the user (e.g. "install the GitHub App on this repo").
+ */
+async function resolveRepoGitToken(githubRepoFullName: string): Promise<string | null> {
+  if (isGithubAppConfigured()) {
+    const [owner, repo] = githubRepoFullName.split("/");
+    if (owner && repo) {
+      try {
+        const token = await getInstallationTokenForRepo(owner, repo);
+        if (token) return token;
+      } catch (e) {
+        console.warn(`[workspace] installation token fetch failed for ${githubRepoFullName}:`, e);
+      }
+    }
+  }
+  const legacy = getInstanceSetting("GITHUB_TOKEN");
+  return legacy ?? null;
+}
 
 const previewChildren = new Map<string, ChildProcess>();
 
@@ -232,7 +267,7 @@ export async function ensureRepoCloned(
 ): Promise<string> {
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
-  const token = getInstanceSetting("GITHUB_TOKEN");
+  const token = await resolveRepoGitToken(githubRepoFullName);
   const url = token
     ? `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`
     : `https://github.com/${githubRepoFullName}.git`;
@@ -344,9 +379,16 @@ export async function pushToGitHub(
   userToken?: string | null,
   committer?: { name: string; email: string } | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
-  const token = userToken?.trim() || getInstanceSetting("GITHUB_TOKEN");
+  // Prefer explicit user token (rare, passed from an OAuth linked user),
+  // then a GitHub App installation token scoped to this repo, finally
+  // fall back to the legacy instance-wide GITHUB_TOKEN if the App isn't
+  // configured yet. Throws with a user-facing message if nothing works.
+  const token =
+    userToken?.trim() || (await resolveRepoGitToken(githubRepoFullName));
   if (!token) {
-    throw new Error("GitHub access denied. Try signing out and back in to refresh your token.");
+    throw new Error(
+      "No GitHub credentials for this repo. Install the Quillra GitHub App on this repository, or set GITHUB_TOKEN as a legacy fallback.",
+    );
   }
 
   const g = simpleGit(repoPath);

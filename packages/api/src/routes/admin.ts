@@ -10,6 +10,7 @@ import type { SessionUser } from "../lib/auth.js";
 import { sendEmail, isMailerEnabled } from "../services/mailer.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
 import { getOrganizationInfo } from "../services/instance-settings.js";
+import { listInstallations as listGithubAppInstallations } from "../services/github-app.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -178,4 +179,23 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       return c.json({ ok: true, backend: result.backend });
     }
     return c.json({ ok: false, backend: result.backend, reason: result.reason });
+  })
+  /**
+   * Owner-only: list the GitHub App's installations. Renders in the
+   * Integrations tab as "which GitHub accounts/orgs have granted the App
+   * access to which repos". Returns an empty array if the App isn't
+   * configured yet.
+   */
+  .get("/github-app/installations", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    try {
+      const installations = await listGithubAppInstallations();
+      return c.json({ installations });
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "Failed" },
+        500,
+      );
+    }
   });

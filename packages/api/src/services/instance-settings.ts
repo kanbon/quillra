@@ -1,26 +1,39 @@
 /**
- * Runtime-mutable instance settings stored in SQLite, with env var fallback.
+ * Runtime-mutable instance settings stored in SQLite, with env var fallback
+ * and AES-256-GCM encryption at rest for values flagged as secrets.
  *
- * The setup wizard and any "change this without a restart" admin page both
- * go through this module. Every reader calls `getInstanceSetting(key,
- * envKey)` which prefers the DB value if present, else the env var, else
- * undefined. Writers bypass the .env file entirely — no file I/O, no
- * container restart, no fragile sed.
+ * Precedence for reads: DB (decrypted on the fly) → env var → default.
+ * Writes go straight to the DB, encrypted if the key is a secret. Env
+ * vars always win when set — that gives operators a choice between
+ * "manage everything in the browser UI" and "manage everything via env
+ * vars at container start time".
  *
- * SECRET HANDLING: settings are stored plain in SQLite. The SQLite file
- * lives inside the container volume, not in git, never leaves the server.
- * Secret rotation is as simple as overwriting the value.
+ * Boot migration: the first start after this module is imported walks
+ * every secret row and re-encrypts any legacy plaintext value in place.
+ * Idempotent, O(number of secret keys).
  */
 import { rawSqlite } from "../db/index.js";
+import { decryptSecret, encryptSecret, isEncryptedV1 } from "./crypto.js";
 
 type Row = { value: string | null };
 
 /** Keys the wizard is allowed to set. Anything else is rejected. */
 export const SETTABLE_KEYS = [
+  // Legacy PAT path — kept for backward compat during the GitHub App
+  // migration window. New installs should use GITHUB_APP_* instead.
   "ANTHROPIC_API_KEY",
   "GITHUB_TOKEN",
   "GITHUB_CLIENT_ID",
   "GITHUB_CLIENT_SECRET",
+  // GitHub App for repo push operations (no human credentials involved)
+  "GITHUB_APP_ID",
+  "GITHUB_APP_SLUG",
+  "GITHUB_APP_NAME",
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_APP_WEBHOOK_SECRET",
+  // Email provider
   "EMAIL_PROVIDER",
   "EMAIL_FROM",
   "RESEND_API_KEY",
@@ -39,27 +52,86 @@ export const SETTABLE_KEYS = [
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
-/** Keys considered secret — masked when returned to the admin UI. */
-const SECRET_KEYS = new Set<SettableKey>([
+/** Keys considered secret — encrypted at rest, masked when returned to
+ *  the admin UI. */
+export const SECRET_KEYS = new Set<SettableKey>([
   "ANTHROPIC_API_KEY",
   "GITHUB_TOKEN",
   "GITHUB_CLIENT_SECRET",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_APP_WEBHOOK_SECRET",
   "RESEND_API_KEY",
   "SMTP_PASSWORD",
 ]);
+
+/**
+ * One-shot re-encryption pass at module init. Finds any row whose key is
+ * a secret and whose value isn't already in the v1 envelope, and encrypts
+ * it in place. Safe to run on every boot — it's a no-op after the first
+ * successful pass.
+ *
+ * Wrapped in a try so a fresh install with no instance_settings table
+ * yet doesn't crash boot.
+ */
+(function migrateLegacyPlaintextSecrets() {
+  try {
+    const rows = rawSqlite
+      .prepare(`SELECT key, value FROM instance_settings WHERE value IS NOT NULL`)
+      .all() as { key: string; value: string }[];
+    for (const row of rows) {
+      if (!SECRET_KEYS.has(row.key as SettableKey)) continue;
+      if (!row.value || isEncryptedV1(row.value)) continue;
+      try {
+        const enc = encryptSecret(row.value);
+        rawSqlite
+          .prepare(`UPDATE instance_settings SET value = ?, updated_at = ? WHERE key = ?`)
+          .run(enc, Date.now(), row.key);
+        console.log(`[instance-settings] re-encrypted legacy secret ${row.key}`);
+      } catch (e) {
+        console.warn(`[instance-settings] failed to encrypt ${row.key}:`, e);
+      }
+    }
+  } catch {
+    // Fresh install — instance_settings table doesn't exist yet. Nothing to migrate.
+  }
+})();
+
+/**
+ * Read the raw DB value for a key and, if it's a secret, decrypt it.
+ * Non-secret values pass through unchanged. Legacy plaintext values for
+ * secret keys (should be rare after the boot migration, but can happen
+ * if the migration failed) are returned as-is so reads don't hard-fail.
+ */
+function readDbValue(key: string): string | undefined {
+  let dbVal: string | undefined;
+  try {
+    const row = rawSqlite
+      .prepare(`SELECT value FROM instance_settings WHERE key = ?`)
+      .get(key) as Row | undefined;
+    dbVal = row?.value ?? undefined;
+  } catch {
+    return undefined;
+  }
+  if (!dbVal) return undefined;
+  if (SECRET_KEYS.has(key as SettableKey) && isEncryptedV1(dbVal)) {
+    try {
+      return decryptSecret(dbVal);
+    } catch (e) {
+      console.error(`[instance-settings] failed to decrypt ${key}:`, e);
+      return undefined;
+    }
+  }
+  return dbVal;
+}
 
 /**
  * Get a setting with DB → env → default precedence. Most callers only
  * need to pass the key; we look up the same env var name by convention.
  */
 export function getInstanceSetting(key: string, envKey?: string, fallback?: string): string | undefined {
-  try {
-    const row = rawSqlite.prepare(`SELECT value FROM instance_settings WHERE key = ?`).get(key) as Row | undefined;
-    const v = row?.value?.trim();
-    if (v) return v;
-  } catch {
-    /* table may not exist yet on first boot — env var takes over */
-  }
+  const v = readDbValue(key)?.trim();
+  if (v) return v;
   const envValue = process.env[envKey ?? key]?.trim();
   if (envValue) return envValue;
   return fallback;
@@ -70,12 +142,13 @@ export function setInstanceSetting(key: SettableKey, value: string | null): void
     rawSqlite.prepare(`DELETE FROM instance_settings WHERE key = ?`).run(key);
     return;
   }
+  const stored = SECRET_KEYS.has(key) ? encryptSecret(value) : value;
   rawSqlite
     .prepare(
       `INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     )
-    .run(key, value, Date.now());
+    .run(key, stored, Date.now());
 }
 
 /**
@@ -106,7 +179,8 @@ export function getOrganizationInfo(): OrganizationInfo {
 /**
  * Returns a status-shape describing what's configured, what's missing, and
  * which values are set (without leaking secrets). Used by the setup wizard
- * to decide whether to show its welcome screen.
+ * to decide whether to show its welcome screen and by the /admin tabs to
+ * render their "set" / "from env" / "from db" badges.
  */
 export function getSetupStatus(): {
   needsSetup: boolean;
@@ -118,11 +192,7 @@ export function getSetupStatus(): {
 } {
   const out: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }> = {};
   for (const key of SETTABLE_KEYS) {
-    let dbVal: string | undefined;
-    try {
-      const row = rawSqlite.prepare(`SELECT value FROM instance_settings WHERE key = ?`).get(key) as Row | undefined;
-      dbVal = row?.value?.trim() || undefined;
-    } catch { /* ignore */ }
+    const dbVal = readDbValue(key)?.trim() || undefined;
     const envVal = process.env[key]?.trim();
     const source: "db" | "env" | "none" = dbVal ? "db" : envVal ? "env" : "none";
     const set = Boolean(dbVal || envVal);
@@ -138,9 +208,13 @@ export function getSetupStatus(): {
     }
     out[key] = { set, source, value };
   }
-  // Setup is "needed" if the core runtime values are missing
+  // Core runtime values that gate the wizard
   const missing: string[] = [];
   if (!out.ANTHROPIC_API_KEY.set) missing.push("ANTHROPIC_API_KEY");
+  // GitHub App is required for repo push (legacy GITHUB_TOKEN counts as a fallback)
+  const hasAppOrLegacy =
+    (out.GITHUB_APP_ID.set && out.GITHUB_APP_PRIVATE_KEY.set) || out.GITHUB_TOKEN.set;
+  if (!hasAppOrLegacy) missing.push("GITHUB_APP");
 
   // Bootstrap check: is there at least one user row? If not, the setup
   // wizard must also walk the new owner through the GitHub OAuth step.
@@ -149,7 +223,6 @@ export function getSetupStatus(): {
     const row = rawSqlite.prepare(`SELECT count(*) as c FROM user`).get() as { c: number } | undefined;
     needsOwner = !row || row.c === 0;
   } catch {
-    // user table may not exist yet on the very first boot — treat as needing an owner
     needsOwner = true;
   }
   if (needsOwner) missing.push("__owner");
