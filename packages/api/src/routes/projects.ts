@@ -380,6 +380,58 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
     }
   })
+  /**
+   * Destructive: revert the working tree AND drop any unpushed local
+   * commits, bringing the repo back in sync with `origin/<branch>`.
+   *
+   * Runs `git fetch origin` → `git reset --hard origin/<branch>` →
+   * `git clean -fd`. The last step removes untracked files, but
+   * `git clean` by default respects both `.gitignore` and
+   * `.git/info/exclude`, so anything in `.quillra-temp/` survives —
+   * we register that folder with the local exclude in
+   * ensureQuillraTempIgnored() precisely so that chat scratch assets
+   * don't get nuked by a discard.
+   *
+   * Permission: admin or editor. Clients and translators can't
+   * discard published work they didn't author.
+   */
+  .post("/:id/discard-changes", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m || (m.role !== "admin" && m.role !== "editor")) {
+      return c.json({ error: "Only editors and admins can discard changes." }, 403);
+    }
+    const [p] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    try {
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+      const g = simpleGit(repoPath);
+      // Make sure we know the latest state of the remote before resetting
+      // onto it. Failure here is non-fatal — we can still hard-reset to
+      // whatever HEAD's upstream was when we cloned.
+      await g.fetch("origin", p.defaultBranch).catch(() => undefined);
+      const branches = await g.branch(["-r"]);
+      if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+        await g.reset(["--hard", `origin/${p.defaultBranch}`]);
+      } else {
+        await g.reset(["--hard", "HEAD"]);
+      }
+      // Remove untracked files the reset didn't touch. `-f` (force) is
+      // required by git by default, `-d` recurses into untracked
+      // directories. We deliberately do NOT pass `-x` — that would
+      // also wipe ignored files, including `.quillra-temp/` contents.
+      await g.clean("fd");
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Discard failed" }, 500);
+    }
+  })
   .post("/:id/publish", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;

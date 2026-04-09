@@ -107,6 +107,9 @@ const enDict = {
     binaryFile: "binary",
     binaryNoDiff: "Binary file — no diff preview.",
     noDiff: "No diff available.",
+    discard: "Discard all changes",
+    discarding: "Discarding…",
+    discardConfirm: "Discard all {count} changes? This reverts the repo to match GitHub and cannot be undone.",
   },
   presence: {
     viewing: "Viewing now",
@@ -508,6 +511,9 @@ export const de: DeepStringRecord = {
     binaryFile: "binär",
     binaryNoDiff: "Binärdatei — keine Diff-Vorschau.",
     noDiff: "Kein Diff verfügbar.",
+    discard: "Alle Änderungen verwerfen",
+    discarding: "Wird verworfen…",
+    discardConfirm: "Alle {count} Änderungen verwerfen? Das Repo wird auf den Stand von GitHub zurückgesetzt und kann nicht rückgängig gemacht werden.",
   },
   presence: {
     viewing: "Sieht gerade zu",

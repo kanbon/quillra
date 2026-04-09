@@ -10,9 +10,11 @@
  * diff hunks here — that's the point.
  */
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
 import { apiJson } from "@/lib/api";
+import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
 type FileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed";
@@ -132,15 +134,20 @@ function FileCard({ file }: { file: FileChange }) {
 }
 
 export function ChangesModal({ open, onClose, projectId }: Props) {
+  const { t } = useT();
+  const qc = useQueryClient();
   const [data, setData] = useState<ChangesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setDiscardError(null);
     (async () => {
       try {
         const r = await apiJson<ChangesResponse>(`/api/projects/${projectId}/changes`);
@@ -155,6 +162,29 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
       cancelled = true;
     };
   }, [open, projectId]);
+
+  async function discardAll() {
+    if (!data) return;
+    const total = data.files.length + data.commits.length;
+    if (total === 0) return;
+    const ok = confirm(t("changes.discardConfirm", { count: String(total) }));
+    if (!ok) return;
+    setDiscarding(true);
+    setDiscardError(null);
+    try {
+      await apiJson(`/api/projects/${projectId}/discard-changes`, { method: "POST" });
+      // Invalidate the polling publish-status so the "N changes" pill
+      // in the header flips back to hidden immediately.
+      void qc.invalidateQueries({ queryKey: ["publish-status", projectId] });
+      onClose();
+    } catch (e) {
+      setDiscardError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setDiscarding(false);
+    }
+  }
+
+  const totalChanges = data ? data.files.length + data.commits.length : 0;
 
   return (
     <Modal open={open} onClose={onClose} className="max-w-3xl">
@@ -235,6 +265,36 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
               </div>
             </section>
           )}
+        </div>
+      )}
+
+      {data && !loading && totalChanges > 0 && (
+        <div className="mt-4 flex items-center justify-between gap-3 border-t border-neutral-100 pt-4">
+          <div className="min-w-0 flex-1">
+            {discardError && (
+              <p className="text-[11px] text-red-600">{discardError}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={discardAll}
+            disabled={discarding}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 text-[12px] font-semibold text-red-600 shadow-sm transition-colors hover:border-red-300 hover:bg-red-50 disabled:cursor-wait disabled:opacity-60"
+          >
+            {discarding ? (
+              <>
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-red-300 border-t-red-600" />
+                {t("changes.discarding")}
+              </>
+            ) : (
+              <>
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                {t("changes.discard")}
+              </>
+            )}
+          </button>
         </div>
       )}
     </Modal>
