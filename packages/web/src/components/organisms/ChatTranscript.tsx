@@ -3,6 +3,7 @@ import { ChatBubble } from "@/components/molecules/ChatBubble";
 import { ToolEventRow } from "@/components/molecules/ToolEventRow";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 import type { ChatLine } from "@/hooks/useProjectChat";
 
 type Props = {
@@ -14,10 +15,12 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
   const { t } = useT();
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
-  // Expanded by default while streaming, collapsed after
-  const [expanded, setExpanded] = useState(streaming ?? false);
+  // User-controlled expand state. While streaming we keep it expanded so
+  // the thought shows live; once done we leave the state alone — NO
+  // auto-collapse. The previous version collapsed after 1.5s which felt
+  // like the thinking bubble was "disappearing" right as the user noticed it.
+  const [expanded, setExpanded] = useState(true);
   const contentRef = useRef<HTMLDivElement>(null);
-  const prevStreaming = useRef(streaming);
 
   useEffect(() => {
     if (!streaming) return;
@@ -26,38 +29,38 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
     return () => clearInterval(interval);
   }, [streaming]);
 
-  // Auto-expand when streaming starts, auto-collapse when done
-  useEffect(() => {
-    if (streaming && !prevStreaming.current) setExpanded(true);
-    if (!streaming && prevStreaming.current) {
-      // Collapse after a delay so user can see the final thought
-      const t = setTimeout(() => setExpanded(false), 1500);
-      return () => clearTimeout(t);
-    }
-    prevStreaming.current = streaming;
-  }, [streaming]);
-
   const seconds = streaming ? Math.round(elapsed / 1000) : Math.round((durationMs ?? 0) / 1000);
 
   return (
-    <div className="max-w-[min(100%,42rem)] transition-all duration-300 ease-out">
+    <div className="max-w-[min(100%,42rem)] animate-[fadeIn_0.2s_ease-out]">
       <button
         type="button"
-        className="flex w-full items-center gap-2 rounded-lg border border-neutral-200/80 bg-neutral-50/80 px-3 py-2 text-left text-xs text-neutral-500 transition-all duration-200 hover:bg-neutral-100"
+        className={cn(
+          "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-all duration-200",
+          streaming
+            ? "border-amber-200 bg-amber-50/60 text-amber-800 hover:bg-amber-50"
+            : "border-neutral-200/80 bg-neutral-50/80 text-neutral-500 hover:bg-neutral-100",
+        )}
         onClick={() => text && setExpanded((e) => !e)}
       >
         {streaming ? (
-          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-[pulse_1.5s_ease-in-out_infinite]" />
+          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-[pulse_1.5s_ease-in-out_infinite]" />
         ) : (
-          <span className="h-2 w-2 shrink-0 rounded-full bg-neutral-300 transition-colors duration-300" />
+          <span className="h-2 w-2 shrink-0 rounded-full bg-neutral-300" />
         )}
-        <span className="font-medium text-neutral-600 transition-colors duration-200">
+        <span className={cn("font-medium", streaming ? "text-amber-800" : "text-neutral-600")}>
           {streaming ? t("chat.thinking") : t("chat.thought")}
           {seconds > 0 && ` ${t("chat.forSeconds", { seconds })}`}
           {streaming && "…"}
         </span>
         {text && (
-          <span className="ml-auto text-neutral-400 transition-transform duration-200" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>
+          <span
+            className={cn(
+              "ml-auto transition-transform duration-200",
+              streaming ? "text-amber-500" : "text-neutral-400",
+            )}
+            style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}
+          >
             ▸
           </span>
         )}
@@ -66,12 +69,17 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
         ref={contentRef}
         className="overflow-hidden transition-all duration-300 ease-out"
         style={{
-          maxHeight: expanded && text ? `${Math.min(200, text.length * 0.15 + 60)}px` : "0px",
+          maxHeight: expanded && text ? "600px" : "0px",
           opacity: expanded && text ? 1 : 0,
         }}
       >
-        <div className="mt-1 rounded-lg border border-neutral-200/60 bg-white px-3 py-2 text-xs leading-relaxed text-neutral-500">
-          {streaming ? text : (text.length > 500 ? text.slice(0, 500) + "…" : text)}
+        <div
+          className={cn(
+            "mt-1 rounded-lg border px-3 py-2 text-xs leading-relaxed",
+            streaming ? "border-amber-100 bg-white text-neutral-600" : "border-neutral-200/60 bg-white text-neutral-500",
+          )}
+        >
+          {text}
         </div>
       </div>
     </div>

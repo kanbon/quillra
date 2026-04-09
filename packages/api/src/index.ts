@@ -17,6 +17,7 @@ import { githubRouter } from "./routes/github.js";
 import { projectsRouter } from "./routes/projects.js";
 import { teamRouter } from "./routes/team.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
+import { teamLoginRouter, getTeamSessionFromCookie } from "./routes/team-login.js";
 import { setupRouter } from "./routes/setup.js";
 import { instanceRouter } from "./routes/instance.js";
 import { runProjectAgent } from "./services/agent.js";
@@ -301,9 +302,9 @@ app.use("*", async (c, next) => {
   } else {
     // Fall through to client cookie
     const cookieHeader = c.req.header("cookie") ?? "";
-    const m = /(?:^|;\s*)quillra_client_session=([^;]+)/.exec(cookieHeader);
-    const token = m?.[1];
-    const cs = await getClientSessionFromCookie(token);
+    const mClient = /(?:^|;\s*)quillra_client_session=([^;]+)/.exec(cookieHeader);
+    const clientToken = mClient?.[1];
+    const cs = await getClientSessionFromCookie(clientToken);
     if (cs) {
       // Synthesize a SessionUser-shaped object the rest of the app can use
       c.set("user", {
@@ -319,8 +320,26 @@ app.use("*", async (c, next) => {
       // Pin client session info so route guards can refuse cross-project access
       c.set("clientSession", { projectId: cs.projectId });
     } else {
-      c.set("user", null);
-      c.set("session", null);
+      // Final fallback: team email-code session (admins/editors/translators
+      // who don't have or don't want a GitHub account).
+      const mTeam = /(?:^|;\s*)quillra_team_session=([^;]+)/.exec(cookieHeader);
+      const teamToken = mTeam?.[1];
+      const ts = await getTeamSessionFromCookie(teamToken);
+      if (ts) {
+        c.set("user", {
+          id: ts.user.id,
+          email: ts.user.email,
+          name: ts.user.name ?? ts.user.email,
+          image: ts.user.image ?? null,
+          emailVerified: ts.user.emailVerified,
+          createdAt: ts.user.createdAt,
+          updatedAt: ts.user.updatedAt,
+        } as unknown as SessionUser);
+        c.set("session", null);
+      } else {
+        c.set("user", null);
+        c.set("session", null);
+      }
     }
   }
   await next();
@@ -398,6 +417,7 @@ app.route("/api/projects", projectsRouter);
 app.route("/api/github", githubRouter);
 app.route("/api/team", teamRouter);
 app.route("/api/clients", clientsRouter);
+app.route("/api/team-login", teamLoginRouter);
 app.route("/api/setup", setupRouter);
 app.route("/api/instance", instanceRouter);
 
@@ -412,8 +432,13 @@ app.get(
         },
       };
     }
-    const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session?.user) {
+    // Use the user populated by the global middleware — this covers BOTH
+    // Better Auth sessions (team members / owner) AND the custom client
+    // session cookie. Clients are auth'd this way and failed to chat
+    // because the old code only checked better-auth.
+    const wsUser = c.get("user");
+    const wsClientSession = c.get("clientSession");
+    if (!wsUser) {
       return {
         onOpen(_evt, ws) {
           ws.close(4401, "Unauthorized");
@@ -437,16 +462,33 @@ app.get(
           }
           const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : [];
 
-          const [m] = await db
+          // Project access check: either (a) a projectMembers row (team
+          // members) or (b) a client session pinned to this project.
+          // Clients don't get a projectMembers row — their access is
+          // represented by the session cookie alone.
+          let m = await db
             .select()
             .from(projectMembers)
             .where(
               and(
                 eq(projectMembers.projectId, projectId),
-                eq(projectMembers.userId, session.user.id),
+                eq(projectMembers.userId, wsUser.id),
               ),
             )
-            .limit(1);
+            .limit(1)
+            .then((rows) => rows[0]);
+          if (!m && wsClientSession && wsClientSession.projectId === projectId) {
+            // Synthesize a client "member" row so the rest of the handler
+            // can run unchanged. Not persisted — just a local value.
+            m = {
+              id: `client-${wsUser.id}-${projectId}`,
+              projectId,
+              userId: wsUser.id,
+              role: "client" as ProjectRole,
+              invitedByUserId: null,
+              createdAt: new Date(),
+            };
+          }
           if (!m) {
             ws.send(JSON.stringify({ type: "error", message: "Not a project member" }));
             return;
@@ -482,7 +524,7 @@ app.get(
             await db.insert(conversations).values({
               id: convId,
               projectId,
-              createdByUserId: session.user.id,
+              createdByUserId: wsUser.id,
               title: parsed.content.slice(0, 100),
               createdAt: new Date(),
               updatedAt: new Date(),
@@ -493,7 +535,7 @@ app.get(
           await db.insert(messages).values({
             projectId,
             conversationId: convId,
-            userId: session.user.id,
+            userId: wsUser.id,
             role: "user",
             content: parsed.content,
             attachments: attachments.length > 0 ? JSON.stringify(attachments) : null,
@@ -532,7 +574,7 @@ app.get(
           const [userRow] = await db
             .select({ language: user.language })
             .from(user)
-            .where(eq(user.id, session.user.id))
+            .where(eq(user.id, wsUser.id))
             .limit(1);
           const userLanguage = userRow?.language ?? null;
 

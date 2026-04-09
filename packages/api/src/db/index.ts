@@ -65,6 +65,29 @@ try {
   sqlite.exec(`CREATE INDEX IF NOT EXISTS client_login_codes_project_email_idx ON client_login_codes(project_id, email)`);
 } catch { /* ignore */ }
 
+// Team email-code login: admins/editors/translators who don't use GitHub.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS team_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS team_sessions_token_idx ON team_sessions(token)`);
+} catch { /* ignore */ }
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS team_login_codes (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS team_login_codes_email_idx ON team_login_codes(email)`);
+} catch { /* ignore */ }
+
 // Instance settings — key/value store used by the first-run setup wizard
 // and any config the admin can change at runtime without restarting the
 // container (Anthropic key, GitHub token, mailer backend, etc.)

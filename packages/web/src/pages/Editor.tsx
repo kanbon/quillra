@@ -318,7 +318,11 @@ export function EditorPage() {
               {/* Mobile-only: sign out */}
               <button
                 type="button"
-                onClick={() => signOutUnified(me.kind === "client" ? "client" : "github")}
+                onClick={() =>
+                  signOutUnified(
+                    me.kind === "client" ? "client" : me.kind === "team" ? "team" : "github",
+                  )
+                }
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-700 md:hidden"
                 title={t("toolbar.signOut")}
                 aria-label={t("toolbar.signOut")}

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/atoms/Button";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { SettingsModal } from "@/components/organisms/SettingsModal";
-import { authClient } from "@/lib/auth-client";
+import { signOutUnified, useCurrentUser } from "@/hooks/useCurrentUser";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 
@@ -15,6 +15,7 @@ import { useT } from "@/i18n/i18n";
  */
 export function AppHeader() {
   const { t } = useT();
+  const me = useCurrentUser();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
 
@@ -66,7 +67,11 @@ export function AppHeader() {
           variant="ghost"
           type="button"
           className="text-xs text-neutral-500"
-          onClick={() => authClient.signOut({ fetchOptions: { credentials: "include" } })}
+          onClick={() =>
+            signOutUnified(
+              me.kind === "client" ? "client" : me.kind === "team" ? "team" : "github",
+            )
+          }
         >
           {t("toolbar.signOut")}
         </Button>

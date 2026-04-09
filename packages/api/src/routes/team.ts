@@ -5,7 +5,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { projectInvites, projectMembers, projects } from "../db/schema.js";
-import { user } from "../db/auth-schema.js";
+import { user, type InstanceRole } from "../db/auth-schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
 import { sendEmail, isMailerEnabled } from "../services/mailer.js";
@@ -91,49 +91,60 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const now = new Date();
     const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 14);
 
-    // For client invites: pre-create the user + membership now so the
-    // recipient can log in via the branded code flow without needing a
-    // separate "accept" step. For admin/editor/translator we keep the
-    // existing GitHub-sign-in-then-accept flow.
+    // Every invite (clients AND collaborators) pre-creates the user +
+    // project membership now, so the recipient can log in with the
+    // passwordless email-code flow — no GitHub required. Clients land on
+    // the branded project login page; team members land on /login.
     let acceptUrl: string;
     const base = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
-    if (role === "client") {
-      let [existingUser] = await db.select().from(user).where(eq(user.email, inviteEmail)).limit(1);
-      if (!existingUser) {
-        const newId = nanoid();
-        await db.insert(user).values({
-          id: newId,
-          email: inviteEmail,
-          name: parsed.data.name ?? inviteEmail,
-          emailVerified: false,
+    let [existingUser] = await db.select().from(user).where(eq(user.email, inviteEmail)).limit(1);
+    if (!existingUser) {
+      const newId = nanoid();
+      await db.insert(user).values({
+        id: newId,
+        email: inviteEmail,
+        name: parsed.data.name ?? inviteEmail,
+        emailVerified: false,
+        // Pre-mark non-client invites as "member" so the email-code
+        // login flow accepts them without needing a separate
+        // instanceInvites row. Clients remain without an instance role.
+        instanceRole: role === "client" ? null : ("member" as InstanceRole),
+        createdAt: now,
+        updatedAt: now,
+      });
+      [existingUser] = await db.select().from(user).where(eq(user.id, newId)).limit(1);
+    } else if (role !== "client" && !existingUser.instanceRole) {
+      // Existing user but no instanceRole — upgrade them so they can
+      // sign into the dashboard (not just one project).
+      await db.update(user).set({ instanceRole: "member" as InstanceRole }).where(eq(user.id, existingUser.id));
+    }
+
+    if (existingUser) {
+      const [memberRow] = await db
+        .select()
+        .from(projectMembers)
+        .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, existingUser.id)))
+        .limit(1);
+      if (!memberRow) {
+        await db.insert(projectMembers).values({
+          id: nanoid(),
+          projectId,
+          userId: existingUser.id,
+          role,
+          invitedByUserId: r.user.id,
           createdAt: now,
-          updatedAt: now,
         });
-        [existingUser] = await db.select().from(user).where(eq(user.id, newId)).limit(1);
+      } else if (memberRow.role !== role) {
+        // Refuse to silently change an existing non-matching role
+        return c.json({ error: `User already has a different role (${memberRow.role}) on this project` }, 409);
       }
-      if (existingUser) {
-        const [memberRow] = await db
-          .select()
-          .from(projectMembers)
-          .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, existingUser.id)))
-          .limit(1);
-        if (!memberRow) {
-          await db.insert(projectMembers).values({
-            id: nanoid(),
-            projectId,
-            userId: existingUser.id,
-            role,
-            invitedByUserId: r.user.id,
-            createdAt: now,
-          });
-        } else if (memberRow.role !== "client") {
-          // already a non-client member of this project — refuse to overwrite
-          return c.json({ error: "User already has a non-client role on this project" }, 409);
-        }
-      }
+    }
+
+    if (role === "client") {
       acceptUrl = `${base}/c/${projectId}?email=${encodeURIComponent(inviteEmail)}`;
     } else {
-      // Collaborator-style invites still use the token-based accept flow
+      // Team members land on the main login page with email pre-filled.
+      // Also insert a projectInvites row for audit / legacy token flow.
       await db.insert(projectInvites).values({
         id: nanoid(),
         projectId,
@@ -143,7 +154,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
         invitedByUserId: r.user.id,
         expiresAt: expires,
       });
-      acceptUrl = `${base}/accept-invite?token=${token}`;
+      acceptUrl = `${base}/login?email=${encodeURIComponent(inviteEmail)}`;
     }
 
     // Try to send the email; gracefully fall back to copy-link mode

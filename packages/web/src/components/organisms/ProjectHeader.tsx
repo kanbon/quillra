@@ -191,7 +191,11 @@ export function ProjectHeader({
           <div className="h-6 w-px bg-neutral-200" />
           <button
             type="button"
-            onClick={() => signOutUnified(me.kind === "client" ? "client" : "github")}
+            onClick={() =>
+              signOutUnified(
+                me.kind === "client" ? "client" : me.kind === "team" ? "team" : "github",
+              )
+            }
             className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
             title={t("toolbar.signOut")}
             aria-label={t("toolbar.signOut")}

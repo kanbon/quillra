@@ -57,6 +57,42 @@ export const clientLoginCodes = sqliteTable(
   (table) => [index("client_login_codes_project_email_idx").on(table.projectId, table.email)],
 );
 
+/**
+ * Team sessions — email-code login for admins / editors / translators who
+ * don't want (or don't have) a GitHub account. Unlike clientSessions these
+ * are NOT project-scoped: a team member can access every project they're
+ * a member of via projectMembers, identical to a Better Auth session.
+ */
+export const teamSessions = sqliteTable(
+  "team_sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    token: text("token").notNull().unique(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("team_sessions_token_idx").on(table.token)],
+);
+
+/** One-time email codes used by the team email-code login flow */
+export const teamLoginCodes = sqliteTable(
+  "team_login_codes",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("team_login_codes_email_idx").on(table.email)],
+);
+
 export const projectMembers = sqliteTable(
   "project_members",
   {

@@ -7,7 +7,9 @@ import { db } from "../db/index.js";
 import { user } from "../db/auth-schema.js";
 import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
 import type { SessionUser } from "../lib/auth.js";
-import { sendEmail } from "../services/mailer.js";
+import { sendEmail, isMailerEnabled } from "../services/mailer.js";
+import { inviteEmailHtml } from "../services/email-templates.js";
+import { getOrganizationInfo } from "../services/instance-settings.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -87,7 +89,37 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
     });
 
-    return c.json({ ok: true, email: parsed.data.email });
+    // Fire-and-forget invite email. The invited user doesn't need the
+    // token to accept — the email-code login flow looks up the email
+    // against instanceInvites automatically. Email is purely a nudge.
+    let emailed = false;
+    if (isMailerEnabled()) {
+      try {
+        const org = getOrganizationInfo();
+        const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "") || "https://cms.kanbon.at";
+        const loginUrl = `${base}/login?email=${encodeURIComponent(parsed.data.email)}`;
+        const html = inviteEmailHtml({
+          projectName: org.instanceName,
+          projectLogoUrl: null,
+          inviterName: r.user.name ?? r.user.email ?? null,
+          role: "admin",
+          acceptUrl: loginUrl,
+        });
+        const result = await sendEmail({
+          to: parsed.data.email,
+          subject: `You're invited to ${org.instanceName}`,
+          html,
+          text: `${r.user.name ?? r.user.email ?? "Someone"} invited you to ${org.instanceName}. Sign in at ${loginUrl} with your email — no GitHub account required.`,
+          headers: {
+            "List-Unsubscribe": `<${base}/login>, <mailto:noreply@quillra.com?subject=Unsubscribe>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+        });
+        emailed = result.sent;
+      } catch { /* best-effort */ }
+    }
+
+    return c.json({ ok: true, email: parsed.data.email, emailed });
   })
   .get("/invites", async (c) => {
     const r = await requireOwner(c);
