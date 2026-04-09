@@ -16,6 +16,14 @@ type Status = { needsSetup: boolean };
 
 let cachedStatus: Status | null = null;
 
+/** Invalidate the module-level cache so the next mount refetches /api/setup/status.
+ *  Called by the Setup wizard right before the OAuth hand-off — when the user
+ *  returns from GitHub the dashboard will recheck status and see the new owner
+ *  without an extra redirect through /setup. */
+export function clearSetupGateCache() {
+  cachedStatus = null;
+}
+
 export function SetupGate({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const [status, setStatus] = useState<Status | null>(cachedStatus);

@@ -111,6 +111,9 @@ export function getOrganizationInfo(): OrganizationInfo {
 export function getSetupStatus(): {
   needsSetup: boolean;
   missing: string[];
+  /** True when no user rows exist yet — the wizard must drive the
+   *  owner through the mandatory GitHub OAuth step. */
+  needsOwner: boolean;
   values: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }>;
 } {
   const out: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }> = {};
@@ -138,5 +141,18 @@ export function getSetupStatus(): {
   // Setup is "needed" if the core runtime values are missing
   const missing: string[] = [];
   if (!out.ANTHROPIC_API_KEY.set) missing.push("ANTHROPIC_API_KEY");
-  return { needsSetup: missing.length > 0, missing, values: out };
+
+  // Bootstrap check: is there at least one user row? If not, the setup
+  // wizard must also walk the new owner through the GitHub OAuth step.
+  let needsOwner = false;
+  try {
+    const row = rawSqlite.prepare(`SELECT count(*) as c FROM user`).get() as { c: number } | undefined;
+    needsOwner = !row || row.c === 0;
+  } catch {
+    // user table may not exist yet on the very first boot — treat as needing an owner
+    needsOwner = true;
+  }
+  if (needsOwner) missing.push("__owner");
+
+  return { needsSetup: missing.length > 0, missing, needsOwner, values: out };
 }

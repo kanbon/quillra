@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, Navigate } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
 import { AppHeader } from "@/components/organisms/AppHeader";
 import { ConnectProjectModal } from "@/components/organisms/ConnectProjectModal";
@@ -172,11 +172,6 @@ export function DashboardPage() {
           </>
         )}
 
-        <p className="mt-12 text-center">
-          <Link to="/accept-invite" className="text-sm text-neutral-500 underline-offset-4 hover:text-neutral-800 hover:underline">
-            {t("dashboard.haveInvite")}
-          </Link>
-        </p>
       </main>
 
       <ConnectProjectModal
