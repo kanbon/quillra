@@ -17,6 +17,8 @@ const enDict = {
   settings: {
     title: "Settings",
     open: "Settings",
+    accountGithub: "GitHub",
+    accountEmail: "Email",
   },
   common: {
     save: "Save",
@@ -122,7 +124,7 @@ const enDict = {
     appName: "Quillra",
     intro:
       "Sign in to edit repos you have connected on this instance—chat, live preview, and publish to GitHub.",
-    continueWithGithub: "Continue with GitHub",
+    continueWithGithub: "Sign in with GitHub",
     emailLabel: "Email",
     sendCode: "Send me a sign-in code",
     sendingCode: "Sending…",
@@ -391,6 +393,8 @@ export const de: DeepStringRecord = {
   settings: {
     title: "Einstellungen",
     open: "Einstellungen",
+    accountGithub: "GitHub",
+    accountEmail: "E-Mail",
   },
   common: {
     save: "Speichern",
@@ -496,7 +500,7 @@ export const de: DeepStringRecord = {
     appName: "Quillra",
     intro:
       "Melden Sie sich an, um die auf dieser Instanz verbundenen Repos zu bearbeiten—chatten, in der Live-Vorschau ansehen und auf GitHub veröffentlichen.",
-    continueWithGithub: "Mit GitHub fortfahren",
+    continueWithGithub: "Mit GitHub anmelden",
     emailLabel: "E-Mail",
     sendCode: "Sende mir einen Anmelde-Code",
     sendingCode: "Wird gesendet…",

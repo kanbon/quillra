@@ -1,36 +1,24 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Button } from "@/components/atoms/Button";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { SettingsModal } from "@/components/organisms/SettingsModal";
-import { signOutUnified, useCurrentUser } from "@/hooks/useCurrentUser";
-import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 
 /**
  * Global header used on dashboard + instance-settings routes. Inside a
- * specific project we render {@link ProjectHeader} instead — it owns the
- * Editor/Project tab pair with absolute-centered positioning so switching
- * routes doesn't shift the tabs.
+ * specific project we render {@link ProjectHeader} instead.
+ *
+ * Single settings entry point: one gear icon on the right that opens the
+ * SettingsModal. The modal contains the user info card, language
+ * selector, (owner-only) Organization settings shortcut, and sign-out.
+ * Everything that used to live inline in the header — separate
+ * Organisation pill, standalone "Abmelden" button — has been moved
+ * inside the modal to stop cluttering the bar with duplicated entry
+ * points.
  */
 export function AppHeader() {
   const { t } = useT();
-  const me = useCurrentUser();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [isOwner, setIsOwner] = useState(false);
-
-  // One-time session fetch to decide whether to show the Organization
-  // shortcut. Same pattern as SettingsModal — no persistent subscription.
-  useEffect(() => {
-    (async () => {
-      try {
-        const me = await apiJson<{ user: { instanceRole?: string | null } | null }>("/api/session");
-        setIsOwner(me.user?.instanceRole === "owner");
-      } catch {
-        setIsOwner(false);
-      }
-    })();
-  }, []);
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200/90 bg-white px-4">
@@ -38,44 +26,18 @@ export function AppHeader() {
         <LogoMark size={22} />
         <span className="font-brand text-lg font-bold text-neutral-900">{t("login.appName")}</span>
       </Link>
-      <div className="flex items-center gap-1">
-        {isOwner && (
-          <Link
-            to="/admin"
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-[12px] font-semibold text-neutral-700 no-underline shadow-sm transition-colors hover:bg-neutral-50"
-            title={t("instanceSettings.headerButtonTooltip")}
-          >
-            <svg className="h-4 w-4 text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-            </svg>
-            {t("instanceSettings.headerButton")}
-          </Link>
-        )}
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
-          title={t("settings.open")}
-          aria-label={t("settings.open")}
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
-        <Button
-          variant="ghost"
-          type="button"
-          className="text-xs text-neutral-500"
-          onClick={() =>
-            signOutUnified(
-              me.kind === "client" ? "client" : me.kind === "team" ? "team" : "github",
-            )
-          }
-        >
-          {t("toolbar.signOut")}
-        </Button>
-      </div>
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+        title={t("settings.open")}
+        aria-label={t("settings.open")}
+      >
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      </button>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </header>
   );

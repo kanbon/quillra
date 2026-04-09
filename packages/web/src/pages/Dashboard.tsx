@@ -72,9 +72,6 @@ export function DashboardPage() {
       <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
         {/* Page heading */}
         <div className="mb-6 flex flex-col gap-1">
-          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-brand">
-            {t("dashboard.selfHosted")}
-          </p>
           <Heading as="h1" className="text-[28px] font-semibold tracking-tight text-neutral-900">
             {t("dashboard.sitesHeading")}
           </Heading>
