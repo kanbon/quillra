@@ -7,6 +7,7 @@ import { db } from "../db/index.js";
 import { user } from "../db/auth-schema.js";
 import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
 import type { SessionUser } from "../lib/auth.js";
+import { sendEmail } from "../services/mailer.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -119,4 +120,30 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     const inviteId = c.req.param("inviteId");
     await db.delete(instanceInvites).where(eq(instanceInvites.id, inviteId));
     return c.newResponse(null, 204);
+  })
+  /**
+   * Owner-only: send a test email to the SIGNED-IN owner's own email
+   * address. The recipient is taken from the session — never from the
+   * request body — so this can't be used as an open spam relay.
+   * Useful for verifying SMTP / Resend config immediately after saving.
+   */
+  .post("/test-email", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const email = r.user.email;
+    if (!email) {
+      return c.json({ ok: false, reason: "No email on account" }, 400);
+    }
+    const result = await sendEmail({
+      to: email,
+      subject: "Quillra test email",
+      text: "If you received this, your Quillra email configuration is working correctly.",
+      html:
+        "<p>If you received this, your Quillra email configuration is working correctly.</p>" +
+        "<p style=\"color:#888;font-size:12px;\">Sent from the Organization Settings → Email tab.</p>",
+    });
+    if (result.sent) {
+      return c.json({ ok: true, backend: result.backend });
+    }
+    return c.json({ ok: false, backend: result.backend, reason: result.reason });
   });
