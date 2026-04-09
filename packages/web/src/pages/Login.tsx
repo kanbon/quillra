@@ -191,9 +191,6 @@ export function LoginPage() {
               </svg>
               {t("login.continueWithGithub")}
             </button>
-            <p className="mt-3 text-[11px] leading-snug text-neutral-500">
-              {t("login.githubHint")}
-            </p>
           </>
         ) : (
           <>

@@ -137,7 +137,6 @@ const enDict = {
     invalidCode: "Invalid or expired code.",
     useDifferentEmail: "Use a different email",
     or: "or",
-    githubHint: "Only the instance owner needs GitHub. Everyone else can sign in with email above.",
   },
   acceptInvite: {
     title: "Accept invite",
@@ -513,7 +512,6 @@ export const de: DeepStringRecord = {
     invalidCode: "Ungültiger oder abgelaufener Code.",
     useDifferentEmail: "Andere E-Mail verwenden",
     or: "oder",
-    githubHint: "Nur der Instanz-Inhaber benötigt GitHub. Alle anderen können sich oben per E-Mail anmelden.",
   },
   acceptInvite: {
     title: "Einladung annehmen",
