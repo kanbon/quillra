@@ -68,6 +68,51 @@ export function projectRepoPath(projectId: string): string {
   return path.join(workspaceRoot(), projectId, "repo");
 }
 
+/** Folder inside the cloned repo where chat attachments live until the
+ *  agent either promotes them to a real asset path or leaves them be.
+ *  Path is relative to the repo root — join with projectRepoPath() to
+ *  get an absolute path. */
+export const QUILLRA_TEMP_DIR = ".quillra-temp";
+
+/**
+ * Make sure the `.quillra-temp/` folder is hidden from git without
+ * modifying the committed `.gitignore`. We use `.git/info/exclude`
+ * instead — it's a local-only ignore file that git reads alongside
+ * `.gitignore` but never commits. Safe to call on every clone/refresh.
+ *
+ * See: https://git-scm.com/docs/gitignore#_description — "Patterns
+ * which a user wants git to ignore in all situations should go into
+ * a file specified by core.excludesFile (...), or for repository-
+ * specific ignores into `$GIT_DIR/info/exclude`".
+ */
+export function ensureQuillraTempIgnored(repoPath: string): void {
+  try {
+    const excludePath = path.join(repoPath, ".git", "info", "exclude");
+    fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+    const line = `${QUILLRA_TEMP_DIR}/`;
+    let content = "";
+    if (fs.existsSync(excludePath)) {
+      content = fs.readFileSync(excludePath, "utf-8");
+    }
+    const already = content
+      .split("\n")
+      .map((l) => l.trim())
+      .some((l) => l === line || l === QUILLRA_TEMP_DIR);
+    if (!already) {
+      const suffix = content === "" || content.endsWith("\n") ? "" : "\n";
+      fs.appendFileSync(
+        excludePath,
+        `${suffix}# Quillra scratch space for chat attachments — never committed\n${line}\n`,
+      );
+    }
+    // Belt-and-suspenders: also make sure the directory exists so the
+    // upload handler can write to it without mkdir races.
+    fs.mkdirSync(path.join(repoPath, QUILLRA_TEMP_DIR), { recursive: true });
+  } catch (e) {
+    console.warn("[workspace] failed to register .quillra-temp/ with git exclude:", e);
+  }
+}
+
 export function previewPortForProject(projectId: string): number {
   const base = Number(process.env.PREVIEW_PORT_BASE ?? 4321);
   let h = 0;
@@ -275,6 +320,9 @@ export async function ensureRepoCloned(
     await g.pull("origin", branch).catch(() => undefined);
     await installDependenciesIfNeeded(dir, projectId);
   }
+  // Register .quillra-temp/ with git's local exclude so chat
+  // attachments never show up in a diff, a status, or a commit.
+  ensureQuillraTempIgnored(dir);
   return dir;
 }
 

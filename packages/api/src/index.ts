@@ -545,32 +545,54 @@ app.get(
             createdAt: new Date(),
           });
 
-          // Build the prompt — if attachments are present, prepend a clear note for the agent
+          // Build the prompt — if attachments are present, prepend a clear
+          // note for the agent. The key contract: every attachment lives
+          // in `.quillra-temp/` which is locally gitignored. The agent
+          // has to explicitly decide whether each file is a real asset
+          // for the site (move it into public/, src/assets/, etc.) or
+          // just reference material for the conversation (leave it in
+          // place — it's invisible to git and won't be pushed).
           let promptText = parsed.content;
           if (attachments.length > 0) {
             const images = attachments.filter((a) => a.kind !== "content");
             const contents = attachments.filter((a) => a.kind === "content");
             const lines: string[] = [];
+            lines.push(
+              "The user attached files to this message. They are parked inside `.quillra-temp/` in the repo, which is locally gitignored — nothing in that folder is ever committed or pushed to GitHub.",
+            );
+            lines.push("");
+            lines.push("You must decide, per file, which of these two paths to take:");
+            lines.push("");
+            lines.push(
+              "  A) REAL ASSET — the file is supposed to end up on the live site (hero image, product photo, downloadable PDF, translated content, etc.). In that case you must MOVE it out of `.quillra-temp/` into the appropriate asset path for this framework (e.g. `public/`, `src/assets/`, `src/content/`, etc.) AND update the relevant source files to reference the new path. Use Bash `mv` or the Write/Read tools to move the file, then delete the original from `.quillra-temp/` so it's not duplicated.",
+            );
+            lines.push("");
+            lines.push(
+              "  B) REFERENCE-ONLY — the file is just context for the conversation (a screenshot of a design mockup, a reference site, a screenshot of the user's current page, a mood board). In that case LEAVE it in `.quillra-temp/` untouched. It stays on disk for the rest of this turn but is never committed. You should still look at it (you can see images directly, and read text files via Read) to understand what the user wants.",
+            );
+            lines.push("");
+            lines.push(
+              "When unsure, default to REFERENCE-ONLY — it's reversible, whereas accidentally committing a private screenshot to a public repo is not.",
+            );
+            lines.push("");
             if (images.length > 0) {
               lines.push(
-                `${images.length} image${images.length > 1 ? "s" : ""} were attached and are already saved to the repo at:`,
+                `Attached image${images.length > 1 ? "s" : ""}:`,
               );
               for (const a of images) lines.push(`- ${a.path} (originally: ${a.originalName})`);
-              lines.push(
-                "Use these images where the user describes. Reference them via the framework's image system when applicable. Do not re-create or move them unless asked.",
-              );
+              lines.push("");
             }
             if (contents.length > 0) {
-              if (images.length > 0) lines.push("");
               lines.push(
-                `${contents.length} text/content file${contents.length > 1 ? "s" : ""} were attached and are already saved to the repo at:`,
+                `Attached text/content file${contents.length > 1 ? "s" : ""}:`,
               );
               for (const a of contents) lines.push(`- ${a.path} (originally: ${a.originalName})`);
               lines.push(
-                "IMPORTANT: do NOT inline or retype the content of these files in any source file you edit. Treat them as assets: the framework should import or include them (e.g. an Astro component reading the file, an MDX import, a fetch from `/content/...`, or a static include). This keeps the source small and the original file the single source of truth.",
+                "For content files you promote into the repo: do NOT inline their full text into any source file you edit. Keep the file as-is and reference it from code (framework import, fetch from /content/, static include, etc.) so the original stays the single source of truth.",
               );
+              lines.push("");
             }
-            promptText = `${lines.join("\n")}\n\nUser message:\n${parsed.content}`;
+            promptText = `${lines.join("\n")}User message:\n${parsed.content}`;
           }
 
           // Look up the user's preferred language so the agent can reply in it

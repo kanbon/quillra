@@ -9,6 +9,7 @@ import type { SessionUser } from "../lib/auth.js";
 import type { ProjectRole } from "../db/app-schema.js";
 import {
   clearProjectRepoClone,
+  ensureQuillraTempIgnored,
   ensureRepoCloned,
   getPreviewLogs,
   getPreviewProcessInfo,
@@ -17,6 +18,7 @@ import {
   previewPortForProject,
   projectRepoPath,
   pushToGitHub,
+  QUILLRA_TEMP_DIR,
   reinstallProjectDependencies,
   resolveDevCommand,
   startDevPreview,
@@ -858,13 +860,16 @@ Output ONLY the commit message, nothing else.`,
 
     const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
     const fw = detectFramework(repoPath);
-    const targetDir = path.join(repoPath, fw.assetsDir);
-    fs.mkdirSync(targetDir, { recursive: true });
-
-    // Where text/markdown/html content files land. Kept separate from images
-    // and inside the repo so the agent can import them via the framework's
-    // own asset/content system instead of pasting their full text inline.
-    const contentDir = path.join(repoPath, "src", "content", "uploads");
+    // EVERY chat upload lands in `.quillra-temp/` first. The folder is
+    // ignored via .git/info/exclude so files never show up in a commit
+    // unless the agent explicitly promotes them to a real asset path
+    // (public/, src/content/, etc.). This solves the "reference-only
+    // screenshot ends up pushed to GitHub" problem — the agent decides
+    // per-file whether the attachment is a real asset for the site or
+    // just context for the conversation.
+    ensureQuillraTempIgnored(repoPath);
+    const tempDir = path.join(repoPath, QUILLRA_TEMP_DIR);
+    fs.mkdirSync(tempDir, { recursive: true });
 
     type UploadItem = {
       path: string;
@@ -911,6 +916,10 @@ Output ONLY the commit message, nothing else.`,
       const id = nanoid(10);
 
       if (isImage) {
+        // We still normalize heavy uploads (resize + pick an efficient
+        // format) so the file is agent-friendly. The destination is
+        // .quillra-temp/ regardless — the agent decides later whether
+        // to move it into a real asset path.
         const stem = safeStem(file.name, "image");
         let outBuf: Buffer;
         let ext: string;
@@ -939,9 +948,9 @@ Output ONLY the commit message, nothing else.`,
           contentType = "image/webp";
         }
         const filename = `${stem}-${id}.${ext}`;
-        fs.writeFileSync(path.join(targetDir, filename), outBuf);
+        fs.writeFileSync(path.join(tempDir, filename), outBuf);
         items.push({
-          path: `${fw.assetsDir}/${filename}`,
+          path: `${QUILLRA_TEMP_DIR}/${filename}`,
           originalName: file.name,
           bytes: outBuf.length,
           contentType,
@@ -955,11 +964,10 @@ Output ONLY the commit message, nothing else.`,
         // Cap content uploads to 1 MiB so a stray paste can't fill the disk
         const MAX_CONTENT_BYTES = 1024 * 1024;
         if (inputBuf.length > MAX_CONTENT_BYTES) continue;
-        fs.mkdirSync(contentDir, { recursive: true });
         const filename = `${stem}-${id}.${ext}`;
-        fs.writeFileSync(path.join(contentDir, filename), inputBuf);
+        fs.writeFileSync(path.join(tempDir, filename), inputBuf);
         items.push({
-          path: `src/content/uploads/${filename}`,
+          path: `${QUILLRA_TEMP_DIR}/${filename}`,
           originalName: file.name,
           bytes: inputBuf.length,
           contentType: file.type || "text/plain",
