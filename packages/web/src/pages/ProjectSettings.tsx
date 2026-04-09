@@ -9,7 +9,7 @@ import { Heading } from "@/components/atoms/Heading";
 import { Input } from "@/components/atoms/Input";
 import { Modal } from "@/components/atoms/Modal";
 import { Textarea } from "@/components/atoms/Textarea";
-import { AppHeader } from "@/components/organisms/AppHeader";
+import { ProjectHeader } from "@/components/organisms/ProjectHeader";
 import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchFields";
 import { InviteMemberModal } from "@/components/organisms/InviteMemberModal";
 import { apiJson } from "@/lib/api";
@@ -271,7 +271,7 @@ export function ProjectSettingsPage() {
 
   return (
     <div className="min-h-screen bg-neutral-50">
-      <AppHeader showNav projectId={id} />
+      <ProjectHeader projectId={id} projectName={projectQ.data?.name ?? "…"} />
       <main className="mx-auto max-w-3xl px-4 py-10">
         {/* Page heading */}
         <div className="mb-8">

@@ -7,7 +7,7 @@ import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
 import { ChatComposer, type ChatComposerHandle } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
-import { EditorToolbar } from "@/components/organisms/EditorToolbar";
+import { ProjectHeader } from "@/components/organisms/ProjectHeader";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
@@ -209,10 +209,11 @@ export function EditorPage() {
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-white">
-      {/* Editor toolbar is desktop-only on mobile we reclaim the vertical space
-          and drive the UI entirely through the chat + floating preview button. */}
+      {/* Project header is desktop-only on mobile; on phones we reclaim the
+          vertical space and drive the UI entirely through the chat +
+          in-header preview button. */}
       <div className="hidden md:block">
-        <EditorToolbar
+        <ProjectHeader
           projectId={id}
           projectName={project?.name ?? "…"}
           canPublish={Boolean(canPublish)}

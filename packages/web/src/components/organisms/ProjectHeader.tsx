@@ -1,3 +1,13 @@
+/**
+ * Single source of truth for the top bar when the user is inside a specific
+ * project. Used by BOTH the Editor and Project Settings routes so the tab
+ * positions + overall header chrome stay pixel-identical when switching
+ * between them — no layout shift.
+ *
+ * The Editor/Project NavLink pair lives inside an absolute-centered wrapper
+ * so left and right content can change width (e.g. the Publish button only
+ * rendering on the editor route) without moving the tabs.
+ */
 import { useState } from "react";
 import { NavLink, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -21,9 +31,10 @@ type FrameworkInfo = {
 type Props = {
   projectId: string;
   projectName: string;
-  canPublish: boolean;
-  publishing: boolean;
-  onPublish: () => void;
+  /** Editor-only: show the publish button. ProjectSettings omits this. */
+  canPublish?: boolean;
+  publishing?: boolean;
+  onPublish?: () => void;
 };
 
 const tabClass = ({ isActive }: { isActive: boolean }) =>
@@ -34,7 +45,7 @@ const tabClass = ({ isActive }: { isActive: boolean }) =>
       : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900",
   );
 
-export function EditorToolbar({
+export function ProjectHeader({
   projectId,
   projectName,
   canPublish,
@@ -45,6 +56,7 @@ export function EditorToolbar({
   const me = useCurrentUser();
   const isClient = me.kind === "client";
   const [historyOpen, setHistoryOpen] = useState(false);
+  const showPublish = Boolean(canPublish && onPublish);
 
   const { data: framework } = useQuery({
     queryKey: ["project-framework", projectId],
@@ -137,7 +149,7 @@ export function EditorToolbar({
               </svg>
             </button>
           )}
-          {canPublish && (
+          {showPublish && (
             <button
               type="button"
               disabled={publishing}

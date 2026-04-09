@@ -167,9 +167,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   const uploadingCount = staged.filter((s) => s.status === "uploading").length;
   const canSend = !disabled && uploadingCount === 0 && (text.trim().length > 0 || staged.some((s) => s.status === "done"));
 
+  // Clicking anywhere on the composer card (except on buttons / the textarea
+  // itself) should focus the textarea. Without this the bottom action row
+  // visually looks like part of the input but doesn't accept a click.
+  const focusTextarea = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input, textarea, a")) return;
+    textareaRef.current?.focus();
+  };
+
   return (
     <div className="px-3 pb-3 pt-1">
-      <div className="relative rounded-[26px] border border-neutral-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-shadow focus-within:border-neutral-300 focus-within:shadow-[0_4px_16px_rgba(0,0,0,0.06)]">
+      <div
+        className="relative cursor-text rounded-[26px] border border-neutral-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-shadow focus-within:border-neutral-300 focus-within:shadow-[0_4px_16px_rgba(0,0,0,0.06)]"
+        onClick={focusTextarea}
+      >
         {staged.length > 0 && (
           <div className="flex flex-wrap gap-2 px-4 pb-1 pt-3">
             {staged.map((s) => {
