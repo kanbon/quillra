@@ -190,10 +190,15 @@ export function AvatarDropdown() {
             aria-label={t("settings.title")}
             className={cn(
               "z-50 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-xl",
-              // Desktop: anchor under the avatar, right-aligned
-              "sm:absolute sm:right-0 sm:top-[calc(100%+6px)] sm:w-[300px]",
-              // Mobile: fixed bottom sheet
-              "fixed inset-x-3 bottom-3 sm:inset-auto",
+              // Mobile: fixed bottom sheet — declared FIRST so the
+              // sm:* overrides that follow win at desktop breakpoints.
+              "fixed inset-x-3 bottom-3",
+              // Desktop: anchor under the avatar, right-aligned. The
+              // explicit sm:inset-auto cancels the mobile inset-x-3 /
+              // bottom-3 above, otherwise the panel stays fixed to the
+              // viewport edges and overflows to the right.
+              "sm:absolute sm:inset-auto sm:right-0 sm:top-[calc(100%+6px)]",
+              "sm:w-[300px] sm:max-w-[calc(100vw-1rem)]",
               "animate-[fadeIn_0.12s_ease-out]",
             )}
           >
