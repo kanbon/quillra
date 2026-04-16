@@ -438,6 +438,65 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       return c.json({ error: e instanceof Error ? e.message : "Discard failed" }, 500);
     }
   })
+  /**
+   * Manually clear the `migration_target` flag on a project. Used by
+   * the "Cancel migration" link inside the MigrationBanner when a
+   * migration run got stuck — server restart mid-stream, agent error
+   * that never reached `done`, OOM kill, etc. Normally the WS handler
+   * clears the flag itself when the SDK emits a clean `done`, but any
+   * abnormal termination leaves the row flagged and the UI locked.
+   * This endpoint is the frontend-reachable escape hatch the user
+   * asked for: "never stuck, always resolveable via the frontend".
+   *
+   * Also drops any partial workspace files the half-run agent left
+   * behind via `git clean -fd` + `git reset --hard` so the user
+   * doesn't open to a broken half-migrated repo. This is safe
+   * because the migration was going to rewrite everything anyway,
+   * and the old tree lives on in origin/<branch>.
+   */
+  .post("/:id/cancel-migration", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m || (m.role !== "admin" && m.role !== "editor")) {
+      return c.json({ error: "Only editors and admins can cancel migrations." }, 403);
+    }
+    const [p] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+    try {
+      await db
+        .update(projects)
+        .set({ migrationTarget: null, updatedAt: new Date() })
+        .where(eq(projects.id, projectId));
+      // Best-effort: roll the workspace back to origin so the next
+      // chat message doesn't see half-written Astro files mixed with
+      // the old framework. If the workspace isn't cloned yet or the
+      // remote branch doesn't exist, that's fine — the agent will
+      // start fresh next time anyway.
+      try {
+        const repoPath = projectRepoPath(projectId);
+        if (fs.existsSync(path.join(repoPath, ".git"))) {
+          const g = simpleGit(repoPath);
+          await g.fetch("origin", p.defaultBranch).catch(() => undefined);
+          const branches = await g.branch(["-r"]).catch(() => ({ all: [] as string[] }));
+          if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+            await g.reset(["--hard", `origin/${p.defaultBranch}`]).catch(() => undefined);
+          }
+          await g.clean("fd").catch(() => undefined);
+        }
+      } catch {
+        /* best-effort; flag is already cleared which is what unblocks the UI */
+      }
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Cancel failed" }, 500);
+    }
+  })
   .post("/:id/publish", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;

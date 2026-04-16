@@ -212,6 +212,19 @@ export function EditorPage() {
     send(ASTRO_MIGRATION_KICKOFF_PROMPT);
   }, [id, isMigratingToAstro, convList, send]);
 
+  // Escape hatch for stuck migrations. Clears migration_target on the
+  // project and rolls the workspace back to origin, then refetches the
+  // project so the Editor unlocks.
+  const cancelMigration = useCallback(async () => {
+    if (!id) return;
+    await apiJson(`/api/projects/${id}/cancel-migration`, { method: "POST" });
+    await qc.invalidateQueries({ queryKey: ["project", id] });
+    // Also invalidate conversations — the stuck run may have
+    // half-created one, and refetching ensures the migration-kickoff
+    // useEffect above doesn't re-fire based on a stale empty list.
+    await qc.invalidateQueries({ queryKey: ["conversations", id] });
+  }, [id, qc]);
+
   // Auto-start preview on mount: render the iframe immediately with the
   // (deterministic) preview URL so the user sees the proxy boot page —
   // no intermediate spinners. The dev server is started in the background.
@@ -516,7 +529,7 @@ export function EditorPage() {
             no preview makes sense while the project is being rewritten. */}
         <section className="hidden min-w-0 flex-1 md:block">
           {isMigratingToAstro ? (
-            <MigrationBanner />
+            <MigrationBanner onCancel={cancelMigration} />
           ) : (
             <PreviewPane
               projectId={id}
@@ -537,7 +550,7 @@ export function EditorPage() {
           no useful preview exists until the agent finishes. */}
       <MobilePreviewSheet open={mobilePreviewOpen} onClose={() => setMobilePreviewOpen(false)}>
         {isMigratingToAstro ? (
-          <MigrationBanner />
+          <MigrationBanner onCancel={cancelMigration} />
         ) : (
           <PreviewPane
             projectId={id}

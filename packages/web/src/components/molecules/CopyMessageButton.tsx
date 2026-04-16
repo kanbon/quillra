@@ -1,32 +1,34 @@
 /**
- * Copy-to-clipboard icon button designed to float next to a chat
- * message bubble on hover.
+ * Hover-revealed copy button for chat messages. Minimal styling by
+ * design: no background, no border — just a subtle light-grey icon
+ * at rest that darkens on hover.
  *
- * Layout contract:
- *   - Render inside a parent that's `group relative` and tightly
- *     sized to the bubble.
- *   - This button positions itself absolutely just OUTSIDE the left
- *     edge of that parent with `right-full`, plus a gap so the
- *     cursor has a clear target without being crammed against the
- *     bubble.
+ * The hover-bridge problem:
+ *   The button sits at `right-full` (to the left of its group, just
+ *   outside the bubble's bounding box). Moving the cursor from the
+ *   bubble to the icon crosses a small gap where — if the button had
+ *   `pointer-events-none` — the browser would lose :hover on the
+ *   group, the fade-out would start, and the user wouldn't reach
+ *   the icon in time to click it.
  *
- * Why it doesn't vanish when the cursor moves over it: `group-hover`
- * fires as long as ANY descendant of the group is under the cursor,
- * and this button is a descendant. Absolute positioning doesn't
- * remove it from the DOM tree, only from the flow. So the "dead
- * zone" between bubble and button is actually still hot — moving
- * the mouse from the bubble onto the button keeps the parent's
- * hover state active the whole way.
+ *   Two things make the bridge seamless:
+ *     1. No `pointer-events-none`. The button is always clickable;
+ *        `opacity-0` only hides it visually. An invisible button at
+ *        the left margin of a message is harmless because the user
+ *        can only click what they see, and the fade-in on hover is
+ *        near-instant.
+ *     2. The button has generous right-padding (`pr-2.5`). The icon
+ *        is laid out at the button's left edge; the padding extends
+ *        the hit area rightward into the gap between icon and bubble.
+ *        Cursor in that gap is still over the button, which is a
+ *        descendant of the group, so group :hover stays active the
+ *        whole way across.
  *
- * Interaction details tuned for a satisfying feel:
- *   - 150ms fade-in on hover, 100ms fade-out (slightly faster out).
- *   - Click → clipboard write → swap the icon to a checkmark for
- *     1.4s, then flip back.
- *   - Active state scales down to 95% for the classic "tactile" pop.
- *   - Tooltip on hover uses the native title attribute, good enough
- *     without adding a floating-ui popup for a single-icon button.
- *   - Falls back to document.execCommand("copy") on any browser that
- *     doesn't expose navigator.clipboard (legacy http origins).
+ * Copy feedback:
+ *   Green check for 1.4s with a snap-in animation, then back to the
+ *   copy icon. `copied` state also keeps the button visible during
+ *   that window so the user sees the confirmation even if they
+ *   already moved the cursor away.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "@/i18n/i18n";
@@ -38,17 +40,14 @@ type Props = {
 };
 
 async function writeToClipboard(text: string): Promise<boolean> {
-  // Preferred path: modern Clipboard API (requires https or localhost).
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      /* fall through to the legacy path */
+      /* fall through */
     }
   }
-  // Legacy fallback: hidden textarea + execCommand. Still works on
-  // insecure origins where the Clipboard API is disabled.
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -92,43 +91,54 @@ export function CopyMessageButton({ text, className }: Props) {
       aria-label={copied ? t("chat.copyMessage.copied") : t("chat.copyMessage.copy")}
       title={copied ? t("chat.copyMessage.copied") : t("chat.copyMessage.copy")}
       className={cn(
-        "absolute right-full top-1/2 mr-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-500 shadow-sm transition-all duration-150 ease-out",
-        // Hidden by default, revealed on parent :hover (and kept visible
-        // while the button itself is focused — so keyboard users can
-        // Tab to it without it disappearing).
-        "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
-        "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
-        "hover:border-neutral-300 hover:bg-neutral-50 hover:text-neutral-800 active:scale-95",
-        copied && "pointer-events-auto border-green-200 bg-green-50 text-green-700 opacity-100",
+        // Absolutely positioned with its right edge at the bubble's
+        // left edge. `pr-2.5` adds 10px of hit area to the right of
+        // the visible icon — the hover bridge.
+        "absolute right-full top-1/2 flex h-7 -translate-y-1/2 items-center pr-2.5",
+        // Transition opacity cheaply; never pointer-events-none so
+        // the button catches the cursor the moment it reaches its
+        // hit area (including the bridge).
+        "opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100",
+        "focus-visible:opacity-100 focus-visible:outline-none",
+        copied && "opacity-100",
         className,
       )}
     >
-      {copied ? (
-        <svg
-          className="h-3.5 w-3.5 animate-[copyPop_0.25s_ease-out]"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M5 13l4 4L19 7" />
-        </svg>
-      ) : (
-        <svg
-          className="h-3.5 w-3.5"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.8}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <rect x="9" y="9" width="11" height="11" rx="2" />
-          <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-        </svg>
-      )}
+      <span
+        className={cn(
+          "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
+          copied
+            ? "text-green-600"
+            : "text-neutral-400 hover:text-neutral-800 active:scale-95",
+        )}
+      >
+        {copied ? (
+          <svg
+            className="h-3.5 w-3.5 animate-[copyPop_0.25s_ease-out]"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M5 13l4 4L19 7" />
+          </svg>
+        ) : (
+          <svg
+            className="h-3.5 w-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="9" y="9" width="11" height="11" rx="2" />
+            <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+          </svg>
+        )}
+      </span>
     </button>
   );
 }

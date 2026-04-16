@@ -223,6 +223,11 @@ const enDict = {
       subtitle:
         "Quillra is rewriting the project. This usually takes a few minutes. You can leave this page and come back — the work continues in the background.",
       composerDisabled: "Chat is disabled until migration finishes",
+      stuckHint: "Taking too long or the page got stuck?",
+      cancel: "Cancel migration",
+      cancelling: "Cancelling…",
+      cancelConfirm:
+        "Cancel the migration and restore the project to its original state? The repo will be reset to match GitHub and any in-progress agent work will be discarded.",
     },
   },
   github: {
@@ -671,6 +676,11 @@ export const de: DeepStringRecord = {
       subtitle:
         "Quillra schreibt das Projekt neu. Das dauert normalerweise ein paar Minuten. Sie können diese Seite verlassen und später zurückkehren — die Arbeit läuft im Hintergrund weiter.",
       composerDisabled: "Chat ist deaktiviert, bis die Migration abgeschlossen ist",
+      stuckHint: "Dauert es zu lange oder die Seite hängt?",
+      cancel: "Migration abbrechen",
+      cancelling: "Wird abgebrochen…",
+      cancelConfirm:
+        "Migration abbrechen und das Projekt in den Ursprungszustand zurücksetzen? Das Repo wird auf den Stand von GitHub zurückgesetzt und alle laufenden Änderungen des Agenten werden verworfen.",
     },
   },
   github: {
