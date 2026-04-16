@@ -182,6 +182,19 @@ const enDict = {
     connecting: "Connecting…",
     connect: "Connect repository",
   },
+  astroMigration: {
+    toggleTitle: "Convert to Astro",
+    toggleHelp:
+      "Let Quillra rewrite this site as an Astro project. Faster loads, built-in image optimisation, content collections, and live preview.",
+  },
+  migration: {
+    banner: {
+      title: "Migrating to Astro…",
+      subtitle:
+        "Quillra is rewriting the project. This usually takes a few minutes. You can leave this page and come back — the work continues in the background.",
+      composerDisabled: "Chat is disabled until migration finishes",
+    },
+  },
   github: {
     repository: "GitHub repository",
     repoPlaceholder: "owner/repo",
@@ -585,6 +598,19 @@ export const de: DeepStringRecord = {
     devCommandHelp: "Verwenden Sie {portCode}, wo der Server lauschen soll.",
     connecting: "Wird verbunden…",
     connect: "Repository verbinden",
+  },
+  astroMigration: {
+    toggleTitle: "Zu Astro konvertieren",
+    toggleHelp:
+      "Quillra schreibt diese Seite als Astro-Projekt neu. Schnellere Ladezeiten, eingebaute Bildoptimierung, Content Collections und Live-Vorschau.",
+  },
+  migration: {
+    banner: {
+      title: "Migration zu Astro läuft…",
+      subtitle:
+        "Quillra schreibt das Projekt neu. Das dauert normalerweise ein paar Minuten. Sie können diese Seite verlassen und später zurückkehren — die Arbeit läuft im Hintergrund weiter.",
+      composerDisabled: "Chat ist deaktiviert, bis die Migration abgeschlossen ist",
+    },
   },
   github: {
     repository: "GitHub-Repository",

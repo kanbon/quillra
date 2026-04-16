@@ -1,6 +1,7 @@
 import { query, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
 import { getInstanceSetting } from "./instance-settings.js";
+import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
 
 /**
  * System prompt that shapes how the agent talks to Quillra users.
@@ -83,16 +84,29 @@ function editorBlockedPath(filePath: string): boolean {
   );
 }
 
-function buildCanUseTool(role: ProjectRole) {
+function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: boolean }) {
   return async (
     toolName: string,
     input: Record<string, unknown>,
-    opts: {
+    callOpts: {
       toolUseID: string;
       signal: AbortSignal;
     },
   ): Promise<PermissionResult> => {
-    const id = opts.toolUseID;
+    const id = callOpts.toolUseID;
+
+    // Migration mode: bypass every role's guardrails. The migration
+    // agent has to delete old build configs, remove lockfiles, blow
+    // away source trees, rewrite package.json, and run arbitrary
+    // commands. The user is locked out of the composer while this
+    // runs (isMigratingToAstro flag in the Editor), so there's no
+    // risk of an interactive user fighting with the agent for
+    // control. The project-level authorization to kick this off
+    // happened at project creation; once migration_target is set
+    // on the row, the agent gets free rein until it clears the flag.
+    if (opts?.migrationMode) {
+      return { behavior: "allow", toolUseID: id };
+    }
 
     if (role === "admin") {
       if (toolName === "Bash") {
@@ -251,6 +265,10 @@ export async function* runProjectAgent(params: {
   agentSessionId?: string | null;
   onSessionId?: (sessionId: string) => void;
   abortSignal?: AbortSignal;
+  /** When true, the agent is in "rewrite to Astro" mode: unrestricted
+   *  tool permissions and the Astro migration skill is appended to
+   *  the system prompt. See services/astro-migration-skill.ts. */
+  migrationMode?: boolean;
 }): AsyncGenerator<Record<string, unknown>> {
   const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
   if (!apiKey) {
@@ -261,11 +279,20 @@ export async function* runProjectAgent(params: {
   const model = process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-20250514";
   const abortController = new AbortController();
 
-  // Build the system prompt with an optional language directive appended
+  // Build the system prompt with optional language + migration skill
+  // appended. Migration mode deliberately keeps the base Quillra prompt
+  // because the agent still needs to respect tool-call semantics; we
+  // just add a massive "here's how Astro works and how to migrate"
+  // block on top. The "don't say technical words" directive in the
+  // base prompt becomes advisory during migration — the user is
+  // locked out of the composer anyway, so chatter is harmless.
   const languageName = params.language ? LANGUAGE_NAMES[params.language] : null;
-  const systemPromptText = languageName
+  let systemPromptText = languageName
     ? `${QUILLRA_SYSTEM_PROMPT}\n\nIMPORTANT: Always reply to the user in ${languageName}, regardless of the language the user writes in. Code, file names, and commit messages stay in their natural language; only your spoken/written replies must be in ${languageName}.`
     : QUILLRA_SYSTEM_PROMPT;
+  if (params.migrationMode) {
+    systemPromptText = `${systemPromptText}\n\n---\n\n${ASTRO_MIGRATION_SYSTEM_PROMPT}`;
+  }
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
   // Symbol thrown internally to trigger a retry without resume when the
@@ -289,7 +316,7 @@ export async function* runProjectAgent(params: {
         tools: { type: "preset", preset: "claude_code" },
         includePartialMessages: true,
         persistSession: true,
-        canUseTool: buildCanUseTool(params.role),
+        canUseTool: buildCanUseTool(params.role, { migrationMode: params.migrationMode }),
         permissionMode: "acceptEdits",
       },
     });

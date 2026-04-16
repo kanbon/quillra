@@ -18,6 +18,7 @@ export function useProjectChat(
   conversationId: string | null,
   onRefreshPreview?: () => void,
   onConversationCreated?: (id: string) => void,
+  onMigrationComplete?: () => void,
 ) {
   const id = projectId ?? "";
 
@@ -32,9 +33,18 @@ export function useProjectChat(
 
   const send = useCallback(
     (text: string, attachments?: Attachment[]) => {
-      if (id) sendMessage(id, conversationId, text, onRefreshPreview, onConversationCreated, attachments);
+      if (id)
+        sendMessage(
+          id,
+          conversationId,
+          text,
+          onRefreshPreview,
+          onConversationCreated,
+          attachments,
+          onMigrationComplete,
+        );
     },
-    [id, conversationId, onRefreshPreview, onConversationCreated],
+    [id, conversationId, onRefreshPreview, onConversationCreated, onMigrationComplete],
   );
 
   return { lines: snap.lines, busy: snap.busy, error: snap.error, send };

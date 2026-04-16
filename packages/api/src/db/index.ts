@@ -39,6 +39,9 @@ try {
 try {
   ensureColumn("conversations", "created_by_user_id", "TEXT");
 } catch { /* table may not exist yet on a fresh init */ }
+try {
+  ensureColumn("projects", "migration_target", "TEXT");
+} catch { /* table may not exist yet on a fresh init */ }
 
 // Bootstrap new tables (drizzle-kit isn't run at boot, so create-if-missing)
 try {

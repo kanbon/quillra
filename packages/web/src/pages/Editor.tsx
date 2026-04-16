@@ -7,6 +7,7 @@ import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
 import { ChatComposer, type ChatComposerHandle } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
+import { MigrationBanner } from "@/components/organisms/MigrationBanner";
 import { ProjectHeader } from "@/components/organisms/ProjectHeader";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
 import { apiJson } from "@/lib/api";
@@ -15,12 +16,16 @@ import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
 import { clearNewChat } from "@/lib/chat-store";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
+import { ASTRO_MIGRATION_KICKOFF_PROMPT } from "@/lib/migration-prompts";
 import { MobilePreviewSheet } from "@/components/organisms/MobilePreviewSheet";
 
 type ProjectDetail = {
   id: string;
   name: string;
   role: string;
+  /** "astro" while the migration agent is rewriting the project.
+   *  null when not migrating. Cleared by the server on done. */
+  migrationTarget: "astro" | null;
 };
 
 type PublishStatus = {
@@ -169,7 +174,43 @@ export function EditorPage() {
     void qc.invalidateQueries({ queryKey: ["conversations", id] });
   }, [id, qc]);
 
-  const { lines, busy, error, send } = useProjectChat(id || undefined, conversationId, refreshPreview, handleConversationCreated);
+  // When the server finishes a migration run, it clears the project's
+  // migration_target and sends us a `migration_complete` WS frame.
+  // That triggers this callback which just refetches the project so
+  // the Editor's migrationTarget-gated UI lock drops.
+  const handleMigrationComplete = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["project", id] });
+  }, [id, qc]);
+
+  const { lines, busy, error, send } = useProjectChat(
+    id || undefined,
+    conversationId,
+    refreshPreview,
+    handleConversationCreated,
+    handleMigrationComplete,
+  );
+
+  // Derived state: true while the project row still has migration_target
+  // set. This is the source of truth for locking the UI (disabling the
+  // composer, hiding the preview in favour of the MigrationBanner).
+  // Survives page reloads because it comes from the DB — not local state.
+  const isMigratingToAstro = project?.migrationTarget === "astro";
+
+  // Auto-send the migration kickoff prompt exactly once per project —
+  // when we land on a project flagged for migration and there are no
+  // conversations yet. A ref guard prevents double-sends if the effect
+  // re-runs from `convList` refetching mid-stream. The guard resets
+  // per component mount; across mounts `conversations.length > 0` as
+  // soon as the first send lands, so the condition fails forever.
+  const migrationKickoffSent = useRef(false);
+  useEffect(() => {
+    if (!id || !isMigratingToAstro) return;
+    if (!convList) return;
+    if (convList.conversations.length > 0) return;
+    if (migrationKickoffSent.current) return;
+    migrationKickoffSent.current = true;
+    send(ASTRO_MIGRATION_KICKOFF_PROMPT);
+  }, [id, isMigratingToAstro, convList, send]);
 
   // Auto-start preview on mount: render the iframe immediately with the
   // (deterministic) preview URL so the user sees the proxy boot page —
@@ -422,7 +463,12 @@ export function EditorPage() {
           )}
 
           <ChatTranscript lines={lines} busy={busy} />
-          <ChatComposer ref={composerRef} projectId={id} onSend={send} disabled={busy} />
+          <ChatComposer
+            ref={composerRef}
+            projectId={id}
+            onSend={send}
+            disabled={busy || isMigratingToAstro}
+          />
         </section>
         <div
           className={cn(
@@ -465,8 +511,34 @@ export function EditorPage() {
           />
         )}
         {/* Desktop: inline preview pane.
-            Mobile: hidden here and rendered inside the bottom sheet below. */}
+            Mobile: hidden here and rendered inside the bottom sheet below.
+            While migrating to Astro: replaced by the MigrationBanner —
+            no preview makes sense while the project is being rewritten. */}
         <section className="hidden min-w-0 flex-1 md:block">
+          {isMigratingToAstro ? (
+            <MigrationBanner />
+          ) : (
+            <PreviewPane
+              projectId={id}
+              src={previewSrc}
+              onRefresh={refreshPreview}
+              onStartPreview={() => previewMut.mutate()}
+              starting={previewMut.isPending}
+              engineLabel={previewLabel || undefined}
+              startLabel={startLabel}
+              errorMessage={previewError}
+            />
+          )}
+        </section>
+      </div>
+
+      {/* Mobile-only: preview bottom sheet (opened via chat-header button).
+          During a migration, the sheet shows the MigrationBanner instead —
+          no useful preview exists until the agent finishes. */}
+      <MobilePreviewSheet open={mobilePreviewOpen} onClose={() => setMobilePreviewOpen(false)}>
+        {isMigratingToAstro ? (
+          <MigrationBanner />
+        ) : (
           <PreviewPane
             projectId={id}
             src={previewSrc}
@@ -476,23 +548,9 @@ export function EditorPage() {
             engineLabel={previewLabel || undefined}
             startLabel={startLabel}
             errorMessage={previewError}
+            compact
           />
-        </section>
-      </div>
-
-      {/* Mobile-only: preview bottom sheet (opened via chat-header button). */}
-      <MobilePreviewSheet open={mobilePreviewOpen} onClose={() => setMobilePreviewOpen(false)}>
-        <PreviewPane
-          projectId={id}
-          src={previewSrc}
-          onRefresh={refreshPreview}
-          onStartPreview={() => previewMut.mutate()}
-          starting={previewMut.isPending}
-          engineLabel={previewLabel || undefined}
-          startLabel={startLabel}
-          errorMessage={previewError}
-          compact
-        />
+        )}
       </MobilePreviewSheet>
 
       <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>

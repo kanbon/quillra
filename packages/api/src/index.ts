@@ -604,7 +604,15 @@ app.get(
           const userLanguage = userRow?.language ?? null;
 
           let assistantText = "";
+          let agentErrored = false;
           const role = m.role as ProjectRole;
+          // Server-authoritative migration mode: if the project row has
+          // migration_target set, this invocation runs unrestricted and
+          // with the Astro skill injected into the system prompt.
+          // Re-reading from the row (not the old cached value) means a
+          // DELETE of the row or a manual SQL clear flips the next
+          // message back to normal behaviour immediately.
+          const migrationMode = p.migrationTarget === "astro";
           for await (const ev of runProjectAgent({
             cwd: repoPath,
             prompt: promptText,
@@ -612,6 +620,7 @@ app.get(
             projectId,
             language: userLanguage,
             agentSessionId,
+            migrationMode,
             onSessionId: (sid) => {
               agentSessionId = sid;
               void db.update(conversations).set({ agentSessionId: sid }).where(eq(conversations.id, convId!)).catch(() => {});
@@ -621,6 +630,7 @@ app.get(
             if (ev.type === "stream" && typeof ev.text === "string") {
               assistantText += ev.text;
             }
+            if (ev.type === "error") agentErrored = true;
           }
 
           if (assistantText) {
@@ -639,6 +649,20 @@ app.get(
             } else {
               await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, convId));
             }
+          }
+
+          // If this was a migration run that finished cleanly, clear
+          // the flag so the Editor unlocks (preview back, composer
+          // enabled). On error we leave it set — the user reloads,
+          // sees the "still migrating" state, and can manually clear
+          // (future work) or retry.
+          if (migrationMode && !agentErrored) {
+            await db
+              .update(projects)
+              .set({ migrationTarget: null, updatedAt: new Date() })
+              .where(eq(projects.id, projectId))
+              .catch(() => { /* non-fatal */ });
+            ws.send(JSON.stringify({ type: "migration_complete" }));
           }
 
           ws.send(JSON.stringify({ type: "refresh_preview" }));

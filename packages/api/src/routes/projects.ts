@@ -89,6 +89,10 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
       defaultBranch: z.string().min(1).default("main"),
       previewDevCommand: z.string().max(2000).nullable().optional(),
+      // Optional flag — set to "astro" if the user ticked the
+      // "Convert to Astro" card in ConnectProjectModal. Kicks off a
+      // migration agent run on project open.
+      migrationTarget: z.enum(["astro"]).nullable().optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
@@ -101,6 +105,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       githubRepoFullName: parsed.data.githubRepoFullName,
       defaultBranch: parsed.data.defaultBranch,
       previewDevCommand: parsed.data.previewDevCommand ?? null,
+      migrationTarget: parsed.data.migrationTarget ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -129,6 +134,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       defaultBranch: p.defaultBranch,
       previewDevCommand: p.previewDevCommand,
       logoUrl: p.logoUrl,
+      migrationTarget: p.migrationTarget,
       role: m.role,
     });
   })

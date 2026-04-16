@@ -51,6 +51,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
   const [nameTouched, setNameTouched] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [previewCmd, setPreviewCmd] = useState("");
+  const [convertToAstro, setConvertToAstro] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,6 +68,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     setNameTouched(false);
     setShowAdvanced(false);
     setPreviewCmd("");
+    setConvertToAstro(false);
     setSubmitting(false);
     setError(null);
   }, [open]);
@@ -149,6 +151,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
           githubRepoFullName: effectiveRepoFull,
           defaultBranch: branch.trim(),
           previewDevCommand: previewCmd.trim() || null,
+          migrationTarget: convertToAstro ? "astro" : null,
         }),
       });
       onCreated();
@@ -496,6 +499,79 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               autoFocus
             />
           </div>
+
+          {/*
+            Convert-to-Astro card. Shown only when the detected framework
+            is NOT already Astro or Next.js — those two work natively
+            with Quillra, so migration would be a no-op. Subtle: muted
+            border by default, Astro logo tile + a native-looking
+            switch. Activating it flips a flag on the project row and
+            the Editor auto-kicks off a migration agent on first open.
+          */}
+          {fwQ.data?.supported &&
+            fwQ.data.framework.id !== "astro" &&
+            fwQ.data.framework.id !== "next" && (
+            <label
+              className={cn(
+                "relative block cursor-pointer overflow-hidden rounded-xl border p-4 transition-colors",
+                convertToAstro
+                  ? "border-[#FF5D01] bg-gradient-to-br from-[#FF5D01]/10 via-[#FF5D01]/5 to-transparent"
+                  : "border-neutral-200 bg-white hover:border-neutral-300",
+              )}
+            >
+              {/* Subtle Astro-branded background accent when toggled on */}
+              {convertToAstro && (
+                <div
+                  className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-[#FF5D01] opacity-[0.06] blur-3xl"
+                  aria-hidden
+                />
+              )}
+              <div className="relative flex items-start gap-3">
+                <div
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: "#FF5D01" }}
+                >
+                  <img
+                    src="https://cdn.simpleicons.org/astro/ffffff"
+                    alt="Astro"
+                    width={20}
+                    height={20}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[14px] font-semibold text-neutral-900">
+                    {t("astroMigration.toggleTitle")}
+                  </p>
+                  <p className="mt-0.5 text-[12px] leading-snug text-neutral-500">
+                    {t("astroMigration.toggleHelp")}
+                  </p>
+                </div>
+                <div className="shrink-0 pt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={convertToAstro}
+                    onChange={(e) => setConvertToAstro(e.target.checked)}
+                    disabled={submitting}
+                    className="sr-only"
+                  />
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "block h-6 w-10 rounded-full transition-colors",
+                      convertToAstro ? "bg-[#FF5D01]" : "bg-neutral-300",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "block h-5 w-5 translate-y-0.5 rounded-full bg-white shadow-sm transition-transform",
+                        convertToAstro ? "translate-x-[22px]" : "translate-x-0.5",
+                      )}
+                    />
+                  </span>
+                </div>
+              </div>
+            </label>
+          )}
           <div>
             <button
               type="button"

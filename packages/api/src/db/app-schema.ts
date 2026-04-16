@@ -15,6 +15,14 @@ export const projects = sqliteTable("projects", {
   previewDevCommand: text("preview_dev_command"),
   /** Optional URL of a logo shown on the branded client login page */
   logoUrl: text("logo_url"),
+  /**
+   * Set to "astro" while the migration agent is actively rewriting
+   * the project to Astro. Server clears this to NULL when the agent
+   * emits `done`. While it's set, the Editor locks the composer and
+   * hides the preview column; the server also gives the agent
+   * unrestricted tool permissions.
+   */
+  migrationTarget: text("migration_target"),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),

@@ -176,6 +176,11 @@ export function sendMessage(
   onRefreshPreview?: () => void,
   onConversationCreated?: (id: string) => void,
   attachments?: Attachment[],
+  /** Fires once the server reports that the migration-to-Astro agent
+   *  finished cleanly and the project row has been un-flagged. Used
+   *  by the Editor to refetch the project (which drops the lock on
+   *  the preview + composer). */
+  onMigrationComplete?: () => void,
 ) {
   if (!text.trim() && (!attachments || attachments.length === 0)) return;
   const k = key(projectId, conversationId);
@@ -328,6 +333,13 @@ export function sendMessage(
 
     if (type === "refresh_preview") {
       onRefreshPreview?.();
+    }
+
+    // Emitted by the WS handler right after it clears the project's
+    // migration_target. Tells the Editor to refetch the project row
+    // so its `migrationTarget`-gated UI lock drops.
+    if (type === "migration_complete") {
+      onMigrationComplete?.();
     }
 
     if (type === "error") {
