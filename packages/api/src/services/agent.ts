@@ -327,17 +327,26 @@ export async function* runProjectAgent(params: {
   // OOMs, dev-server crash loops, and Astro config errors and would
   // either claim success or retry without understanding. Clients never
   // touch the preview, so they don't get these tools.
+  //
+  // The server INSTANCE has to be rebuilt per `query()` call — the SDK's
+  // internal MCP client calls `.connect()` on the underlying Server,
+  // and the Server only allows one transport at a time. Re-using the
+  // same instance across the SESSION_LOST retry throws
+  // "Already connected to a transport" and (because it lands in an
+  // async-generator consumer) bubbles up as an unhandledRejection that
+  // kills the whole Node process.
   const diagnosticsEligible = params.role === "admin" || params.role === "editor";
-  const diagnosticsServer = diagnosticsEligible
-    ? buildAgentDiagnosticsMcpServer({
-        projectId: params.projectId,
-        repoPath: params.cwd,
-        previewDevCommandOverride: params.previewDevCommandOverride ?? null,
-      })
-    : null;
-  if (diagnosticsServer) {
+  if (diagnosticsEligible) {
     systemPromptText = `${systemPromptText}\n\n---\n\n${DIAGNOSTICS_TOOL_HINT}`;
   }
+  const buildDiagnosticsForThisQuery = () =>
+    diagnosticsEligible
+      ? buildAgentDiagnosticsMcpServer({
+          projectId: params.projectId,
+          repoPath: params.cwd,
+          previewDevCommandOverride: params.previewDevCommandOverride ?? null,
+        })
+      : null;
 
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
@@ -346,6 +355,7 @@ export async function* runProjectAgent(params: {
   const SESSION_LOST = Symbol("session_lost");
 
   async function* run(sessionId: string | null): AsyncGenerator<Record<string, unknown>> {
+    const diagnosticsServer = buildDiagnosticsForThisQuery();
     const q = query({
       prompt: params.prompt,
       options: {

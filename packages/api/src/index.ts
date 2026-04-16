@@ -1,6 +1,19 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+// Keep the process alive through library-level bugs that throw inside a
+// detached async chain — e.g. the Claude Agent SDK's MCP transport
+// emitting an uncaught rejection mid-stream. Default node behaviour is
+// to crash the whole API container; one broken chat turn shouldn't
+// take every other signed-in user with it. Just log so the operator
+// still notices in docker logs.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason instanceof Error ? reason.stack ?? reason.message : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err.stack ?? err.message);
+});
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
