@@ -13,6 +13,10 @@
 </p>
 
 <p align="center">
+  <img src="assets/quillra-editor.png" alt="Quillra editor — chat on the left, live preview on the right" width="100%" />
+</p>
+
+<p align="center">
   <a href="#run-your-own-self-hosted"><strong>Self-host</strong></a> ·
   <a href="#how-it-works-in-practice"><strong>How it works</strong></a> ·
   <a href="#for-developers"><strong>For developers</strong></a>
@@ -36,11 +40,20 @@ Quillra is the missing layer. Your repo stays the source of truth. Your client o
 ## What it does
 
 - 💬 **Chat-first editing** — clients describe changes in plain language, the agent edits the real files
-- 👀 **Live preview** — every project gets its own dev server with hot reload, opened in an iframe right next to the chat
+- 👀 **Live preview** — every project gets its own dev server with hot reload, opened in an iframe right next to the chat. One-click "Ask the assistant to fix it" when the preview errors out.
 - 🔁 **Real Git history** — every change is a real commit, attributed and reviewable, pushed to your existing repo
 - 🚀 **Your existing pipeline** — Pages, Vercel, Netlify, Cloudflare, your VPS — Quillra never touches your hosting
-- 🖼️ **Smart image handling** — paste, drag, or click to upload; saved to the right folder for your framework, optimized only when the framework doesn't already
-- 🔒 **Role-aware permissions** — admins, editors, and translators with different scopes baked into the agent's tool permissions
+- 🖼️ **Smart file handling** — paste, drag, or click to upload images or text/content files; saved to the right folder for your framework, optimised only when the framework doesn't already
+- 🔒 **Role-aware permissions** — admin, editor, and client scopes baked into the agent's tool permissions
+- 🧾 **Spend controls** — per-turn cost checkpoint visible in chat, organisation-wide usage dashboard with per-user drill-downs, optional warn/hard-cap thresholds (global, per-role, or per-user), and opt-in monthly usage reports per user for weiterverrechnung
+- 🪄 **One-click migrate to Astro** — for vibe-coded React/Next/Gatsby sites that need a faster foundation, with design parity as a hard requirement
+
+<p align="center">
+  <img src="assets/auto-migrate-astro.png" alt="Convert to Astro toggle in the project settings" width="640" />
+</p>
+
+- 🏷️ **Branded client portal** — each project can set its own logo for the client sign-in page; clients log in with an email code, not GitHub
+- 📧 **Email built in** — Resend or any SMTP provider; invites, warnings, and reports all flow through a shared branded template that renders cleanly in Outlook and Gmail
 - 🌍 **Full i18n** — English and German UI today, more on request; the agent answers in the user's chosen language
 - 🏠 **Self-hosted by default** — one Docker container, your VPS, your data
 
@@ -72,16 +85,18 @@ You deploy **one Quillra instance** (VPS, internal server, Docker). There are no
 | `BETTER_AUTH_URL` | Public URL of the API (OAuth callbacks and cookies) |
 | `BETTER_AUTH_SECRET` | Session encryption secret (`openssl rand -base64 32`) |
 | `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for sign-in |
-| `GITHUB_TOKEN` | Server-side token to clone, fetch, push, and list repos in the UI |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for the owner's sign-in |
 | `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server |
-| `PREVIEW_DOMAIN` | (Optional) wildcard subdomain for clean preview URLs |
+| `PREVIEW_DOMAIN` | Wildcard subdomain for per-project preview URLs |
+| `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp` — powers invites, warnings, and monthly reports |
 
-Copy `packages/api/.env.example` → `.env`, fill the values, and run `yarn db:push` in `packages/api` after schema changes. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
+All other settings — GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields — are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them.
+
+Copy `packages/api/.env.example` → `.env`, fill the values above, and start the container. The SQLite schema bootstraps itself on first run. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
 
 **Server prerequisites:** Node.js, `git`, and a package manager on `PATH` so installs and dev previews work inside cloned workspaces.
 
-The **Sites** dashboard lists every project you can access; from the editor, use the logo to return and connect more repositories.
+The **Sites** dashboard lists every project you can access; from the editor, use the logo to return and connect more repositories. Organization Settings (owner only) covers email, API keys, team invites, usage, and spend controls.
 
 ### Don't want to self-host?
 
@@ -117,9 +132,9 @@ Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms,
 
 ## Status
 
-The MVP is shipping. Working today: GitHub OAuth, projects, team invites, multi-conversation chat with persistent history, live preview with stage-aware boot screen, framework-aware image upload, publish via `GITHUB_TOKEN`, role-aware tooling, full English/German i18n.
+**Ready for use.** Running in production on [cms.kanbon.at](https://cms.kanbon.at) and backing real agency work.
 
-In flight: Resend-powered email invitations, client vs collaborator roles, branded client login portals, file uploads beyond images.
+Shipped: GitHub OAuth + email-code login for team and clients · projects with per-project membership · multi-conversation chat with persistent history and cost-per-turn checkpoints · live preview with stage-aware boot screen and one-click "ask the assistant to fix it" on errors · framework-aware file upload (images + text/content) · GitHub App-based publish · role-aware tooling (admin / editor / client) · branded client login portal (per-project logo) · pluggable email (Resend or SMTP) with a shared Outlook-safe template · Astro migration with hard design parity · organisation-wide usage dashboard with per-user drill-down (12-month chart + tables) · spend controls (warn + hard cap, global / per-role / per-user, owner-exempt) · monthly usage report email per user (opt-in, daily cron + boot-time catch-up) · full English/German i18n.
 
 ## Contributing
 
