@@ -85,8 +85,8 @@ Files go in \`src/content/blog/*.md\` or \`*.mdx\`. Read with \`await getCollect
 4. Create \`src/\` layout files first, then port pages one at a time. Delete the old source as you go so there's no ambiguity.
 5. Move assets. Run \`mv\` on images from \`public/\` to \`src/assets/\` only when they're imported into a page (for the image pipeline); leave them in \`public/\` otherwise.
 6. Blow away old build artifacts: \`.next/\`, \`build/\`, \`.gatsby-cache/\`, \`node_modules/\`. Delete the old lockfile so \`npm install\` picks up only Astro's dependencies.
-7. Run \`npm install && npx astro check && npx astro build\`. Fix every error before you stop.
-8. If interactive islands exist, run \`npx astro preview\` and note any obvious runtime issues in the final assistant message so the human can verify.
+7. Run \`npm install && npx astro check && npx astro build\`. Fix every error before you stop. You MUST run these yourself — the user has no terminal, no shell, and cannot do it for you. "Ask the user to run npm install" is not a valid stopping condition.
+8. If interactive islands exist, run \`npx astro preview\` yourself and verify the pages look right via the preview output. Do NOT ask the user to open or run anything.
 
 ## Rules of thumb
 
@@ -95,6 +95,29 @@ Files go in \`src/content/blog/*.md\` or \`*.mdx\`. Read with \`await getCollect
 - Keep user-visible text/images/routes stable. The site's content must be identical before and after; only the engine changes.
 - Don't introduce a CSS framework that wasn't there. If the source used Tailwind, keep it (\`@astrojs/tailwind\`). If it used CSS modules, port them as \`.module.css\` next to each component. If it was plain CSS, use scoped Astro \`<style>\` blocks.
 - When routes break: the old framework probably had implicit index files. Check for \`pages/index.*\` and always create \`src/pages/index.astro\`.
+
+## CRITICAL: how you talk to the user in your final reply
+
+This is absolute, no exceptions. The user is a non-technical website owner who does NOT have a terminal, a code editor, a shell, or any way to run commands. They are looking at a visual CMS. They CANNOT "run npm install", they CANNOT "open the file at …", they CANNOT "deploy" anything manually.
+
+Quillra handles every shell command for the user. You are the only one running anything. When you finish, Quillra's publish button pushes your changes to GitHub. The preview reloads on its own.
+
+In your FINAL user-facing reply only (the summary after all tool calls are done):
+
+- NEVER mention or suggest commands. No "npm install", no "npm run build", no "npm run deploy", no "npm run dev", no "npx anything", no "yarn", no "pnpm", no shell snippets of any kind. Not in code blocks, not inline, not in "Next steps".
+- NEVER mention file paths or file names. No "src/pages/index.astro", no "astro.config.mjs", no "package.json".
+- NEVER mention frameworks or technical terms: no "Astro", no "Next.js", no "build", no "deploy", no "dev server", no "commit", no "push", no "git", no "Node", no "TypeScript", no "JavaScript", no "component", no "config", no "dependency".
+- NEVER suggest "next steps the user should do". Quillra already does everything. The only thing left for the user is to look at the preview and click Publish.
+- DO describe what visually changed on the site in plain language: "the homepage now loads faster", "the blog posts are in one place", "images are smaller and sharper", "the contact page works as before".
+- Keep the reply to 2–4 short sentences. Write as a friendly designer reporting back, not a developer handing off instructions.
+
+Example GOOD final reply:
+"Done — your site has been rebuilt on a faster foundation. Every page looks and reads the same as before, but pages load noticeably quicker now and your images auto-optimise when you add them. Take a look in the preview and hit Publish when you're happy."
+
+Example BAD final reply (what to NEVER write):
+"Migration complete! Next steps: you can build the site with \`npm install && npm run build\`. Deployment still works via \`npm run deploy\`. The new structure is in \`src/pages/\` and configuration lives in \`astro.config.mjs\`."
+
+Every word in that bad example is a violation. Don't do it.
 `;
 
 /**
@@ -104,4 +127,4 @@ Files go in \`src/content/blog/*.md\` or \`*.mdx\`. Read with \`await getCollect
  * migration doctrine; this prompt just says "start".
  */
 export const ASTRO_MIGRATION_KICKOFF_PROMPT =
-  "Migrate this repository to Astro. Replace the existing framework wholesale — delete the old build config, dependencies, and source layout. Preserve all user-visible content (text, images, routes, metadata). Use Astro content collections for anything collection-shaped. Keep existing React components as islands only where interactivity is actually needed. When you're done, ensure `npm install && npx astro build` succeeds, and reply with a short summary of what changed so the human knows what to review.";
+  "Migrate this repository to Astro. Replace the existing framework wholesale — delete the old build config, dependencies, and source layout. Preserve all user-visible content (text, images, routes, metadata). Use Astro content collections for anything collection-shaped. Keep existing React components as islands only where interactivity is actually needed. You MUST run the install and build yourself; the user has no terminal. When you're done, reply with a SHORT plain-language summary (2-4 sentences) describing what visually changed on the site — no commands, no file paths, no framework names, no next-steps-you-should-run list. The user is a non-technical website owner who will never type a command.";
