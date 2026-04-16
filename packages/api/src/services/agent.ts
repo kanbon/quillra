@@ -501,8 +501,22 @@ export async function* runProjectAgent(params: {
         // the way. Without bypass the agent's Bash + MCP calls were
         // being silently denied with a "permission error" that no
         // amount of our allowlist could override.
+        //
+        // bypassPermissions requires the explicit
+        // allowDangerouslySkipPermissions flag — without it the Claude
+        // Code CLI subprocess exits 1 on startup ("Claude Code process
+        // exited with code 1") and the whole chat falls over. Both
+        // are needed, together.
         canUseTool: buildCanUseTool(params.role, { migrationMode: params.migrationMode }),
         permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        // Forward the CLI subprocess's stderr to our docker logs so
+        // future startup crashes are diagnosable without another
+        // SDK-type archaeology session. Each line comes through as
+        // a prefixed log entry.
+        stderr: (line: string) => {
+          console.error(`[claude-cli] ${line.replace(/\s+$/, "")}`);
+        },
       },
     });
     let yieldedAny = false;
