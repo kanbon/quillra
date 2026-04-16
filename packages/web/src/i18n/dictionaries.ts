@@ -81,6 +81,10 @@ const enDict = {
     assistant: "Assistant",
     greeting: "What should we change?",
     allMembers: "All members",
+    copyMessage: {
+      copy: "Copy message",
+      copied: "Copied",
+    },
   },
   versionHistory: {
     title: "Version history",
@@ -498,6 +502,10 @@ export const de: DeepStringRecord = {
     assistant: "Assistent",
     greeting: "Was sollen wir ändern?",
     allMembers: "Alle Mitglieder",
+    copyMessage: {
+      copy: "Nachricht kopieren",
+      copied: "Kopiert",
+    },
   },
   versionHistory: {
     title: "Versionsverlauf",

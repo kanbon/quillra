@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChatBubble } from "@/components/molecules/ChatBubble";
+import { CopyMessageButton } from "@/components/molecules/CopyMessageButton";
 import { ToolEventRow } from "@/components/molecules/ToolEventRow";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useT } from "@/i18n/i18n";
@@ -214,7 +215,18 @@ export function ChatTranscript({ lines, busy }: Props) {
                   })}
                 </div>
               )}
-              {entry.text && <ChatBubble role="user">{entry.text}</ChatBubble>}
+              {entry.text && (
+                // `group relative` tightly scoped to the bubble so the
+                // absolutely-positioned copy button's hover is only
+                // revealed for THIS message, not the whole row. The
+                // button lives inside the group → DOM :hover propagates
+                // from it up to the group, so moving the cursor onto
+                // the button keeps the reveal active.
+                <div className="group relative max-w-[min(100%,42rem)]">
+                  <CopyMessageButton text={entry.text} />
+                  <ChatBubble role="user">{entry.text}</ChatBubble>
+                </div>
+              )}
             </div>
           );
         }
