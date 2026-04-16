@@ -10,7 +10,7 @@ import { nanoid } from "nanoid";
 import { cors } from "hono/cors";
 import { db } from "./db/index.js";
 import { user } from "./db/auth-schema.js";
-import { conversations, messages, projectMembers, projects } from "./db/schema.js";
+import { agentRuns, conversations, messages, projectMembers, projects } from "./db/schema.js";
 import { auth, type Session, type SessionUser } from "./lib/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubRouter } from "./routes/github.js";
@@ -638,6 +638,32 @@ app.get(
             onSessionId: (sid) => {
               agentSessionId = sid;
               void db.update(conversations).set({ agentSessionId: sid }).where(eq(conversations.id, convId!)).catch(() => {});
+            },
+            // Persist usage accounting on every successful run. The
+            // Organization Settings → Usage tab reads from agent_runs.
+            onResult: (usage) => {
+              void db
+                .insert(agentRuns)
+                .values({
+                  id: nanoid(),
+                  projectId,
+                  conversationId: convId,
+                  userId: wsUser.id,
+                  inputTokens: usage.inputTokens,
+                  outputTokens: usage.outputTokens,
+                  cacheReadTokens: usage.cacheReadTokens,
+                  cacheCreationTokens: usage.cacheCreationTokens,
+                  // Drizzle's sqlite driver wants strings for REAL/TEXT,
+                  // so we store cost as a text-encoded number; queries
+                  // cast with CAST(cost_usd AS REAL) when aggregating.
+                  costUsd: String(usage.totalCostUsd),
+                  numTurns: usage.numTurns,
+                  modelUsageJson: JSON.stringify(usage.modelUsage),
+                  createdAt: new Date(),
+                })
+                .catch((e) => {
+                  console.warn("[usage] failed to persist agent_runs row:", e);
+                });
             },
           })) {
             ws.send(JSON.stringify(ev));

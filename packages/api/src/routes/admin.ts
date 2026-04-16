@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { db } from "../db/index.js";
+import { db, rawSqlite } from "../db/index.js";
 import { user } from "../db/auth-schema.js";
 import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
 import type { SessionUser } from "../lib/auth.js";
@@ -214,4 +214,113 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     if ("error" in r) return r.error;
     clearGithubAppCredentials();
     return c.json({ ok: true });
+  })
+  /**
+   * Owner-only: cost + token breakdown for the Organization Settings →
+   * Usage tab. Aggregates the `agent_runs` table (one row per
+   * successful agent invocation) across a configurable date range:
+   *
+   *   ?range=7d  | 30d | 90d | all   (default 30d)
+   *
+   * Returns totals + grouped arrays:
+   *   - totals: overall cost, tokens, run count
+   *   - perProject: one row per project with its slice of the above
+   *   - perUser: one row per user (name/email) with their slice
+   *   - perModel: one row per distinct model pulled from model_usage_json
+   *
+   * Uses raw SQL because the per-model aggregation needs sqlite's
+   * json_each to flatten the JSON blob — drizzle doesn't have a
+   * clean ergonomic wrapper for that.
+   */
+  .get("/usage", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+
+    const range = (c.req.query("range") ?? "30d").toLowerCase();
+    const cutoffMs = (() => {
+      if (range === "7d") return Date.now() - 7 * 24 * 60 * 60 * 1000;
+      if (range === "90d") return Date.now() - 90 * 24 * 60 * 60 * 1000;
+      if (range === "all") return 0;
+      return Date.now() - 30 * 24 * 60 * 60 * 1000; // default 30d
+    })();
+
+    type Row = Record<string, number | string | null>;
+    try {
+      const totals = rawSqlite
+        .prepare(
+          `SELECT
+             COUNT(*) as runs,
+             COALESCE(SUM(CAST(cost_usd AS REAL)), 0) as cost_usd,
+             COALESCE(SUM(input_tokens), 0) as input_tokens,
+             COALESCE(SUM(output_tokens), 0) as output_tokens,
+             COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+             COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens
+           FROM agent_runs
+           WHERE created_at >= ?`,
+        )
+        .get(cutoffMs) as Row;
+
+      const perProject = rawSqlite
+        .prepare(
+          `SELECT
+             ar.project_id as project_id,
+             COALESCE(p.name, '(deleted project)') as project_name,
+             COUNT(*) as runs,
+             COALESCE(SUM(CAST(ar.cost_usd AS REAL)), 0) as cost_usd,
+             COALESCE(SUM(ar.input_tokens + ar.output_tokens + ar.cache_read_tokens + ar.cache_creation_tokens), 0) as total_tokens
+           FROM agent_runs ar
+           LEFT JOIN projects p ON p.id = ar.project_id
+           WHERE ar.created_at >= ?
+           GROUP BY ar.project_id
+           ORDER BY cost_usd DESC`,
+        )
+        .all(cutoffMs) as Row[];
+
+      const perUser = rawSqlite
+        .prepare(
+          `SELECT
+             ar.user_id as user_id,
+             COALESCE(u.name, u.email, '(unknown)') as display_name,
+             COALESCE(u.email, '') as email,
+             COUNT(*) as runs,
+             COALESCE(SUM(CAST(ar.cost_usd AS REAL)), 0) as cost_usd,
+             COALESCE(SUM(ar.input_tokens + ar.output_tokens + ar.cache_read_tokens + ar.cache_creation_tokens), 0) as total_tokens
+           FROM agent_runs ar
+           LEFT JOIN user u ON u.id = ar.user_id
+           WHERE ar.created_at >= ?
+           GROUP BY ar.user_id
+           ORDER BY cost_usd DESC`,
+        )
+        .all(cutoffMs) as Row[];
+
+      const perModel = rawSqlite
+        .prepare(
+          `SELECT
+             je.key as model,
+             COUNT(*) as runs,
+             COALESCE(SUM(CAST(json_extract(je.value, '$.costUSD') AS REAL)), 0) as cost_usd,
+             COALESCE(SUM(COALESCE(json_extract(je.value, '$.inputTokens'), 0)), 0) as input_tokens,
+             COALESCE(SUM(COALESCE(json_extract(je.value, '$.outputTokens'), 0)), 0) as output_tokens,
+             COALESCE(SUM(COALESCE(json_extract(je.value, '$.cacheReadInputTokens'), 0)), 0) as cache_read_tokens,
+             COALESCE(SUM(COALESCE(json_extract(je.value, '$.cacheCreationInputTokens'), 0)), 0) as cache_creation_tokens
+           FROM agent_runs ar,
+                json_each(ar.model_usage_json) je
+           WHERE ar.created_at >= ?
+             AND ar.model_usage_json IS NOT NULL
+           GROUP BY je.key
+           ORDER BY cost_usd DESC`,
+        )
+        .all(cutoffMs) as Row[];
+
+      return c.json({
+        range,
+        since: cutoffMs,
+        totals,
+        perProject,
+        perUser,
+        perModel,
+      });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Usage query failed" }, 500);
+    }
   });

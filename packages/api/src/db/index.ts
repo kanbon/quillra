@@ -43,6 +43,30 @@ try {
   ensureColumn("projects", "migration_target", "TEXT");
 } catch { /* table may not exist yet on a fresh init */ }
 
+// Usage accounting — one row per agent run. Written by the chat WS
+// handler when the SDK emits its terminal `result` event; read by the
+// Organization Settings → Usage tab for per-project / per-user
+// breakdowns.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    conversation_id TEXT,
+    user_id TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd TEXT NOT NULL DEFAULT '0',
+    num_turns INTEGER NOT NULL DEFAULT 1,
+    model_usage_json TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON agent_runs(project_id)`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id)`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS agent_runs_created_idx ON agent_runs(created_at)`);
+} catch { /* ignore */ }
+
 // Bootstrap new tables (drizzle-kit isn't run at boot, so create-if-missing)
 try {
   sqlite.exec(`CREATE TABLE IF NOT EXISTS client_sessions (

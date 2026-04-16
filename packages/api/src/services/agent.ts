@@ -256,6 +256,21 @@ const LANGUAGE_NAMES: Record<string, string> = {
   de: "German (Deutsch)",
 };
 
+/** Raw usage summary yielded once per successful run. The numbers come
+ *  straight from the SDK's result envelope so the caller persists what
+ *  Anthropic actually billed, not our own approximation. */
+export type AgentRunUsage = {
+  totalCostUsd: number;
+  numTurns: number;
+  /** Summed across every model used in this run. */
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** The per-model breakdown the SDK reported, keyed by model name. */
+  modelUsage: Record<string, unknown>;
+};
+
 export async function* runProjectAgent(params: {
   cwd: string;
   prompt: string;
@@ -269,6 +284,11 @@ export async function* runProjectAgent(params: {
    *  tool permissions and the Astro migration skill is appended to
    *  the system prompt. See services/astro-migration-skill.ts. */
   migrationMode?: boolean;
+  /** Fired exactly once per successful run, right before the `done`
+   *  message is yielded. The WS chat handler uses this to persist an
+   *  agent_runs row for the Usage tab. On error/abort the callback
+   *  does not fire. */
+  onResult?: (usage: AgentRunUsage) => void;
 }): AsyncGenerator<Record<string, unknown>> {
   const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
   if (!apiKey) {
@@ -324,6 +344,42 @@ export async function* runProjectAgent(params: {
     for await (const msg of q) {
       if ("session_id" in msg && typeof msg.session_id === "string" && msg.session_id) {
         params.onSessionId?.(msg.session_id);
+      }
+      // Intercept the SDK's terminal `result` envelope to surface the
+      // per-run usage/cost before handing it to the mapper. Only fire
+      // onResult on success — the caller shouldn't bill the user for
+      // a run that failed halfway.
+      if (msg.type === "result" && msg.subtype === "success") {
+        try {
+          const modelUsage = (msg as { modelUsage?: Record<string, unknown> }).modelUsage ?? {};
+          let inputTokens = 0;
+          let outputTokens = 0;
+          let cacheReadTokens = 0;
+          let cacheCreationTokens = 0;
+          for (const entry of Object.values(modelUsage)) {
+            const mu = entry as {
+              inputTokens?: number;
+              outputTokens?: number;
+              cacheReadInputTokens?: number;
+              cacheCreationInputTokens?: number;
+            };
+            inputTokens += mu.inputTokens ?? 0;
+            outputTokens += mu.outputTokens ?? 0;
+            cacheReadTokens += mu.cacheReadInputTokens ?? 0;
+            cacheCreationTokens += mu.cacheCreationInputTokens ?? 0;
+          }
+          params.onResult?.({
+            totalCostUsd: (msg as { total_cost_usd?: number }).total_cost_usd ?? 0,
+            numTurns: (msg as { num_turns?: number }).num_turns ?? 1,
+            inputTokens,
+            outputTokens,
+            cacheReadTokens,
+            cacheCreationTokens,
+            modelUsage,
+          });
+        } catch {
+          /* usage accounting is best-effort, never break the chat stream over it */
+        }
       }
       const out = mapSdkMessageToClient(msg);
       if (!out) continue;

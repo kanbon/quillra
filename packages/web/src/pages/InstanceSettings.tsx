@@ -19,11 +19,12 @@ import { EmailTab } from "@/components/organisms/instance-settings/EmailTab";
 import { GeneralTab } from "@/components/organisms/instance-settings/GeneralTab";
 import { IntegrationsTab } from "@/components/organisms/instance-settings/IntegrationsTab";
 import { TeamTab } from "@/components/organisms/instance-settings/TeamTab";
+import { UsageTab } from "@/components/organisms/instance-settings/UsageTab";
 import type { StatusResponse } from "@/components/organisms/instance-settings/types";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 
-type TabId = "general" | "apiKeys" | "email" | "integrations" | "team";
+type TabId = "general" | "apiKeys" | "email" | "integrations" | "usage" | "team";
 
 type Session = { user: { instanceRole?: string | null } | null };
 
@@ -95,6 +96,15 @@ export function InstanceSettingsPage() {
       ),
     },
     {
+      id: "usage",
+      label: t("instanceSettings.tabUsage"),
+      icon: (
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+      ),
+    },
+    {
       id: "team",
       label: t("instanceSettings.tabTeam"),
       icon: (
@@ -159,6 +169,7 @@ export function InstanceSettingsPage() {
             {active === "apiKeys" && <ApiKeysTab status={status} onSaved={refetchStatus} />}
             {active === "email" && <EmailTab status={status} onSaved={refetchStatus} />}
             {active === "integrations" && <IntegrationsTab status={status} onSaved={refetchStatus} />}
+            {active === "usage" && <UsageTab />}
             {active === "team" && <TeamTab />}
           </main>
         </div>

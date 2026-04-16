@@ -173,6 +173,44 @@ export const conversations = sqliteTable(
   (table) => [index("conversations_project_idx").on(table.projectId)],
 );
 
+/**
+ * One row per Claude Agent SDK run — an agent "turn" triggered by a
+ * single user message. Used by the owner-only Usage tab to break down
+ * cost/tokens by project, user, and model. The model_usage_json column
+ * stores the SDK's per-model detail as a JSON blob so we don't need a
+ * separate table for the (model, run) cross-product.
+ */
+export const agentRuns = sqliteTable(
+  "agent_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    conversationId: text("conversation_id"),
+    /** Null when the run was attributed to "Quillra itself" (system
+     *  triggers, future background tasks). Normally the signed-in user. */
+    userId: text("user_id"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
+    costUsd: text("cost_usd").notNull().default("0"),
+    numTurns: integer("num_turns").notNull().default(1),
+    /** JSON: { [modelName]: { inputTokens, outputTokens, cacheReadInputTokens,
+     *  cacheCreationInputTokens, costUSD, ... } } — what the SDK's
+     *  modelUsage map gave us verbatim. Read with json_each() for
+     *  per-model aggregation without a second table. */
+    modelUsageJson: text("model_usage_json"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [
+    index("agent_runs_project_idx").on(table.projectId),
+    index("agent_runs_user_idx").on(table.userId),
+    index("agent_runs_created_idx").on(table.createdAt),
+  ],
+);
+
 export const messages = sqliteTable(
   "messages",
   {
