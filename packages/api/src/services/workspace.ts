@@ -312,6 +312,32 @@ function sweepStaleGitLocks(repoPath: string): void {
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Per-project in-process mutex for anything touching `.git/`. Concurrent
+ * chat turns on the same project used to race on git-fetch/pull and
+ * die with `fatal: Unable to create ... index.lock: File exists.` —
+ * git itself locks at the filesystem level, so the cleanest fix is to
+ * serialise the operations before they reach git at all.
+ *
+ * Keyed by projectId. The map holds the *tail* promise of each
+ * project's queue; new operations chain `.then(op)` and replace the
+ * tail. The chain never retains old resolved promises — GC frees them
+ * as soon as the next op attaches.
+ */
+const repoOpQueue = new Map<string, Promise<unknown>>();
+
+function withRepoLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+  const prev = repoOpQueue.get(projectId) ?? Promise.resolve();
+  const next = prev.then(op, op); // run op whether prev resolved or rejected
+  // Store the "drained" version so errors don't poison the chain for
+  // subsequent ops on this project.
+  repoOpQueue.set(
+    projectId,
+    next.catch(() => undefined),
+  );
+  return next;
+}
+
 export async function ensureRepoCloned(
   projectId: string,
   githubRepoFullName: string,
@@ -353,25 +379,30 @@ export async function ensureRepoCloned(
     }
   };
 
-  if (!fs.existsSync(gitDir)) {
-    setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
-    fs.mkdirSync(path.dirname(dir), { recursive: true });
-    await simpleGit().clone(url, dir, ["--branch", branch, "--single-branch", "--depth", "1"]);
-    await runInstall();
-  } else {
-    sweepStaleGitLocks(dir);
-    const g = simpleGit(dir);
-    if (token) {
-      await g.remote(["set-url", "origin", url]).catch(() => undefined);
+  // Serialise every git touch per-project. Concurrent chat turns on
+  // the same project would otherwise race on `.git/index.lock` and
+  // one of them would die with a cryptic `File exists` message.
+  await withRepoLock(projectId, async () => {
+    if (!fs.existsSync(gitDir)) {
+      setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      await simpleGit().clone(url, dir, ["--branch", branch, "--single-branch", "--depth", "1"]);
+      await runInstall();
+    } else {
+      sweepStaleGitLocks(dir);
+      const g = simpleGit(dir);
+      if (token) {
+        await g.remote(["set-url", "origin", url]).catch(() => undefined);
+      }
+      await g.fetch("origin", branch);
+      await g.checkout(branch);
+      await g.pull("origin", branch).catch(() => undefined);
+      await runInstall();
     }
-    await g.fetch("origin", branch);
-    await g.checkout(branch);
-    await g.pull("origin", branch).catch(() => undefined);
-    await runInstall();
-  }
-  // Register .quillra-temp/ with git's local exclude so chat
-  // attachments never show up in a diff, a status, or a commit.
-  ensureQuillraTempIgnored(dir);
+    // Register .quillra-temp/ with git's local exclude so chat
+    // attachments never show up in a diff, a status, or a commit.
+    ensureQuillraTempIgnored(dir);
+  });
   return dir;
 }
 

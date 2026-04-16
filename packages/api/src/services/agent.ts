@@ -160,13 +160,15 @@ export async function* runProjectAgent(params: {
         ...(diagnosticsServer
           ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } }
           : {}),
-        // Opus 4.7 (and the Claude 4.6+ line generally) rejects the
-        // older `thinking.type.enabled` shape with an API 400 and
-        // points callers at adaptive thinking + the effort knob. The
-        // SDK's default still emits the old shape, so set it
-        // explicitly. Adaptive works on both Opus and Sonnet; effort
-        // stays unset so the SDK picks its default (high).
+        // Opus 4.7 (and the Claude 4.6+ line) requires BOTH adaptive
+        // thinking AND an explicit effort level — setting one without
+        // the other either triggers an API 400 (on Opus) or silently
+        // degrades to non-thinking mode. Per the adaptive-thinking
+        // docs, `effort: "high"` for migrations (Opus) and `medium`
+        // for day-to-day (Sonnet) balances cost vs. quality. See
+        // https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
         thinking: { type: "adaptive" },
+        effort: params.migrationMode ? "high" : "medium",
         includePartialMessages: true,
         persistSession: true,
         // Role-based gating still happens through `canUseTool`, but the
