@@ -488,6 +488,14 @@ export async function* runProjectAgent(params: {
           ...process.env,
           ANTHROPIC_API_KEY: apiKey,
           CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
+          // IS_SANDBOX=1 bypasses the CLI's refusal to run
+          // --dangerously-skip-permissions as root. We legitimately
+          // run as root inside a Docker container (which *is* a
+          // sandbox) — setting this env tells the CLI so. Without it
+          // the subprocess exits 1 on startup with "cannot be used
+          // with root/sudo privileges for security reasons" and the
+          // whole chat falls over.
+          IS_SANDBOX: "1",
         },
         tools: { type: "preset", preset: "claude_code" },
         ...(diagnosticsServer

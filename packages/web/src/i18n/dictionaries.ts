@@ -5,7 +5,17 @@
  * Variables in strings use {var} syntax and are replaced at runtime.
  */
 
-type DeepStringRecord = { [k: string]: string | DeepStringRecord };
+/**
+ * Structural type derived from the English dictionary: every leaf
+ * (a literal string in `enDict`) is widened to `string`, so a German
+ * translation gets the exact same key-shape without being locked into
+ * English's literal values. If a contributor adds a key to English and
+ * forgets the German translation, TypeScript complains at compile time
+ * — no more silent drift across languages.
+ */
+type Mirror<T> = {
+  [K in keyof T]: T[K] extends string ? string : Mirror<T[K]>;
+};
 
 const enDict = {
   language: {
@@ -502,9 +512,10 @@ const enDict = {
 export type Dictionary = typeof enDict;
 export const en: Dictionary = enDict;
 
-// The German dictionary mirrors the English one but its strings differ —
-// so cast through the structural shape, not the literal-typed enDict.
-export const de: DeepStringRecord = {
+// Structurally typed against the English shape so a missing / extra
+// German key is a TypeScript error instead of a silent mismatch at
+// runtime. See the Mirror<T> declaration above.
+export const de: Mirror<Dictionary> = {
   language: {
     title: "Sprache",
     description: "Wählen Sie die Sprache für die Quillra-Oberfläche.",
@@ -988,5 +999,5 @@ export const de: DeepStringRecord = {
   },
 };
 
-export const dictionaries = { en, de: de as unknown as Dictionary };
+export const dictionaries = { en, de };
 export type Language = keyof typeof dictionaries;
