@@ -74,15 +74,21 @@ export async function* runProjectAgent(params: {
   }
 
   // Migrations are the one workflow where picking the most capable
-  // model pays for itself many times over: the agent has to rewrite an
-  // entire codebase, pin correct versions, and hit pixel-parity on
-  // design. One wrong @astrojs/tailwind version and the whole site
-  // falls over. Sonnet handles day-to-day edits just fine, so we
-  // route by mode rather than paying Opus rates on every "change the
-  // headline" turn.
+  // model pays for itself many times over: the agent has to rewrite
+  // an entire codebase, pin correct versions, and hit pixel-parity on
+  // design. Sonnet handles day-to-day edits just fine, so we route by
+  // mode rather than paying Opus rates on every "change the headline"
+  // turn.
+  //
+  // Default migration model is Opus 4.7 (requires claude-agent-sdk
+  // 0.2.112+ — older bundles have a hard-coded adaptive-thinking
+  // allowlist that whitelists only opus-4-6 / sonnet-4-6 and falls
+  // back to the deprecated `thinking.type.enabled` payload, which
+  // Opus 4.7 rejects with a 400). If you pin an older SDK, override
+  // CLAUDE_MIGRATION_MODEL to claude-opus-4-6.
   const model = params.migrationMode
     ? process.env.CLAUDE_MIGRATION_MODEL?.trim() || "claude-opus-4-7"
-    : process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-20250514";
+    : process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-6";
   const abortController = new AbortController();
 
   // Build the system prompt with optional language + migration skill
