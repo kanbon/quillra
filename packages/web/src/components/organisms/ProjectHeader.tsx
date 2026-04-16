@@ -14,9 +14,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
+import { AvatarDropdown } from "@/components/organisms/AvatarDropdown";
 import { ChangesModal } from "@/components/organisms/ChangesModal";
 import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
-import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useProjectPresence } from "@/hooks/useProjectPresence";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
@@ -225,21 +226,10 @@ export function ProjectHeader({
             </button>
           )}
           <div className="h-6 w-px bg-neutral-200" />
-          <button
-            type="button"
-            onClick={() =>
-              signOutUnified(
-                me.kind === "client" ? "client" : me.kind === "team" ? "team" : "github",
-              )
-            }
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
-            title={t("toolbar.signOut")}
-            aria-label={t("toolbar.signOut")}
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-          </button>
+          {/* Vercel-style account menu: avatar + name, click to reach
+              language, org settings, and sign-out without leaving the
+              editor. Replaces the bare sign-out icon this used to show. */}
+          <AvatarDropdown />
         </div>
       </div>
       <VersionHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projectId={projectId} />
