@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/quillra-logo.png" alt="Quillra" width="320" />
+  <img src="assets/quillra-logo.webp" alt="Quillra" width="320" />
 </p>
 
 <h1 align="center">From vibe-coded to client-ready.</h1>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/quillra-editor.png" alt="Quillra editor — chat on the left, live preview on the right" width="100%" />
+  <img src="assets/quillra-editor.webp" alt="Quillra editor — chat on the left, live preview on the right" width="100%" />
 </p>
 
 <p align="center">
@@ -49,7 +49,7 @@ Quillra is the missing layer. Your repo stays the source of truth. Your client o
 - 🪄 **One-click migrate to Astro** — for vibe-coded React/Next/Gatsby sites that need a faster foundation, with design parity as a hard requirement
 
 <p align="center">
-  <img src="assets/auto-migrate-astro.png" alt="Convert to Astro toggle in the project settings" width="640" />
+  <img src="assets/auto-migrate-astro.webp" alt="Convert to Astro toggle in the project settings" width="640" />
 </p>
 
 - 🏷️ **Branded client portal** — each project can set its own logo for the client sign-in page; clients log in with an email code, not GitHub
