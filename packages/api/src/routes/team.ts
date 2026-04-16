@@ -76,7 +76,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const body = await c.req.json().catch(() => null);
     const schema = z.object({
       email: z.string().email(),
-      role: z.enum(["admin", "editor", "translator", "client"]).default("editor"),
+      role: z.enum(["admin", "editor", "client"]).default("editor"),
       name: z.string().min(1).max(120).optional(),
     });
     const parsed = schema.safeParse(body);
@@ -252,7 +252,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     if (!admin) return c.json({ error: "Forbidden" }, 403);
 
     const body = await c.req.json().catch(() => null);
-    const schema = z.object({ role: z.enum(["admin", "editor", "translator", "client"]) });
+    const schema = z.object({ role: z.enum(["admin", "editor", "client"]) });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 

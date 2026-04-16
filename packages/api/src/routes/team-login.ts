@@ -199,6 +199,7 @@ export const teamLoginRouter = new Hono()
         instanceRole: "member",
         image: null,
         language: null,
+        monthlyUsageReportsEnabled: false,
         createdAt: now,
         updatedAt: now,
       };

@@ -4,6 +4,11 @@ import { Heading } from "@/components/atoms/Heading";
 import { PreviewDebugModal } from "@/components/organisms/PreviewDebugModal";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
+import {
+  isPreviewErrored,
+  usePreviewStatus,
+  type PreviewStatus,
+} from "@/lib/use-preview-status";
 
 type Props = {
   projectId: string;
@@ -17,6 +22,10 @@ type Props = {
   /** When true, render only the iframe/empty-state without the header bar.
       Used inside the mobile bottom sheet which has its own chrome. */
   compact?: boolean;
+  /** Called when the user clicks "Ask the assistant to fix it" on the
+   *  preview-error overlay. Parent composes a chat prompt from the
+   *  preview status and submits it through the normal chat pipe. */
+  onDebugWithChat?: (status: PreviewStatus) => void;
 };
 
 export function PreviewPane({
@@ -29,11 +38,17 @@ export function PreviewPane({
   startLabel,
   errorMessage,
   compact,
+  onDebugWithChat,
 }: Props) {
   const { t } = useT();
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [debugOpen, setDebugOpen] = useState(false);
+  // Poll the preview status only while the iframe is actually shown.
+  // Saves a request/5s on the empty state where the user hasn't clicked
+  // Start Preview yet.
+  const status = usePreviewStatus(projectId, hasFrame);
+  const errored = isPreviewErrored(status);
   const [bannerDismissed, setBannerDismissed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("quillra:preview-banner-dismissed") === "1";
@@ -149,6 +164,13 @@ export function PreviewPane({
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
             />
+            {errored && status && (
+              <PreviewErrorOverlay
+                status={status}
+                onRetry={onRefresh}
+                onDebugWithChat={onDebugWithChat ? () => onDebugWithChat(status) : undefined}
+              />
+            )}
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center px-6 py-10">
@@ -189,6 +211,60 @@ export function PreviewPane({
             </Button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PreviewErrorOverlay({
+  status,
+  onRetry,
+  onDebugWithChat,
+}: {
+  status: PreviewStatus;
+  onRetry: () => void;
+  onDebugWithChat?: () => void;
+}) {
+  const { t } = useT();
+  const tail = status.recentErrors.slice(-20);
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-white/80 px-6 backdrop-blur-sm animate-[fadeIn_0.25s_ease-out]">
+      <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-500">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <Heading as="h3" className="text-base font-semibold tracking-tight text-neutral-900">
+              {t("preview.errorTitle")}
+            </Heading>
+            <p className="mt-0.5 truncate text-sm text-neutral-500">
+              {status.stageMessage?.trim() || t("preview.errorDefaultMessage")}
+            </p>
+          </div>
+        </div>
+        {tail.length > 0 && (
+          <details className="mb-5 rounded-lg border border-neutral-200 bg-neutral-50/60">
+            <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-neutral-500 hover:text-neutral-700">
+              {t("preview.errorDetails")}
+            </summary>
+            <pre className="max-h-40 overflow-auto border-t border-neutral-200 bg-white px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-600">
+              {tail.join("\n")}
+            </pre>
+          </details>
+        )}
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button variant="outline" type="button" onClick={onRetry}>
+            {t("preview.errorRetry")}
+          </Button>
+          {onDebugWithChat && (
+            <Button variant="brand" type="button" onClick={onDebugWithChat}>
+              {t("preview.errorDebugWithChat")}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

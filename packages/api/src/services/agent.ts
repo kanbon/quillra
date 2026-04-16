@@ -36,6 +36,18 @@ GOOD: "Added the photo to your About page, right next to the team description."
 
 BAD: "I'll explore the codebase to find the language switcher component."
 GOOD: "Let me find your language switcher."
+
+How to ask the user a question:
+- When you genuinely need a decision from the user that changes what you'll do, emit a multiple-choice question using an <ask> block. The UI turns the options into clickable cards.
+- Format (JSON inside the tag, on one or more lines):
+  <ask>{"question":"Which style should the hero use?","options":["Bold and colourful","Calm and minimal","Keep it like it is now"]}</ask>
+- Rules:
+  * 2 to 4 options. Short — each option fits on one line.
+  * Plain-language only. Never put file names, component names, code, frameworks, or build terms in the question or options.
+  * Do NOT include an "Other" option yourself. The UI appends one automatically and focuses the text input when the user picks it.
+  * Ask only when the answer genuinely changes what you do. Don't ask for preferences the user already expressed. Don't ask out of politeness.
+  * After emitting the <ask> block, STOP and wait for the user's reply. Do not continue reasoning, do not keep calling tools, do not write any text after it — the turn ends there.
+  * Only use this for a single open question. Never emit two <ask> blocks in the same turn.
 `.trim();
 
 type StreamExtract =
@@ -181,37 +193,6 @@ function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: boolean }) 
         return { behavior: "deny", message: "Clients cannot run shell commands.", toolUseID: id };
       }
       return { behavior: "deny", message: "Tool not allowed for clients.", toolUseID: id };
-    }
-
-    if (role === "translator") {
-      if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
-        return { behavior: "allow", toolUseID: id };
-      }
-      if (toolName === "Write" || toolName === "Edit") {
-        const fp = String(
-          (input as { file_path?: string }).file_path ??
-            (input as { path?: string }).path ??
-            "",
-        ).replace(/\\/g, "/");
-        if (/\/en(\/|$)/i.test(fp) || fp.includes("/content/en/")) {
-          return { behavior: "deny", message: "Cannot edit source (en) locale.", toolUseID: id };
-        }
-        if (fp.includes("/content/") && /\/(de|fr|es)(\/|$)/i.test(fp)) {
-          return { behavior: "allow", toolUseID: id };
-        }
-        return { behavior: "deny", message: "Translators may only edit locale content paths.", toolUseID: id };
-      }
-      if (toolName === "Bash") {
-        const cmd = String((input as { command?: string }).command ?? "").trim();
-        if (/^git\s+(add|commit|status|diff|log)\s/i.test(cmd)) {
-          return { behavior: "allow", toolUseID: id };
-        }
-        if (/\bgit\s+push\b/i.test(cmd)) {
-          return { behavior: "deny", message: "git push requires confirmation.", toolUseID: id };
-        }
-        return { behavior: "deny", message: "Command not allowed for translators.", toolUseID: id };
-      }
-      return { behavior: "deny", message: "Tool not allowed for translators.", toolUseID: id };
     }
 
     return { behavior: "deny", message: "Unknown role.", toolUseID: id };

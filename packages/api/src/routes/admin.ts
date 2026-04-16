@@ -9,11 +9,17 @@ import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import { sendEmail, isMailerEnabled } from "../services/mailer.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
-import { getOrganizationInfo } from "../services/instance-settings.js";
+import { getOrganizationInfo, getInstanceSetting, setInstanceSetting } from "../services/instance-settings.js";
 import {
   listInstallations as listGithubAppInstallations,
   clearGithubAppCredentials,
 } from "../services/github-app.js";
+import {
+  getOwnerEmail,
+  listUsageLimitRows,
+  upsertUsageLimit,
+} from "../services/usage-limits.js";
+import { reconcileMonthlyReports } from "../services/report-scheduler.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -282,6 +288,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
              ar.user_id as user_id,
              COALESCE(u.name, u.email, '(unknown)') as display_name,
              COALESCE(u.email, '') as email,
+             COALESCE(u.monthly_usage_reports_enabled, 0) as reports_enabled,
              COUNT(*) as runs,
              COALESCE(SUM(CAST(ar.cost_usd AS REAL)), 0) as cost_usd,
              COALESCE(SUM(ar.input_tokens + ar.output_tokens + ar.cache_read_tokens + ar.cache_creation_tokens), 0) as total_tokens
@@ -323,4 +330,178 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Usage query failed" }, 500);
     }
+  })
+
+  /**
+   * Per-user drill-down for the Usage tab. Returns a 12-month (or
+   * custom-length) breakdown + per-project + per-model splits for a
+   * single user. All aggregation is client-agnostic: the same SQL shape
+   * works whether the caller wants a chart or a CSV export.
+   */
+  .get("/usage/users/:userId", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const userId = c.req.param("userId");
+    const monthsRaw = Number(c.req.query("months") ?? 12);
+    const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(36, Math.floor(monthsRaw))) : 12;
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1).getTime();
+
+    const [u] = await db.select().from(user).where(eq(user.id, userId)).limit(1);
+    if (!u) return c.json({ error: "User not found" }, 404);
+
+    type AggRow = Record<string, number | string | null>;
+
+    const monthly = rawSqlite
+      .prepare(
+        `SELECT
+           strftime('%Y-%m', created_at / 1000, 'unixepoch') AS month,
+           COUNT(*) AS runs,
+           COALESCE(SUM(CAST(cost_usd AS REAL)), 0) AS cost_usd,
+           COALESCE(SUM(input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(output_tokens), 0) AS output_tokens
+         FROM agent_runs
+         WHERE user_id = ? AND created_at >= ?
+         GROUP BY month
+         ORDER BY month ASC`,
+      )
+      .all(userId, from) as AggRow[];
+
+    const perProject = rawSqlite
+      .prepare(
+        `SELECT
+           ar.project_id AS project_id,
+           COALESCE(p.name, '(deleted project)') AS project_name,
+           COUNT(*) AS runs,
+           COALESCE(SUM(CAST(ar.cost_usd AS REAL)), 0) AS cost_usd
+         FROM agent_runs ar
+         LEFT JOIN projects p ON p.id = ar.project_id
+         WHERE ar.user_id = ? AND ar.created_at >= ?
+         GROUP BY ar.project_id
+         ORDER BY cost_usd DESC`,
+      )
+      .all(userId, from) as AggRow[];
+
+    const perModel = rawSqlite
+      .prepare(
+        `SELECT
+           je.key AS model,
+           COALESCE(SUM(CAST(json_extract(je.value, '$.costUSD') AS REAL)), 0) AS cost_usd,
+           COUNT(DISTINCT ar.id) AS runs,
+           COALESCE(SUM(CAST(json_extract(je.value, '$.inputTokens') AS INTEGER)), 0) AS input_tokens,
+           COALESCE(SUM(CAST(json_extract(je.value, '$.outputTokens') AS INTEGER)), 0) AS output_tokens
+         FROM agent_runs ar,
+              json_each(COALESCE(ar.model_usage_json, '{}')) AS je
+         WHERE ar.user_id = ? AND ar.created_at >= ?
+         GROUP BY je.key
+         ORDER BY cost_usd DESC`,
+      )
+      .all(userId, from) as AggRow[];
+
+    const totals = rawSqlite
+      .prepare(
+        `SELECT
+           COUNT(*) AS runs,
+           COALESCE(SUM(CAST(cost_usd AS REAL)), 0) AS cost_usd,
+           COALESCE(SUM(input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(output_tokens), 0) AS output_tokens
+         FROM agent_runs
+         WHERE user_id = ? AND created_at >= ?`,
+      )
+      .get(userId, from) as AggRow;
+
+    return c.json({
+      user: { id: u.id, displayName: u.name || u.email, email: u.email },
+      since: from,
+      months,
+      monthly,
+      perProject,
+      perModel,
+      totals,
+    });
+  })
+
+  /**
+   * Read the current usage-limit configuration: raw rows from
+   * usage_limits plus the effective alert recipient email (falls back
+   * to the org owner's address).
+   */
+  .get("/usage/limits", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const rows = await listUsageLimitRows();
+    const alertEmail = getInstanceSetting("USAGE_ALERT_EMAIL") ?? "";
+    const fallbackEmail = (await getOwnerEmail()) ?? "";
+    return c.json({ rows, alertEmail, fallbackEmail });
+  })
+
+  /**
+   * Bulk-replace the usage-limit configuration. Accepts a flat list of
+   * rows and upserts them one by one — a row with both warn and hard
+   * null is treated as a delete. Also updates the alert-email instance
+   * setting in the same call so the UI can save everything with a
+   * single request.
+   */
+  .post("/usage/limits", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const body = await c.req.json().catch(() => null);
+    const schema = z.object({
+      alertEmail: z.string().email().or(z.literal("")).optional(),
+      rows: z
+        .array(
+          z.object({
+            scope: z.enum(["global", "role", "user"]),
+            target: z.string().default(""),
+            warnUsd: z.number().nonnegative().nullable(),
+            hardUsd: z.number().nonnegative().nullable(),
+          }),
+        )
+        .default([]),
+    });
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    for (const row of parsed.data.rows) {
+      await upsertUsageLimit(row.scope, row.target, row.warnUsd, row.hardUsd);
+    }
+    if (parsed.data.alertEmail !== undefined) {
+      setInstanceSetting("USAGE_ALERT_EMAIL", parsed.data.alertEmail);
+    }
+    return c.json({ ok: true });
+  })
+
+  /**
+   * Per-user preferences — currently just the "send me a monthly usage
+   * report" opt-in, but the endpoint is shaped so additional user-level
+   * toggles can land here without another route.
+   */
+  .patch("/users/:userId/preferences", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const userId = c.req.param("userId");
+    const body = await c.req.json().catch(() => null);
+    const schema = z.object({
+      monthlyUsageReportsEnabled: z.boolean().optional(),
+    });
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    const patch: Record<string, unknown> = {};
+    if (parsed.data.monthlyUsageReportsEnabled !== undefined) {
+      patch.monthlyUsageReportsEnabled = parsed.data.monthlyUsageReportsEnabled;
+    }
+    if (Object.keys(patch).length === 0) return c.json({ ok: true });
+    await db.update(user).set(patch).where(eq(user.id, userId));
+    return c.json({ ok: true });
+  })
+
+  /**
+   * Manual trigger for the monthly-report reconciler. Same entry point
+   * the cron uses; useful for dev testing and a one-click "send it now"
+   * button if the operator is debugging their report flow.
+   */
+  .post("/reports/reconcile", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const result = await reconcileMonthlyReports();
+    return c.json(result);
   });

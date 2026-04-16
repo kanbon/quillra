@@ -8,11 +8,13 @@
  * project and per user, exact numbers, no design flourishes that get
  * in the way of scanning the table". Finance-style.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/atoms/Spinner";
+import { UsageLimitsPanel } from "@/components/organisms/instance-settings/UsageLimitsPanel";
+import { UserUsageDetail } from "@/components/organisms/instance-settings/UserUsageDetail";
 
 type Totals = {
   runs: number;
@@ -35,6 +37,8 @@ type UserRow = {
   user_id: string | null;
   display_name: string;
   email: string;
+  /** 1 if the user has opted into the monthly usage report email. */
+  reports_enabled: number;
   runs: number;
   cost_usd: number;
   total_tokens: number;
@@ -79,12 +83,32 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+const ONBOARD_KEY = "quillra:usage-report-onboarded";
+
 export function UsageTab() {
   const { t } = useT();
   const [range, setRange] = useState<Range>("30d");
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [drillUser, setDrillUser] = useState<{ id: string; name: string } | null>(null);
+  const [onboardDismissed, setOnboardDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem(ONBOARD_KEY) === "1";
+  });
+  const dismissOnboard = () => {
+    setOnboardDismissed(true);
+    try { window.localStorage.setItem(ONBOARD_KEY, "1"); } catch { /* private mode */ }
+  };
+
+  const refetch = useCallback(async () => {
+    try {
+      const r = await apiJson<UsageResponse>(`/api/admin/usage?range=${range}`);
+      setData(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    }
+  }, [range]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +128,28 @@ export function UsageTab() {
       cancelled = true;
     };
   }, [range]);
+
+  const toggleReports = async (userId: string, enabled: boolean) => {
+    // Optimistic flip so the toggle feels instant; refetch reconciles.
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            perUser: prev.perUser.map((u) =>
+              u.user_id === userId ? { ...u, reports_enabled: enabled ? 1 : 0 } : u,
+            ),
+          }
+        : prev,
+    );
+    try {
+      await apiJson(`/api/admin/users/${userId}/preferences`, {
+        method: "PATCH",
+        body: JSON.stringify({ monthlyUsageReportsEnabled: enabled }),
+      });
+    } catch {
+      await refetch();
+    }
+  };
 
   const totals = data?.totals;
   const rangeOptions: { id: Range; label: string }[] = useMemo(
@@ -192,32 +238,113 @@ export function UsageTab() {
             />
           </Section>
 
-          {/* Per-user table */}
+          {/* Per-user table — each row drills into the user detail modal.
+              Reports toggle lives in its own column; clicks are stopped so
+              toggling doesn't also open the drill-down. */}
           <Section title={t("usage.sectionPerUser")}>
-            <Table
-              headers={[
-                t("usage.colUser"),
-                t("usage.colRuns"),
-                t("usage.colTokens"),
-                t("usage.colCost"),
-              ]}
-              rows={data.perUser.map((u) => [
-                <div key="n" className="min-w-0">
-                  <p className="truncate font-medium text-neutral-900">{u.display_name}</p>
-                  {u.email && u.email !== u.display_name && (
-                    <p className="truncate text-[11px] text-neutral-500">{u.email}</p>
-                  )}
-                </div>,
-                <span key="r">{u.runs}</span>,
-                <span key="t" className="tabular-nums">
-                  {formatTokens(u.total_tokens)}
-                </span>,
-                <span key="c" className="tabular-nums font-medium">
-                  {formatUsd(u.cost_usd)}
-                </span>,
-              ])}
-              emptyMessage={t("usage.empty")}
-            />
+            {!onboardDismissed && (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <p className="text-[13px] font-semibold text-amber-900">
+                      {t("usage.reportsOnboardTitle")}
+                    </p>
+                    <p className="mt-1 text-[12px] leading-relaxed text-amber-800">
+                      {t("usage.reportsOnboardBody")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={dismissOnboard}
+                    className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                  >
+                    {t("usage.reportsOnboardDismiss")}
+                  </button>
+                </div>
+              </div>
+            )}
+            {data.perUser.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-4 py-8 text-center text-[12px] text-neutral-400">
+                {t("usage.empty")}
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+                <table className="w-full border-collapse text-[12px]">
+                  <thead className="bg-neutral-50/60 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">{t("usage.colUser")}</th>
+                      <th className="px-3 py-2 text-right">{t("usage.colRuns")}</th>
+                      <th className="px-3 py-2 text-right">{t("usage.colTokens")}</th>
+                      <th className="px-3 py-2 text-right">{t("usage.colCost")}</th>
+                      <th className="px-3 py-2 text-right">{t("usage.colReports")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.perUser.map((u) => {
+                      const uid = u.user_id;
+                      const reportsOn = u.reports_enabled > 0;
+                      return (
+                        <tr
+                          key={uid ?? u.email}
+                          className={cn(
+                            "border-t border-neutral-100 transition-colors",
+                            uid && "cursor-pointer hover:bg-neutral-50/60",
+                          )}
+                          onClick={() => {
+                            if (uid) setDrillUser({ id: uid, name: u.display_name });
+                          }}
+                        >
+                          <td className="px-3 py-2 align-top text-neutral-800">
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-neutral-900">{u.display_name}</p>
+                              {u.email && u.email !== u.display_name && (
+                                <p className="truncate text-[11px] text-neutral-500">{u.email}</p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-neutral-800">{u.runs}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-neutral-800">
+                            {formatTokens(u.total_tokens)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums font-medium text-neutral-900">
+                            {formatUsd(u.cost_usd)}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {uid ? (
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={reportsOn}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void toggleReports(uid, !reportsOn);
+                                }}
+                                className={cn(
+                                  "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+                                  reportsOn
+                                    ? "border-emerald-600 bg-emerald-500"
+                                    : "border-neutral-300 bg-neutral-200",
+                                )}
+                                title={reportsOn ? t("usage.reportsEnabled") : t("usage.reportsDisabled")}
+                              >
+                                <span
+                                  className={cn(
+                                    "inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform",
+                                    reportsOn ? "translate-x-4" : "translate-x-0.5",
+                                  )}
+                                />
+                              </button>
+                            ) : (
+                              <span className="text-neutral-300">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Section>
 
           {/* Per-model table */}
@@ -256,7 +383,21 @@ export function UsageTab() {
           <p className="text-[11px] leading-snug text-neutral-400">
             {t("usage.footnote")}
           </p>
+
+          <UsageLimitsPanel
+            users={data.perUser
+              .filter((u): u is UserRow & { user_id: string } => Boolean(u.user_id))
+              .map((u) => ({ id: u.user_id, name: u.display_name, email: u.email }))}
+          />
         </>
+      )}
+
+      {drillUser && (
+        <UserUsageDetail
+          userId={drillUser.id}
+          userName={drillUser.name}
+          onClose={() => setDrillUser(null)}
+        />
       )}
     </div>
   );

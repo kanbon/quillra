@@ -92,7 +92,7 @@ try {
   sqlite.exec(`CREATE INDEX IF NOT EXISTS client_login_codes_project_email_idx ON client_login_codes(project_id, email)`);
 } catch { /* ignore */ }
 
-// Team email-code login: admins/editors/translators who don't use GitHub.
+// Team email-code login: admins/editors who don't use GitHub.
 try {
   sqlite.exec(`CREATE TABLE IF NOT EXISTS team_sessions (
     id TEXT PRIMARY KEY,
@@ -125,6 +125,61 @@ try {
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
 } catch { /* ignore */ }
+
+// Usage limits + alert bookkeeping. `usage_limits` stores warn/hard
+// thresholds at three scopes ("global" / "role" / "user"), each row's
+// `target` keyed by role name or userId (empty string for global).
+// NULL warn/hard = "inherit from a less specific scope". Enforcement
+// walks: user → role → global → built-in default ($20 warn, no cap).
+// `usage_alerts_sent` deduplicates notifications within a calendar
+// month so a single crossing doesn't email the owner every run.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS usage_limits (
+    scope TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    warn_usd REAL,
+    hard_usd REAL,
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    PRIMARY KEY (scope, target)
+  )`);
+} catch { /* ignore */ }
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS usage_alerts_sent (
+    scope TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    month_ymd TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    sent_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    PRIMARY KEY (scope, target, month_ymd, kind)
+  )`);
+} catch { /* ignore */ }
+
+// Monthly usage report per user. The per-user opt-in lives as a column
+// on `user` (see ensureColumn below). `usage_reports_sent` tracks which
+// (user, month) pairs have been delivered so the scheduler can catch up
+// after downtime without double-sending.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS usage_reports_sent (
+    user_id TEXT NOT NULL,
+    month_ymd TEXT NOT NULL,
+    sent_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    PRIMARY KEY (user_id, month_ymd)
+  )`);
+} catch { /* ignore */ }
+try {
+  ensureColumn("user", "monthly_usage_reports_enabled", "INTEGER NOT NULL DEFAULT 0");
+} catch { /* table may not exist yet on a fresh init */ }
+
+// One-shot sweep: the `translator` project role was dropped in favour
+// of narrowing member grants to admin/editor/client only. Any existing
+// translator rows are safely collapsed into `editor`, which gives the
+// user back the closest equivalent permission set. Idempotent — after
+// the first boot there are no translator rows left to update.
+try {
+  sqlite
+    .prepare(`UPDATE project_members SET role = 'editor' WHERE role = 'translator'`)
+    .run();
+} catch { /* project_members may not exist yet on a fresh init */ }
 
 export { sqlite as rawSqlite };
 

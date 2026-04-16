@@ -13,10 +13,12 @@ import { PreviewPane } from "@/components/organisms/PreviewPane";
 import { apiJson } from "@/lib/api";
 import { useProjectChat } from "@/hooks/useProjectChat";
 import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
-import { clearNewChat } from "@/lib/chat-store";
+import { clearNewChat, pickAskOther } from "@/lib/chat-store";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 import { ASTRO_MIGRATION_KICKOFF_PROMPT } from "@/lib/migration-prompts";
+import { buildPreviewDebugPrompt } from "@/lib/preview-debug-prompt";
+import type { PreviewStatus } from "@/lib/use-preview-status";
 import { MobilePreviewSheet } from "@/components/organisms/MobilePreviewSheet";
 
 type ProjectDetail = {
@@ -475,7 +477,15 @@ export function EditorPage() {
             </div>
           )}
 
-          <ChatTranscript lines={lines} busy={busy} />
+          <ChatTranscript
+            lines={lines}
+            busy={busy}
+            onSend={send}
+            onAskOther={(askId) => {
+              pickAskOther(id, conversationId, askId);
+              composerRef.current?.focus();
+            }}
+          />
           <ChatComposer
             ref={composerRef}
             projectId={id}
@@ -540,6 +550,9 @@ export function EditorPage() {
               engineLabel={previewLabel || undefined}
               startLabel={startLabel}
               errorMessage={previewError}
+              onDebugWithChat={(status: PreviewStatus) => {
+                send(buildPreviewDebugPrompt(status));
+              }}
             />
           )}
         </section>
@@ -562,6 +575,10 @@ export function EditorPage() {
             startLabel={startLabel}
             errorMessage={previewError}
             compact
+            onDebugWithChat={(status: PreviewStatus) => {
+              send(buildPreviewDebugPrompt(status));
+              setMobilePreviewOpen(false);
+            }}
           />
         )}
       </MobilePreviewSheet>

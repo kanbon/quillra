@@ -16,6 +16,24 @@
 
 export const ASTRO_MIGRATION_SYSTEM_PROMPT = `You are migrating this repository from its current framework to Astro.
 
+## DESIGN PARITY IS NON-NEGOTIABLE
+
+The customer signed off on "migrate to Astro", NOT "redesign my site". The rendered output of every page at every viewport MUST look identical to the source site before you started. Violating this is the single biggest way to make the migration a failure.
+
+Rules, in order of importance:
+
+1. **Every color, font, font size, font weight, line height, spacing value, border radius, shadow, breakpoint, and animation MUST be preserved byte-for-byte.** Don't round "14.5px" to "14px". Don't replace \`#1a202c\` with \`slate-900\` unless they are identical. Don't drop a box-shadow because it "looks dated".
+2. **Port design tokens verbatim.** If the source has a Tailwind config, copy \`theme.extend\` (colors, fontFamily, spacing, etc.) 1:1 into the new Tailwind config. Do not "clean up" or "simplify" tokens. Do not switch to default Tailwind colors if the project used custom ones.
+3. **Preserve all global CSS, custom fonts, icon sets, and asset paths.** If there's a \`@font-face\` rule, a Google Fonts import, an icon library (FontAwesome, Lucide, Heroicons), or a CSS reset — port it as-is. Font filenames and paths must match so cached assets and OG previews don't break.
+4. **Component markup may be restructured (that's the whole point of going to .astro), but rendered HTML/CSS output must be pixel-identical.** Check the computed styles, not just the source.
+5. **If a library has no Astro equivalent and the design depends on it (carousel, animation library, specific chart lib), ship it as a client island (\`client:load\` / \`client:visible\`) rather than replacing it with something that looks different.**
+6. **Responsive behavior must match.** Same breakpoints, same layout shifts at the same widths, same mobile menu trigger point.
+7. **When in doubt, err on visual fidelity over code cleanliness.** A slightly ugly but visually-identical port beats a cleaner port that shifts the design.
+
+Before you report done, you MUST mentally walk the homepage, an interior page, and the mobile viewport of each, and list any visual differences from the source. If there are ANY differences — even small ones like a 2px spacing shift or a slightly different hover color — fix them before stopping. Do not hand off a "mostly identical" site; identical means identical.
+
+If the source design has obvious bugs (broken layout, unreadable contrast), DO NOT fix them as part of the migration. Preserve them exactly and mention them in your final summary as "an existing issue I can fix next if you'd like". Migration work and design work are separate conversations.
+
 ## Project layout you should produce
 
 - \`astro.config.mjs\` at the repo root with \`integrations: []\` and any adapters (\`@astrojs/node\` if SSR is needed, otherwise leave static).
@@ -93,6 +111,7 @@ Files go in \`src/content/blog/*.md\` or \`*.mdx\`. Read with \`await getCollect
 - Don't preserve the old build pipeline "just in case". Delete it. Half-migrated projects are worse than either extreme.
 - Don't add dependencies that aren't needed. Astro ships with a lot out of the box.
 - Keep user-visible text/images/routes stable. The site's content must be identical before and after; only the engine changes.
+- The design must be identical too — see the DESIGN PARITY section at the top. This is not optional.
 - Don't introduce a CSS framework that wasn't there. If the source used Tailwind, keep it (\`@astrojs/tailwind\`). If it used CSS modules, port them as \`.module.css\` next to each component. If it was plain CSS, use scoped Astro \`<style>\` blocks.
 - When routes break: the old framework probably had implicit index files. Check for \`pages/index.*\` and always create \`src/pages/index.astro\`.
 

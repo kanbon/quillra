@@ -24,6 +24,21 @@ import { runProjectAgent } from "./services/agent.js";
 import { ensureRepoCloned, getPreviewSubdomainPort } from "./services/workspace.js";
 import { getProjectByPort, getPreviewStatus, describeStage } from "./services/preview-status.js";
 import type { ProjectRole } from "./db/app-schema.js";
+import {
+  currentMonthYmd,
+  getAlertRecipientEmail,
+  getEffectiveLimits,
+  getMonthToDateSpend,
+  getOwnerEmail,
+  markAlertSent,
+  shouldBlockRun,
+} from "./services/usage-limits.js";
+import {
+  monthLabelFromYmd,
+  sendHardCapAlert,
+  sendWarnAlert,
+} from "./services/usage-alert-emails.js";
+import { startReportScheduler } from "./services/report-scheduler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "../public");
@@ -48,6 +63,78 @@ function trustedOriginsList(): string[] {
 const app = new Hono<{ Variables: Variables }>();
 
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+
+/**
+ * After a run's usage row is persisted, check whether the user's
+ * month-to-date spend has crossed either the warn or the hard threshold
+ * for the first time this month. On a fresh crossing, record a dedupe
+ * row and email the configured alert recipient (or the org owner).
+ *
+ * `preRunSpend` is the spend *at the start of the current turn*, so a
+ * threshold counts as "crossed by this turn" when preRunSpend is below
+ * it and current spend is at-or-above it. markAlertSent is the backstop
+ * for any race with a parallel run.
+ */
+async function maybeNotifyThresholdCrossing(ctx: {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  role: ProjectRole;
+  preRunSpend: number;
+}): Promise<void> {
+  const limits = getEffectiveLimits(ctx.userId, ctx.role);
+  const spend = getMonthToDateSpend(ctx.userId);
+  const month = currentMonthYmd();
+  const monthLabel = monthLabelFromYmd(month);
+  const ownerEmail = await getOwnerEmail();
+  const to = getAlertRecipientEmail(ownerEmail);
+  if (!to) return;
+
+  const scopeDescription = (source: typeof limits.warnSource): string => {
+    if (source === "user") return "a per-user override";
+    if (source === "role") return `the "${ctx.role}" role default`;
+    if (source === "global") return "the organization-wide default";
+    return "the built-in default";
+  };
+
+  // Warn
+  if (limits.warnUsd != null && ctx.preRunSpend < limits.warnUsd && spend >= limits.warnUsd) {
+    const target = limits.warnSource === "user" ? ctx.userId : limits.warnSource === "role" ? ctx.role : "";
+    const fresh = await markAlertSent(limits.warnSource, target, month, "warn");
+    if (fresh) {
+      await sendWarnAlert({
+        to,
+        who: {
+          email: ctx.userEmail,
+          name: ctx.userName,
+          scopeDescription: scopeDescription(limits.warnSource),
+        },
+        spendUsd: spend,
+        warnUsd: limits.warnUsd,
+        hardUsd: limits.hardUsd,
+        monthLabel,
+      });
+    }
+  }
+  // Hard
+  if (limits.hardUsd != null && ctx.preRunSpend < limits.hardUsd && spend >= limits.hardUsd) {
+    const target = limits.hardSource === "user" ? ctx.userId : limits.hardSource === "role" ? ctx.role : "";
+    const fresh = await markAlertSent(limits.hardSource, target, month, "hard");
+    if (fresh) {
+      await sendHardCapAlert({
+        to,
+        who: {
+          email: ctx.userEmail,
+          name: ctx.userName,
+          scopeDescription: scopeDescription(limits.hardSource),
+        },
+        spendUsd: spend,
+        hardUsd: limits.hardUsd,
+        monthLabel,
+      });
+    }
+  }
+}
 
 /**
  * Build the polling HTML shown while the preview is starting up. Includes
@@ -619,7 +706,36 @@ app.get(
 
           let assistantText = "";
           let agentErrored = false;
+          let totalCostUsd = 0;
+          const turnStartedAt = Date.now();
           const role = m.role as ProjectRole;
+
+          // Pre-run spend cap check. If the user has already crossed their
+          // effective hard cap this month, refuse the run with a friendly
+          // message BEFORE the agent starts doing anything — no partial
+          // work, no surprise charge, no race with the cap. Owner users
+          // always bypass this (see shouldBlockRun).
+          const block = await shouldBlockRun(wsUser.id, role);
+          if (block.blocked) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message:
+                  "Your monthly usage limit has been reached. Please contact the site owner to continue.",
+              }),
+            );
+            // Keep the client's state consistent — emit an empty `done`
+            // so the composer un-busies instead of hanging.
+            ws.send(
+              JSON.stringify({
+                type: "done",
+                costUsd: 0,
+                durationMs: Date.now() - turnStartedAt,
+              }),
+            );
+            return;
+          }
+          const preRunSpend = block.spend;
           // Server-authoritative migration mode: if the project row has
           // migration_target set, this invocation runs unrestricted and
           // with the Astro skill injected into the system prompt.
@@ -627,51 +743,238 @@ app.get(
           // DELETE of the row or a manual SQL clear flips the next
           // message back to normal behaviour immediately.
           const migrationMode = p.migrationTarget === "astro";
-          for await (const ev of runProjectAgent({
-            cwd: repoPath,
-            prompt: promptText,
-            role,
-            projectId,
-            language: userLanguage,
-            agentSessionId,
-            migrationMode,
-            onSessionId: (sid) => {
-              agentSessionId = sid;
-              void db.update(conversations).set({ agentSessionId: sid }).where(eq(conversations.id, convId!)).catch(() => {});
-            },
-            // Persist usage accounting on every successful run. The
-            // Organization Settings → Usage tab reads from agent_runs.
-            onResult: (usage) => {
-              void db
-                .insert(agentRuns)
-                .values({
-                  id: nanoid(),
-                  projectId,
-                  conversationId: convId,
-                  userId: wsUser.id,
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                  cacheReadTokens: usage.cacheReadTokens,
-                  cacheCreationTokens: usage.cacheCreationTokens,
-                  // Drizzle's sqlite driver wants strings for REAL/TEXT,
-                  // so we store cost as a text-encoded number; queries
-                  // cast with CAST(cost_usd AS REAL) when aggregating.
-                  costUsd: String(usage.totalCostUsd),
-                  numTurns: usage.numTurns,
-                  modelUsageJson: JSON.stringify(usage.modelUsage),
-                  createdAt: new Date(),
-                })
-                .catch((e) => {
-                  console.warn("[usage] failed to persist agent_runs row:", e);
-                });
-            },
-          })) {
-            ws.send(JSON.stringify(ev));
-            if (ev.type === "stream" && typeof ev.text === "string") {
-              assistantText += ev.text;
+
+          // Streaming filter for `<ask>` blocks. Agent responses that
+          // contain a complete `<ask>{...}</ask>` block are rewritten on
+          // the fly: the block is stripped from the user-visible text
+          // stream and replaced with a structured `ask` WS event that
+          // the frontend renders as a multiple-choice card. Partial
+          // blocks are held back until the closing tag arrives (or the
+          // run ends, in which case the text flushes as-is).
+          const ASK_OPEN = "<ask>";
+          const ASK_BLOCK_RE = /<ask>([\s\S]*?)<\/ask>/;
+          let askPending = "";
+          // Represents a single "event" to emit in order. Either some
+          // stripped stream text (no `<ask>` markers) or a structured ask
+          // event. Returned as a list so the caller can replay them in
+          // the exact order they appeared in the raw stream.
+          type AskFilterEvent =
+            | { kind: "text"; text: string }
+            | { kind: "ask"; question: string; options: string[] };
+          const askFilter = (chunk: string): AskFilterEvent[] => {
+            askPending += chunk;
+            const out: AskFilterEvent[] = [];
+            // Consume complete <ask>...</ask> blocks in order. For each:
+            // flush the text before the block, then emit the ask event.
+            while (true) {
+              const match = askPending.match(ASK_BLOCK_RE);
+              if (!match || match.index === undefined) break;
+              const before = askPending.slice(0, match.index);
+              if (before) out.push({ kind: "text", text: before });
+              const body = match[1].trim();
+              try {
+                const parsed = JSON.parse(body) as {
+                  question?: unknown;
+                  options?: unknown;
+                };
+                if (
+                  typeof parsed.question === "string" &&
+                  Array.isArray(parsed.options)
+                ) {
+                  out.push({
+                    kind: "ask",
+                    question: parsed.question,
+                    options: parsed.options.filter(
+                      (o: unknown): o is string => typeof o === "string",
+                    ),
+                  });
+                }
+              } catch {
+                /* malformed JSON — drop the block silently rather than
+                   bleeding raw marker text into the chat */
+              }
+              askPending = askPending.slice(match.index + match[0].length);
             }
-            if (ev.type === "error") agentErrored = true;
+            // Of what's left, hold back any text from the last "<" that
+            // could still become an <ask> tag. Flush the safe prefix.
+            let safeEnd = askPending.length;
+            for (let i = askPending.length - 1; i >= 0; i--) {
+              if (askPending[i] !== "<") continue;
+              const tail = askPending.slice(i);
+              if (ASK_OPEN.startsWith(tail) || tail.startsWith(ASK_OPEN)) {
+                safeEnd = i;
+                break;
+              }
+            }
+            const flush = askPending.slice(0, safeEnd);
+            askPending = askPending.slice(safeEnd);
+            if (flush) out.push({ kind: "text", text: flush });
+            return out;
+          };
+          const askFlushTail = () => {
+            const tail = askPending;
+            askPending = "";
+            return tail;
+          };
+
+          // Run the agent once and forward events to the client. The SDK's
+          // `done` event is SWALLOWED here so we can emit exactly one `done`
+          // at the very end of this handler (after any auto-retry), carrying
+          // aggregated cost + wall-clock duration for the cost checkpoint.
+          const runAgentOnce = async (prompt: string) => {
+            let runText = "";
+            let runToolCount = 0;
+            let runErrored = false;
+            let runEmittedAsk = false;
+            for await (const ev of runProjectAgent({
+              cwd: repoPath,
+              prompt,
+              role,
+              projectId,
+              language: userLanguage,
+              agentSessionId,
+              migrationMode,
+              onSessionId: (sid) => {
+                agentSessionId = sid;
+                void db.update(conversations).set({ agentSessionId: sid }).where(eq(conversations.id, convId!)).catch(() => {});
+              },
+              // Persist usage accounting on every successful run. The
+              // Organization Settings → Usage tab reads from agent_runs.
+              onResult: (usage) => {
+                // Persist the usage row first, then — once it's in — run
+                // the threshold-crossing check so it sees up-to-date MTD
+                // spend. Both run as fire-and-forget from the agent's
+                // perspective; the chat stream isn't blocked on email.
+                void (async () => {
+                  try {
+                    await db.insert(agentRuns).values({
+                      id: nanoid(),
+                      projectId,
+                      conversationId: convId,
+                      userId: wsUser.id,
+                      inputTokens: usage.inputTokens,
+                      outputTokens: usage.outputTokens,
+                      cacheReadTokens: usage.cacheReadTokens,
+                      cacheCreationTokens: usage.cacheCreationTokens,
+                      // Drizzle's sqlite driver wants strings for
+                      // REAL/TEXT, so we store cost as a text-encoded
+                      // number; queries cast with CAST(cost_usd AS REAL)
+                      // when aggregating.
+                      costUsd: String(usage.totalCostUsd),
+                      numTurns: usage.numTurns,
+                      modelUsageJson: JSON.stringify(usage.modelUsage),
+                      createdAt: new Date(),
+                    });
+                  } catch (e) {
+                    console.warn("[usage] failed to persist agent_runs row:", e);
+                    return;
+                  }
+                  try {
+                    await maybeNotifyThresholdCrossing({
+                      userId: wsUser.id,
+                      userEmail: wsUser.email,
+                      userName: wsUser.name,
+                      role,
+                      preRunSpend,
+                    });
+                  } catch (e) {
+                    console.warn("[usage-alerts] notify check failed:", e);
+                  }
+                })();
+              },
+            })) {
+              // Swallow the mapper's `done` — we aggregate cost here and
+              // emit our own done at the end with totals.
+              if (ev.type === "done") {
+                if (typeof ev.costUsd === "number") totalCostUsd += ev.costUsd;
+                continue;
+              }
+              // Intercept stream text so we can strip `<ask>` blocks and
+              // replace them with structured `ask` events. Other event
+              // types pass through unchanged.
+              if (ev.type === "stream" && typeof ev.text === "string") {
+                for (const piece of askFilter(ev.text)) {
+                  if (piece.kind === "text") {
+                    ws.send(JSON.stringify({ type: "stream", text: piece.text }));
+                    runText += piece.text;
+                  } else {
+                    ws.send(
+                      JSON.stringify({
+                        type: "ask",
+                        id: nanoid(),
+                        question: piece.question,
+                        options: piece.options,
+                      }),
+                    );
+                    runEmittedAsk = true;
+                  }
+                }
+                continue;
+              }
+              ws.send(JSON.stringify(ev));
+              if (ev.type === "tool" || ev.type === "tool_progress") {
+                runToolCount++;
+              }
+              if (ev.type === "error") {
+                runErrored = true;
+                agentErrored = true;
+              }
+            }
+            // Flush any text the filter was holding back (e.g. an
+            // unfinished `<asx` that never closed). Treat it as regular
+            // stream text — better to show garbled text than to lose it.
+            const tail = askFlushTail();
+            if (tail) {
+              ws.send(JSON.stringify({ type: "stream", text: tail }));
+              runText += tail;
+            }
+            return { runText, runToolCount, runErrored, runEmittedAsk };
+          };
+
+          // A turn is "suspiciously short" when the agent used tools but
+          // ended up producing almost no summary text — the classic
+          // "tools ran, then Claude went quiet" failure mode that forced
+          // the user to type "you finished?" to continue. Short text is
+          // INTENTIONAL when the agent asked a question, so never retry
+          // in that case.
+          const suspicious = (r: {
+            runText: string;
+            runToolCount: number;
+            runErrored: boolean;
+            runEmittedAsk: boolean;
+          }) =>
+            !r.runErrored &&
+            !r.runEmittedAsk &&
+            r.runText.trim().length < 20 &&
+            r.runToolCount > 0;
+
+          const first = await runAgentOnce(promptText);
+          assistantText += first.runText;
+
+          // Skip the auto-nudge path during a migration run — migration
+          // owns the whole conversation and must not get a surprise
+          // "please continue" injected mid-flight.
+          let continueSuggested = false;
+          if (!migrationMode && suspicious(first)) {
+            const second = await runAgentOnce("Please continue.");
+            assistantText += second.runText;
+            if (suspicious(second)) continueSuggested = true;
           }
+
+          if (continueSuggested) {
+            ws.send(JSON.stringify({ type: "continue_suggested" }));
+          }
+
+          // Single aggregated done event — carries cost for this whole
+          // turn (including any auto-retry) plus wall-clock duration.
+          // The frontend renders a cost checkpoint card from these.
+          ws.send(
+            JSON.stringify({
+              type: "done",
+              costUsd: totalCostUsd,
+              durationMs: Date.now() - turnStartedAt,
+            }),
+          );
 
           if (assistantText) {
             await db.insert(messages).values({
@@ -810,3 +1113,8 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Quillra API listening on http://localhost:${info.port}`);
 });
 injectWebSocket(server);
+
+// Kick off the monthly-report cron + boot-time catch-up. Runs in the
+// same process as the API; when Quillra moves to a multi-worker setup
+// this will need to be gated to a single leader.
+startReportScheduler();

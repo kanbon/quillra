@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { AskCard } from "@/components/molecules/AskCard";
 import { ChatBubble } from "@/components/molecules/ChatBubble";
+import { CheckpointCard } from "@/components/molecules/CheckpointCard";
 import { CopyMessageButton } from "@/components/molecules/CopyMessageButton";
 import { ToolEventRow } from "@/components/molecules/ToolEventRow";
 import { Spinner } from "@/components/atoms/Spinner";
@@ -10,6 +12,13 @@ import type { ChatLine } from "@/hooks/useProjectChat";
 type Props = {
   lines: ChatLine[];
   busy: boolean;
+  /** Send a user message on behalf of an inline action (Continue button
+   *  or an ask-option click). When undefined, those buttons render but
+   *  become no-ops — safe fallback for any mount that predates the wire. */
+  onSend?: (text: string) => void;
+  /** Called when the user clicks "Other" on an ask card. Parent dismisses
+   *  the card (via chat-store `pickAskOther`) and focuses the composer. */
+  onAskOther?: (askId: string) => void;
 };
 
 function ThinkingCard({ text, durationMs, streaming }: { text: string; durationMs?: number; streaming?: boolean }) {
@@ -87,7 +96,7 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
   );
 }
 
-export function ChatTranscript({ lines, busy }: Props) {
+export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
   const { t } = useT();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -235,6 +244,45 @@ export function ChatTranscript({ lines, busy }: Props) {
             <div key={entry.id} className="animate-[fadeIn_0.2s_ease-out]">
               <ChatBubble role="assistant" streaming={entry.streaming}>{entry.text}</ChatBubble>
             </div>
+          );
+        }
+        if (entry.kind === "checkpoint") {
+          return (
+            <CheckpointCard
+              key={entry.id}
+              durationMs={entry.durationMs}
+              costUsd={entry.costUsd}
+              cumulativeCostUsd={entry.cumulativeCostUsd}
+            />
+          );
+        }
+        if (entry.kind === "continue_prompt") {
+          return (
+            <div
+              key={entry.id}
+              className="flex animate-[fadeIn_0.2s_ease-out] items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-800"
+            >
+              <span className="min-w-0 flex-1">{t("chat.continueHint")}</span>
+              <button
+                type="button"
+                onClick={() => onSend?.("Please continue.")}
+                disabled={!onSend || busy}
+                className="shrink-0 rounded-md bg-amber-500 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-amber-600 disabled:opacity-50"
+              >
+                {t("chat.continueButton")}
+              </button>
+            </div>
+          );
+        }
+        if (entry.kind === "ask") {
+          return (
+            <AskCard
+              key={entry.id}
+              question={entry.question}
+              options={entry.options}
+              onPick={(ans) => onSend?.(ans)}
+              onPickOther={() => onAskOther?.(entry.id)}
+            />
           );
         }
         return null;

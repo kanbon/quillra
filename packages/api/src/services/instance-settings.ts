@@ -49,6 +49,9 @@ export const SETTABLE_KEYS = [
   "INSTANCE_OPERATOR_EMAIL",
   "INSTANCE_OPERATOR_ADDRESS",
   "INSTANCE_OPERATOR_WEBSITE",
+  // Where usage warnings + cap-hit notifications are emailed. Empty =
+  // fall back to the organization owner's email at read time.
+  "USAGE_ALERT_EMAIL",
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 

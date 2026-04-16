@@ -11,7 +11,7 @@ import {
 
 export type { ChatLine, Attachment };
 
-const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null };
+const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null, cumulativeCostUsd: 0 };
 
 export function useProjectChat(
   projectId: string | undefined,

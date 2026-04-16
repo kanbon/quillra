@@ -2,7 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { user } from "./auth-schema.js";
 
-export const projectRoleValues = ["admin", "editor", "translator", "client"] as const;
+export const projectRoleValues = ["admin", "editor", "client"] as const;
 export type ProjectRole = (typeof projectRoleValues)[number];
 
 export const projects = sqliteTable("projects", {
@@ -209,6 +209,67 @@ export const agentRuns = sqliteTable(
     index("agent_runs_user_idx").on(table.userId),
     index("agent_runs_created_idx").on(table.createdAt),
   ],
+);
+
+/**
+ * Warn/hard usage caps scoped at three levels. `scope` decides how to
+ * interpret `target`: "" for global, a project role name for "role",
+ * or a user id for "user". The enforcement path walks user → role →
+ * global → built-in default when looking up the effective limit for
+ * a given (user, role-in-this-project) pair.
+ *
+ * NULL on either column means "inherit" — a row can exist just to set
+ * `warn_usd` and leave `hard_usd` to fall back to a less specific scope.
+ */
+export const usageLimits = sqliteTable(
+  "usage_limits",
+  {
+    scope: text("scope").notNull().$type<"global" | "role" | "user">(),
+    target: text("target").notNull().default(""),
+    warnUsd: integer("warn_usd", { mode: "number" }),
+    hardUsd: integer("hard_usd", { mode: "number" }),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("usage_limits_scope_target_idx").on(table.scope, table.target)],
+);
+
+/**
+ * Deduplication bookkeeping so a single threshold crossing never emails
+ * the operator more than once per calendar month. The (scope, target,
+ * month_ymd, kind) tuple is unique: one row per "client user Alice
+ * crossed the warn threshold in 2026-03".
+ */
+export const usageAlertsSent = sqliteTable(
+  "usage_alerts_sent",
+  {
+    scope: text("scope").notNull(),
+    target: text("target").notNull().default(""),
+    monthYmd: text("month_ymd").notNull(),
+    kind: text("kind").notNull().$type<"warn" | "hard">(),
+    sentAt: integer("sent_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("usage_alerts_sent_target_month_idx").on(table.scope, table.target, table.monthYmd)],
+);
+
+/**
+ * Monthly-report delivery log. One row per (user, month_ymd) the
+ * scheduler has successfully emailed. Prevents duplicates across the
+ * daily tick and boot-time catch-up.
+ */
+export const usageReportsSent = sqliteTable(
+  "usage_reports_sent",
+  {
+    userId: text("user_id").notNull(),
+    monthYmd: text("month_ymd").notNull(),
+    sentAt: integer("sent_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("usage_reports_sent_user_idx").on(table.userId)],
 );
 
 export const messages = sqliteTable(

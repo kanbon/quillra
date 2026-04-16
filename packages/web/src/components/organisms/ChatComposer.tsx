@@ -41,6 +41,9 @@ type StagedFile = {
 export type ChatComposerHandle = {
   /** Add files to the staging area (used by external drop targets) */
   addFiles: (files: FileList | File[]) => void;
+  /** Pull focus to the textarea. Used when the user clicks "Other" on
+   *  an agent question so they can type a freeform answer. */
+  focus: () => void;
 };
 
 type Props = {
@@ -142,7 +145,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     [uploadFile],
   );
 
-  useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      addFiles,
+      focus: () => textareaRef.current?.focus(),
+    }),
+    [addFiles],
+  );
 
   const submit = useCallback(() => {
     const trimmed = text.trim();

@@ -77,8 +77,6 @@ function roleBadgeColor(role: string, t: (k: string) => string): { bg: string; t
       return { bg: "bg-blue-100", text: "text-blue-700", label: t("projectSettings.roleCollaborator") };
     case "client":
       return { bg: "bg-purple-100", text: "text-purple-700", label: t("projectSettings.roleClient") };
-    case "translator":
-      return { bg: "bg-emerald-100", text: "text-emerald-700", label: t("projectSettings.roleTranslator") };
     default:
       return { bg: "bg-neutral-100", text: "text-neutral-700", label: role };
   }

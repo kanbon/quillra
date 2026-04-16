@@ -9,8 +9,8 @@
  * already owner-gated, so even if the client-side guard were bypassed a
  * non-owner could not mutate anything.
  */
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { Tabs, type TabItem } from "@/components/molecules/Tabs";
@@ -25,6 +25,17 @@ import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
 
 type TabId = "general" | "apiKeys" | "email" | "integrations" | "usage" | "team";
+const VALID_TAB_IDS: ReadonlyArray<TabId> = [
+  "general",
+  "apiKeys",
+  "email",
+  "integrations",
+  "usage",
+  "team",
+];
+function isTabId(s: string | null): s is TabId {
+  return s !== null && (VALID_TAB_IDS as ReadonlyArray<string>).includes(s);
+}
 
 type Session = { user: { instanceRole?: string | null } | null };
 
@@ -34,7 +45,24 @@ export function InstanceSettingsPage() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
   const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [active, setActive] = useState<TabId>("general");
+  // Tab state lives in the URL so a reload / shared link lands on the
+  // same tab the user was on. Invalid or missing ?tab= values silently
+  // fall back to "general".
+  const [searchParams, setSearchParams] = useSearchParams();
+  const active: TabId = isTabId(searchParams.get("tab")) ? (searchParams.get("tab") as TabId) : "general";
+  const setActive = useCallback(
+    (id: TabId) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("tab", id);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   async function refetchStatus() {
     try {

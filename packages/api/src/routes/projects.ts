@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { db } from "../db/index.js";
+import { db, rawSqlite } from "../db/index.js";
 import { user } from "../db/auth-schema.js";
 import { conversations, messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
@@ -912,6 +912,39 @@ Output ONLY the commit message, nothing else.`,
         };
       }),
     });
+  })
+  /**
+   * Running cost total for a single conversation. Used to seed the
+   * "this chat" counter on the cost checkpoint card so reloads don't
+   * reset it to zero. Sums the `cost_usd` column of agent_runs for the
+   * given conversation only — same CAST pattern as the Usage tab
+   * aggregation.
+   */
+  .get("/:id/conversations/:convId/cost-total", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const convId = c.req.param("convId");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    // Client-role members only see their own conversation totals — but
+    // the agent_runs rows are always tied to the conversation that
+    // produced them, so scoping by convId is sufficient as long as
+    // the conversation itself belongs to the project.
+    const [conv] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.id, convId), eq(conversations.projectId, projectId)))
+      .limit(1);
+    if (!conv) return c.json({ error: "Not found" }, 404);
+    const row = rawSqlite
+      .prepare(
+        `SELECT COALESCE(SUM(CAST(cost_usd AS REAL)), 0) as total
+           FROM agent_runs
+           WHERE conversation_id = ? AND project_id = ?`,
+      )
+      .get(convId, projectId) as { total: number } | undefined;
+    return c.json({ totalCostUsd: row?.total ?? 0 });
   })
   .get("/:id/file", async (c) => {
     const r = await requireUser(c);

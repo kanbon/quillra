@@ -18,28 +18,50 @@ export type ChatLine =
   | { id: string; kind: "assistant"; text: string; streaming?: boolean }
   | { id: string; kind: "tool"; detail: string }
   | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean }
-  | { id: string; kind: "tool_active"; toolName: string; elapsed: number };
+  | { id: string; kind: "tool_active"; toolName: string; elapsed: number }
+  // Shown once per completed turn — subtle full-width card with cost + wall-clock.
+  | { id: string; kind: "checkpoint"; costUsd: number; durationMs: number; cumulativeCostUsd: number }
+  // Rendered when the server auto-retried once and the turn *still* looks
+  // truncated. Clicking the button sends "Please continue." as a normal
+  // user message through the existing chat pipe.
+  | { id: string; kind: "continue_prompt" }
+  // A structured multiple-choice question from the agent. The frontend
+  // always appends an "Other" option that bypasses the options and focuses
+  // the composer input — never sent from the server.
+  | { id: string; kind: "ask"; question: string; options: string[] };
 
 type Listener = () => void;
+type FocusComposerListener = () => void;
 
 export type ChatSnapshot = {
   lines: ChatLine[];
   busy: boolean;
   error: string | null;
   conversationId: string | null;
+  /** Running sum of every `done` event's `costUsd` for this conversation.
+   *  Seeded from the backend on `loadHistory` so the "this chat" total
+   *  survives page reloads. Read by the checkpoint card. */
+  cumulativeCostUsd: number;
 };
 
 type Internal = {
   ws: WebSocket | null;
   thinkingStart: number;
   historyLoaded: boolean;
+  /** Wall-clock start of the current turn. Set when `sendMessage` opens
+   *  the WS so we can fall back to a locally-measured duration if the
+   *  server's `done` payload is missing `durationMs`. */
+  turnStartedAt: number;
 };
 
 const snapshots = new Map<string, ChatSnapshot>();
 const internals = new Map<string, Internal>();
 const listeners = new Map<string, Set<Listener>>();
+// Keyed the same as snapshots. Fires when the agent asks a question and
+// the user clicks "Other" — composer subscribes and pulls focus.
+const focusComposerListeners = new Map<string, Set<FocusComposerListener>>();
 
-const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null };
+const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null, cumulativeCostUsd: 0 };
 
 function key(projectId: string, conversationId?: string | null) {
   return conversationId ? `${projectId}:${conversationId}` : projectId;
@@ -52,7 +74,7 @@ function getSnap(k: string): ChatSnapshot {
 function getInternal(k: string): Internal {
   let i = internals.get(k);
   if (!i) {
-    i = { ws: null, thinkingStart: 0, historyLoaded: false };
+    i = { ws: null, thinkingStart: 0, historyLoaded: false, turnStartedAt: 0 };
     internals.set(k, i);
   }
   return i;
@@ -84,6 +106,45 @@ export function subscribe(projectId: string, conversationId: string | null, list
 
 export function getSnapshot(projectId: string, conversationId: string | null): ChatSnapshot {
   return getSnap(key(projectId, conversationId));
+}
+
+/** Composer component subscribes to this to pull focus when the user
+ *  clicks "Other" on an agent question. Returns unsubscribe. */
+export function subscribeFocusComposer(
+  projectId: string,
+  conversationId: string | null,
+  listener: FocusComposerListener,
+): () => void {
+  const k = key(projectId, conversationId);
+  let subs = focusComposerListeners.get(k);
+  if (!subs) {
+    subs = new Set();
+    focusComposerListeners.set(k, subs);
+  }
+  subs.add(listener);
+  return () => subs!.delete(listener);
+}
+
+function fireFocusComposer(k: string) {
+  const subs = focusComposerListeners.get(k);
+  if (subs) for (const fn of subs) fn();
+}
+
+/** Remove an `ask` card from the transcript. Called when the user picks
+ *  "Other" (card dismissed, composer focused) or when the user sends a
+ *  regular message while an ask is pending (question considered answered). */
+export function dismissAsk(projectId: string, conversationId: string | null, askId: string) {
+  const k = key(projectId, conversationId);
+  const snap = getSnap(k);
+  const lines = snap.lines.filter((l) => !(l.kind === "ask" && l.id === askId));
+  if (lines.length !== snap.lines.length) update(k, { lines });
+}
+
+/** Called by AskCard when the user clicks "Other". Removes the card and
+ *  pings the composer to pull focus. */
+export function pickAskOther(projectId: string, conversationId: string | null, askId: string) {
+  dismissAsk(projectId, conversationId, askId);
+  fireFocusComposer(key(projectId, conversationId));
 }
 
 /** Clear state for a "new chat" so the UI starts fresh */
@@ -144,6 +205,21 @@ export async function loadHistory(projectId: string, conversationId: string | nu
       }
     }
     update(k, { lines: mapped, conversationId });
+    // Seed the "this chat" running total from the backend so the cost
+    // checkpoint card doesn't reset to $0 on every reload. Best-effort —
+    // if it fails, we just start counting from zero for this session.
+    if (conversationId) {
+      try {
+        const totalRes = await apiJson<{ totalCostUsd: number }>(
+          `/api/projects/${projectId}/conversations/${conversationId}/cost-total`,
+        );
+        if (typeof totalRes.totalCostUsd === "number") {
+          update(k, { cumulativeCostUsd: totalRes.totalCostUsd });
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
   } catch {
     update(k, { error: "Could not load history" });
   }
@@ -195,12 +271,22 @@ export function sendMessage(
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
   };
 
+  // Any pending agent question or "Continue" prompt is considered
+  // answered the moment the user sends a new message (whether they
+  // picked an option button, clicked Continue, or typed freeform).
+  // Strip those cards so stale affordances don't pile up.
+  const prunedLines = snap.lines.filter(
+    (l) => l.kind !== "ask" && l.kind !== "continue_prompt",
+  );
+
   update(k, {
     error: null,
-    lines: [...snap.lines, userLine],
+    lines: [...prunedLines, userLine],
     busy: true,
     conversationId,
   });
+
+  internal.turnStartedAt = Date.now();
 
   const ws = new WebSocket(`${wsBaseUrl()}/ws/chat/${projectId}`);
   internal.ws = ws;
@@ -319,12 +405,55 @@ export function sendMessage(
       update(currentK, { lines: updated });
     }
 
+    if (type === "continue_suggested") {
+      // Server already auto-retried once and the turn is *still* short.
+      // Surface a visible "Continue" button so the user can resume with
+      // one click instead of typing.
+      update(currentK, {
+        lines: [
+          ...snap.lines,
+          { id: crypto.randomUUID(), kind: "continue_prompt" },
+        ],
+      });
+    }
+
+    if (type === "ask" && typeof data.question === "string" && Array.isArray(data.options)) {
+      const askId = (typeof data.id === "string" && data.id) || crypto.randomUUID();
+      const options = (data.options as unknown[]).filter((o): o is string => typeof o === "string");
+      let updated = finalizeStreaming(snap.lines);
+      updated = finalizeThinking(updated, internal);
+      updated.push({
+        id: askId,
+        kind: "ask",
+        question: data.question as string,
+        options,
+      });
+      update(currentK, { lines: updated });
+    }
+
     if (type === "done") {
       let updated = finalizeStreaming(snap.lines);
       updated = finalizeThinking(updated, internal);
       updated = updated.filter((l) => l.kind !== "tool_active");
+      // Cost checkpoint — subtle full-width card summarising what this
+      // turn cost and how long it took. We trust the server's costUsd
+      // and durationMs but fall back to a locally-measured duration if
+      // the payload is missing one.
+      const costUsd = typeof data.costUsd === "number" && Number.isFinite(data.costUsd) ? data.costUsd : 0;
+      const serverMs = typeof data.durationMs === "number" && Number.isFinite(data.durationMs) ? data.durationMs : 0;
+      const localMs = internal.turnStartedAt > 0 ? Date.now() - internal.turnStartedAt : 0;
+      const durationMs = serverMs > 0 ? serverMs : localMs;
+      const nextCumulative = snap.cumulativeCostUsd + costUsd;
+      updated.push({
+        id: crypto.randomUUID(),
+        kind: "checkpoint",
+        costUsd,
+        durationMs,
+        cumulativeCostUsd: nextCumulative,
+      });
       internal.ws = null;
-      update(currentK, { lines: updated, busy: false });
+      internal.turnStartedAt = 0;
+      update(currentK, { lines: updated, busy: false, cumulativeCostUsd: nextCumulative });
       // Always reload the preview when streaming finishes — the agent
       // may have edited files and the iframe should reflect the result.
       onRefreshPreview?.();

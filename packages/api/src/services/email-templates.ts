@@ -101,12 +101,7 @@ export function inviteEmailHtml(opts: {
   acceptUrl: string;
 }): string {
   const { projectName, projectLogoUrl, inviterName, role, acceptUrl } = opts;
-  const friendlyRole =
-    role === "client"
-      ? "edit content"
-      : role === "translator"
-        ? "help with translations"
-        : "collaborate";
+  const friendlyRole = role === "client" ? "edit content" : "collaborate";
   const inviterLine = inviterName
     ? `${escapeHtml(inviterName)} invited you to <strong>${escapeHtml(projectName)}</strong>.`
     : `You've been invited to <strong>${escapeHtml(projectName)}</strong>.`;

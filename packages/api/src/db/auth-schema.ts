@@ -14,6 +14,12 @@ export const user = sqliteTable("user", {
   instanceRole: text("instance_role").$type<InstanceRole>(),
   /** UI language preference, e.g. "en" / "de" */
   language: text("language"),
+  /** When truthy, the monthly usage report scheduler emails this user a
+   *  summary of their site's usage on the 1st of every month. Opt-in;
+   *  operators flip it on per client for weiterverrechnung. */
+  monthlyUsageReportsEnabled: integer("monthly_usage_reports_enabled", { mode: "boolean" })
+    .default(false)
+    .notNull(),
   createdAt: integer("createdAt", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),
