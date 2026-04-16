@@ -122,16 +122,13 @@ function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: boolean }) 
     }
 
     if (role === "admin") {
-      if (toolName === "Bash") {
-        const cmd = String((input as { command?: string }).command ?? "");
-        if (/(^|\s)rm\s+(-|\s)/.test(cmd)) {
-          return {
-            behavior: "deny",
-            message: "Destructive rm is blocked. Remove files through the assistant with explicit paths or use the Publish button after commits.",
-            toolUseID: id,
-          };
-        }
-      }
+      // Admins have full control of their own project workspace — every
+      // tool, every command, no paternalistic blocks. The workspace is
+      // isolated (per-project clone on disk, git-backed so nothing is
+      // truly unrecoverable) and the admin asked for Claude Code to
+      // run. Removing the old `rm` block because recovering from a
+      // broken install often means `rm -rf node_modules` and we shouldn't
+      // be the thing standing in the way.
       return { behavior: "allow", toolUseID: id };
     }
 
@@ -206,7 +203,92 @@ function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: boolean }) 
   };
 }
 
-export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> | null {
+/**
+ * Convert a tool call into a single plain-language line for the chat
+ * transcript. The chat wants to SHOW more of what the agent is doing —
+ * every Read, Edit, Bash, MCP call — but never in technical terms. A
+ * Read of `src/pages/index.astro` becomes "Reading the homepage"; an
+ * `npm install` becomes "Installing packages"; a diagnostic tool call
+ * becomes "Checking your site". Everything else falls back to a
+ * generic "Working on your site" — never surfaces the raw tool name.
+ */
+function humanizeToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  const filePath = typeof input.file_path === "string"
+    ? input.file_path
+    : typeof input.path === "string"
+      ? input.path
+      : null;
+  const humanFile = (fp: string): string => {
+    const p = fp.replace(/\\/g, "/").replace(/^\.\//, "");
+    // Pages
+    if (/\/pages\/(index|home)\.(astro|jsx?|tsx?|md|mdx|html?)$/i.test(p)) return "the homepage";
+    const pageMatch = p.match(/\/pages\/([^/]+?)\.(astro|jsx?|tsx?|md|mdx|html?)$/i);
+    if (pageMatch) return `the ${pageMatch[1].replace(/[-_]/g, " ")} page`;
+    if (/\/pages\/\[/.test(p)) return "a dynamic page";
+    // Layouts / components
+    if (/\/layouts\//i.test(p)) return "the page layout";
+    const compMatch = p.match(/\/components\/([^/]+?)\.[a-z]+$/i);
+    if (compMatch) return `the ${compMatch[1].replace(/[-_]/g, " ").toLowerCase()} section`;
+    // Content
+    if (/\/content\/.+\.(md|mdx)$/i.test(p)) {
+      const slug = p.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
+      return slug ? `the ${slug.replace(/[-_]/g, " ")} post` : "a post";
+    }
+    // Config-ish
+    if (p.endsWith("package.json")) return "the site's setup";
+    if (/astro\.config|next\.config|vite\.config|tsconfig/.test(p)) return "the site's configuration";
+    if (p.endsWith(".css") && /global|styles?/i.test(p)) return "the global styles";
+    // Fallback: the file name, stripped
+    const name = p.split("/").pop()?.replace(/\.[^.]+$/, "") ?? p;
+    return name.replace(/[-_]/g, " ");
+  };
+
+  switch (toolName) {
+    case "Read":
+      return filePath ? `Reading ${humanFile(filePath)}` : "Reading your site";
+    case "Write":
+      return filePath ? `Writing ${humanFile(filePath)}` : "Writing a new file";
+    case "Edit":
+      return filePath ? `Updating ${humanFile(filePath)}` : "Updating your site";
+    case "NotebookEdit":
+      return filePath ? `Updating ${humanFile(filePath)}` : "Updating your site";
+    case "Glob":
+    case "Grep":
+      return "Searching your site";
+    case "WebFetch":
+    case "WebSearch":
+      return "Looking something up online";
+    case "Bash": {
+      const cmd = typeof input.command === "string" ? input.command : "";
+      if (/\b(npm|yarn|pnpm)\s+install\b/.test(cmd)) return "Installing packages";
+      if (/\b(npm|yarn|pnpm)\s+(run\s+)?build\b/.test(cmd)) return "Building your site";
+      if (/\b(astro\s+dev|npm\s+run\s+dev|next\s+dev)\b/.test(cmd)) return "Starting the preview";
+      if (/\bastro\s+check\b/.test(cmd)) return "Checking your site for issues";
+      if (/\bgit\s+(add|commit)\b/.test(cmd)) return "Saving changes";
+      if (/\bgit\s+(status|diff|log|show)\b/.test(cmd)) return "Looking at recent changes";
+      if (/\bgit\s+push\b/.test(cmd)) return "Publishing your site";
+      if (/\bgit\s+(clone|fetch|pull)\b/.test(cmd)) return "Syncing with your repository";
+      if (/^rm\b|\brm\s+-/.test(cmd)) return "Cleaning up files";
+      if (/^mv\b/.test(cmd)) return "Moving files";
+      if (/^mkdir\b/.test(cmd)) return "Creating a folder";
+      return "Running a setup command";
+    }
+    case "mcp__quillra-diagnostics__get_preview_status":
+      return "Checking your site";
+    case "mcp__quillra-diagnostics__tail_preview_logs":
+      return "Looking at recent messages from your site";
+    case "mcp__quillra-diagnostics__restart_preview":
+      return "Restarting your site";
+    default:
+      if (toolName.startsWith("mcp__")) return "Checking your site";
+      return "Working on your site";
+  }
+}
+
+export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> | Array<Record<string, unknown>> | null {
   switch (msg.type) {
     case "tool_use_summary":
       return { type: "tool", detail: msg.summary };
@@ -220,10 +302,39 @@ export function mapSdkMessageToClient(msg: SDKMessage): Record<string, unknown> 
       if (ex.kind === "thinking_start") return { type: "thinking_start" };
       return null;
     }
-    case "assistant":
-      // Full message arrives after streaming — skip to avoid duplicate text.
-      // The stream_event deltas already sent the text incrementally.
-      return null;
+    case "assistant": {
+      // Extract any tool_use blocks and emit humanized "tool_call" events
+      // so the transcript shows what the agent is actually doing on each
+      // step (Read, Edit, Bash, …) without leaking tool names or code.
+      const content = (msg.message as { content?: unknown }).content;
+      if (!Array.isArray(content)) return null;
+      const events: Array<Record<string, unknown>> = [];
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          (block as { type?: string }).type === "tool_use"
+        ) {
+          const name = typeof (block as { name?: unknown }).name === "string"
+            ? ((block as { name: string }).name)
+            : "";
+          const rawInput = (block as { input?: unknown }).input;
+          const input =
+            rawInput && typeof rawInput === "object"
+              ? (rawInput as Record<string, unknown>)
+              : {};
+          const id = typeof (block as { id?: unknown }).id === "string"
+            ? (block as { id: string }).id
+            : undefined;
+          events.push({
+            type: "tool_call",
+            toolUseId: id,
+            label: humanizeToolCall(name, input),
+          });
+        }
+      }
+      return events.length > 0 ? events : null;
+    }
     case "result": {
       if (msg.subtype === "success") {
         return { type: "done", result: msg.result, costUsd: msg.total_cost_usd };
@@ -303,7 +414,16 @@ export async function* runProjectAgent(params: {
     return;
   }
 
-  const model = process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-20250514";
+  // Migrations are the one workflow where picking the most capable
+  // model pays for itself many times over: the agent has to rewrite an
+  // entire codebase, pin correct versions, and hit pixel-parity on
+  // design. One wrong @astrojs/tailwind version and the whole site
+  // falls over. Sonnet handles day-to-day edits just fine, so we
+  // route by mode rather than paying Opus rates on every "change the
+  // headline" turn.
+  const model = params.migrationMode
+    ? process.env.CLAUDE_MIGRATION_MODEL?.trim() || "claude-opus-4-7"
+    : process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-20250514";
   const abortController = new AbortController();
 
   // Build the system prompt with optional language + migration skill
@@ -375,8 +495,14 @@ export async function* runProjectAgent(params: {
           : {}),
         includePartialMessages: true,
         persistSession: true,
+        // Role-based gating still happens through `canUseTool` below,
+        // but the SDK's own permission system (which prompts for
+        // approval on anything that isn't a file edit) stays out of
+        // the way. Without bypass the agent's Bash + MCP calls were
+        // being silently denied with a "permission error" that no
+        // amount of our allowlist could override.
         canUseTool: buildCanUseTool(params.role, { migrationMode: params.migrationMode }),
-        permissionMode: "acceptEdits",
+        permissionMode: "bypassPermissions",
       },
     });
     let yieldedAny = false;
@@ -422,20 +548,26 @@ export async function* runProjectAgent(params: {
       }
       const out = mapSdkMessageToClient(msg);
       if (!out) continue;
-      // Detect "session not found / no conversation" coming through as a result error.
-      // If we have nothing else to show the user yet AND we were resuming a session,
-      // treat it as a recoverable session-loss instead of streaming the raw error.
-      if (
-        out.type === "error" &&
-        sessionId &&
-        !yieldedAny &&
-        typeof out.message === "string" &&
-        /no conversation found|session id|session not found/i.test(out.message)
-      ) {
-        throw SESSION_LOST;
+      // The assistant case can emit multiple tool_call events in one
+      // SDK message; normalise to an array so we yield each separately.
+      const outs = Array.isArray(out) ? out : [out];
+      for (const ev of outs) {
+        // Detect "session not found / no conversation" coming through as a
+        // result error. If we have nothing else to show the user yet AND we
+        // were resuming a session, treat it as a recoverable session-loss
+        // instead of streaming the raw error.
+        if (
+          ev.type === "error" &&
+          sessionId &&
+          !yieldedAny &&
+          typeof ev.message === "string" &&
+          /no conversation found|session id|session not found/i.test(ev.message)
+        ) {
+          throw SESSION_LOST;
+        }
+        yieldedAny = true;
+        yield ev;
       }
-      yieldedAny = true;
-      yield out;
     }
   }
 

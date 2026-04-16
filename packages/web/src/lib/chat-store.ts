@@ -19,6 +19,12 @@ export type ChatLine =
   | { id: string; kind: "tool"; detail: string }
   | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean }
   | { id: string; kind: "tool_active"; toolName: string; elapsed: number }
+  // Subtle per-step line in the transcript — "Reading the homepage",
+  // "Updating the Hero section", "Restarting your site" — emitted by
+  // the server's humanizer from each tool_use block. Gives visibility
+  // into what the agent is actually doing without ever surfacing a
+  // tool name or file path.
+  | { id: string; kind: "tool_call"; label: string }
   // Shown once per completed turn — subtle full-width card with cost + wall-clock.
   | { id: string; kind: "checkpoint"; costUsd: number; durationMs: number; cumulativeCostUsd: number }
   // Rendered when the server auto-retried once and the turn *still* looks
@@ -393,6 +399,22 @@ export function sendMessage(
         kind: "tool_active",
         toolName: data.toolName as string,
         elapsed: data.elapsed as number,
+      });
+      update(currentK, { lines: updated });
+    }
+
+    if (type === "tool_call" && typeof data.label === "string" && data.label) {
+      // One subtle line per tool the agent is running. Finalise any
+      // live-streaming assistant/thinking bubble first so the line
+      // lands visually BETWEEN the reasoning and the next tool step,
+      // not inside the middle of a word.
+      let updated = finalizeStreaming(snap.lines);
+      updated = finalizeThinking(updated, internal);
+      updated = updated.filter((l) => l.kind !== "tool_active");
+      updated.push({
+        id: crypto.randomUUID(),
+        kind: "tool_call",
+        label: data.label,
       });
       update(currentK, { lines: updated });
     }

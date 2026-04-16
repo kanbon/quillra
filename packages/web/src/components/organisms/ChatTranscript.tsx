@@ -6,7 +6,6 @@ import { CopyMessageButton } from "@/components/molecules/CopyMessageButton";
 import { ToolEventRow } from "@/components/molecules/ToolEventRow";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 import type { ChatLine } from "@/hooks/useProjectChat";
 
 type Props = {
@@ -21,16 +20,25 @@ type Props = {
   onAskOther?: (askId: string) => void;
 };
 
+/**
+ * Thinking bubble — much quieter than the old card. No borders, just a
+ * semibold darker header you can click to expand. While streaming the
+ * bubble stays open so the thought scrolls by live; once it finishes
+ * it auto-collapses after a short grace period (users can still click
+ * to re-open). Matches the tone of "Thought for 3s" rows in tools
+ * like Cursor / Linear.
+ */
+const THINKING_AUTO_COLLAPSE_MS = 2500;
+
 function ThinkingCard({ text, durationMs, streaming }: { text: string; durationMs?: number; streaming?: boolean }) {
   const { t } = useT();
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
-  // User-controlled expand state. While streaming we keep it expanded so
-  // the thought shows live; once done we leave the state alone — NO
-  // auto-collapse. The previous version collapsed after 1.5s which felt
-  // like the thinking bubble was "disappearing" right as the user noticed it.
   const [expanded, setExpanded] = useState(true);
-  const contentRef = useRef<HTMLDivElement>(null);
+  // Remember whether the user manually clicked the row after the thought
+  // finished — if they did, we respect that choice and never auto-collapse
+  // (or re-expand) behind their back.
+  const [userToggled, setUserToggled] = useState(false);
 
   useEffect(() => {
     if (!streaming) return;
@@ -39,36 +47,45 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
     return () => clearInterval(interval);
   }, [streaming]);
 
+  // Auto-collapse shortly after the thought ends. Gives the user a beat
+  // to notice the final content before the row quietly folds away.
+  useEffect(() => {
+    if (streaming) return;
+    if (userToggled) return;
+    const timer = setTimeout(() => setExpanded(false), THINKING_AUTO_COLLAPSE_MS);
+    return () => clearTimeout(timer);
+  }, [streaming, userToggled]);
+
   const seconds = streaming ? Math.round(elapsed / 1000) : Math.round((durationMs ?? 0) / 1000);
 
   return (
     <div className="max-w-[min(100%,42rem)] animate-[fadeIn_0.2s_ease-out]">
       <button
         type="button"
-        className={cn(
-          "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-all duration-200",
-          streaming
-            ? "border-amber-200 bg-amber-50/60 text-amber-800 hover:bg-amber-50"
-            : "border-neutral-200/80 bg-neutral-50/80 text-neutral-500 hover:bg-neutral-100",
-        )}
-        onClick={() => text && setExpanded((e) => !e)}
+        className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[13px] transition-colors hover:bg-neutral-50"
+        onClick={() => {
+          if (!text) return;
+          setUserToggled(true);
+          setExpanded((e) => !e);
+        }}
       >
         {streaming ? (
-          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-[pulse_1.5s_ease-in-out_infinite]" />
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-400 animate-[pulse_1.5s_ease-in-out_infinite]" />
         ) : (
-          <span className="h-2 w-2 shrink-0 rounded-full bg-neutral-300" />
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-300" />
         )}
-        <span className={cn("font-medium", streaming ? "text-amber-800" : "text-neutral-600")}>
+        <span className="font-semibold text-neutral-600">
           {streaming ? t("chat.thinking") : t("chat.thought")}
-          {seconds > 0 && ` ${t("chat.forSeconds", { seconds })}`}
+          {seconds > 0 && (
+            <span className="ml-1 font-normal text-neutral-400">
+              {t("chat.forSeconds", { seconds })}
+            </span>
+          )}
           {streaming && "…"}
         </span>
         {text && (
           <span
-            className={cn(
-              "ml-auto transition-transform duration-200",
-              streaming ? "text-amber-500" : "text-neutral-400",
-            )}
+            className="ml-auto text-neutral-300 transition-transform duration-200"
             style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}
           >
             ▸
@@ -76,19 +93,13 @@ function ThinkingCard({ text, durationMs, streaming }: { text: string; durationM
         )}
       </button>
       <div
-        ref={contentRef}
         className="overflow-hidden transition-all duration-300 ease-out"
         style={{
           maxHeight: expanded && text ? "600px" : "0px",
           opacity: expanded && text ? 1 : 0,
         }}
       >
-        <div
-          className={cn(
-            "mt-1 rounded-lg border px-3 py-2 text-xs leading-relaxed",
-            streaming ? "border-amber-100 bg-white text-neutral-600" : "border-neutral-200/60 bg-white text-neutral-500",
-          )}
-        >
+        <div className="ml-4 mt-1 border-l-2 border-neutral-200 py-1 pl-3 text-[12px] leading-relaxed text-neutral-500">
           {text}
         </div>
       </div>
@@ -168,6 +179,29 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
               <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-400" />
               <span className="font-medium">{entry.toolName}</span>
               {entry.elapsed > 0 && <span className="text-blue-400">{Math.round(entry.elapsed)}s</span>}
+            </div>
+          );
+        }
+        if (entry.kind === "tool_call") {
+          return (
+            <div
+              key={entry.id}
+              className="flex animate-[fadeIn_0.15s_ease-out] items-center gap-2 px-1 text-[12px] text-neutral-500"
+            >
+              <svg
+                className="h-3.5 w-3.5 shrink-0 text-neutral-400"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.8}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M7 10l2 2 4-4" />
+                <circle cx="10" cy="10" r="8" />
+              </svg>
+              <span className="min-w-0 truncate">{entry.label}</span>
             </div>
           );
         }
