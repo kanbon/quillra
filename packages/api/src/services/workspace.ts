@@ -323,6 +323,12 @@ export async function ensureRepoCloned(
      *  will just throw away — or worse, OOM the container on an
      *  ancient CRA / Gatsby dep graph before the agent even runs. */
     skipInstall?: boolean;
+    /** Called when the install step fails (missing version, ETARGET,
+     *  peer-dep conflict, OOM, etc). Called INSTEAD of throwing so the
+     *  chat turn can still run and the agent can see + fix the cause.
+     *  File ops don't require node_modules. When this callback is not
+     *  supplied, install failures still throw — the old behaviour. */
+    onInstallFailed?: (error: string) => void;
   } = {},
 ): Promise<string> {
   const dir = projectRepoPath(projectId);
@@ -332,11 +338,26 @@ export async function ensureRepoCloned(
     ? `https://x-access-token:${token}@github.com/${githubRepoFullName}.git`
     : `https://github.com/${githubRepoFullName}.git`;
 
+  const runInstall = async () => {
+    if (opts.skipInstall) return;
+    try {
+      await installDependenciesIfNeeded(dir, projectId);
+    } catch (e) {
+      if (opts.onInstallFailed) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[workspace] install failed for ${projectId}; continuing so the chat can debug:`, msg.slice(0, 200));
+        opts.onInstallFailed(msg);
+        return;
+      }
+      throw e;
+    }
+  };
+
   if (!fs.existsSync(gitDir)) {
     setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     await simpleGit().clone(url, dir, ["--branch", branch, "--single-branch", "--depth", "1"]);
-    if (!opts.skipInstall) await installDependenciesIfNeeded(dir, projectId);
+    await runInstall();
   } else {
     sweepStaleGitLocks(dir);
     const g = simpleGit(dir);
@@ -346,7 +367,7 @@ export async function ensureRepoCloned(
     await g.fetch("origin", branch);
     await g.checkout(branch);
     await g.pull("origin", branch).catch(() => undefined);
-    if (!opts.skipInstall) await installDependenciesIfNeeded(dir, projectId);
+    await runInstall();
   }
   // Register .quillra-temp/ with git's local exclude so chat
   // attachments never show up in a diff, a status, or a commit.

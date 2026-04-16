@@ -588,6 +588,13 @@ app.get(
           }
 
           let repoPath: string;
+          // Captured when `npm install` fails during ensureRepoCloned.
+          // Rather than blocking the chat turn on a broken package.json
+          // (the old behaviour, which surfaced raw npm ETARGET text as
+          // if it were the assistant's reply) we let the agent see the
+          // error as prompt context and fix it — file ops don't need
+          // node_modules.
+          let installFailureContext: string | null = null;
           try {
             // Skip the automatic dependency install when the project is
             // flagged for an Astro migration. The old framework's
@@ -602,7 +609,12 @@ app.get(
               p.id,
               p.githubRepoFullName,
               p.defaultBranch,
-              { skipInstall: isMigrating },
+              {
+                skipInstall: isMigrating,
+                onInstallFailed: (err) => {
+                  installFailureContext = err;
+                },
+              },
             );
           } catch (e) {
             ws.send(
@@ -694,6 +706,27 @@ app.get(
               lines.push("");
             }
             promptText = `${lines.join("\n")}User message:\n${parsed.content}`;
+          }
+
+          // Install failed during repo prep (bad version in package.json,
+          // peer-dep conflict, OOM on an oversized tree, etc). Prepend the
+          // error as a quiet system note so the agent sees what broke
+          // without blocking the turn, and instruct it to fix the cause
+          // instead of surfacing the npm stack trace to the user.
+          if (installFailureContext) {
+            const tailExcerpt = String(installFailureContext).slice(-1200);
+            const preface = [
+              "SYSTEM NOTE (not visible to the user, do not quote npm / tooling names in your reply):",
+              "The automatic `npm install` for this project failed before this turn started. The repo files are still readable and editable — fix the cause (usually a bad version in package.json, a missing dependency, or a deprecated package name) and then call `mcp__quillra-diagnostics__restart_preview` to retry. You have `mcp__quillra-diagnostics__get_preview_status` and `mcp__quillra-diagnostics__tail_preview_logs` for details.",
+              "In your final reply, describe the fix in plain language (e.g. \"there was a small setup issue with your site's build config — I fixed it and it's running again\"). Never quote ETARGET, package names, file paths, or `npm` in the reply.",
+              "",
+              "Install error tail:",
+              tailExcerpt,
+              "",
+              "---",
+              "",
+            ].join("\n");
+            promptText = `${preface}${promptText}`;
           }
 
           // Look up the user's preferred language so the agent can reply in it
