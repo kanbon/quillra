@@ -39,23 +39,45 @@ Quillra is the missing layer. Your repo stays the source of truth. Your client o
 
 ## What it does
 
-- 💬 **Chat-first editing** — clients describe changes in plain language, the agent edits the real files
-- 👀 **Live preview** — every project gets its own dev server with hot reload, opened in an iframe right next to the chat. One-click "Ask the assistant to fix it" when the preview errors out.
-- 🔁 **Real Git history** — every change is a real commit, attributed and reviewable, pushed to your existing repo
-- 🚀 **Your existing pipeline** — Pages, Vercel, Netlify, Cloudflare, your VPS — Quillra never touches your hosting
-- 🖼️ **Smart file handling** — paste, drag, or click to upload images or text/content files; saved to the right folder for your framework, optimised only when the framework doesn't already
-- 🔒 **Role-aware permissions** — admin, editor, and client scopes baked into the agent's tool permissions
-- 🧾 **Spend controls** — per-turn cost checkpoint visible in chat, organisation-wide usage dashboard with per-user drill-downs, optional warn/hard-cap thresholds (global, per-role, or per-user), and opt-in monthly usage reports per user for weiterverrechnung
-- 🪄 **One-click migrate to Astro** — for vibe-coded React/Next/Gatsby sites that need a faster foundation, with design parity as a hard requirement
+### Edit like a client, ship like a developer
+
+The editing loop is chat on the left, live preview on the right. The client types what they want in plain language; the agent edits the real files in your repo; the preview reloads; they hit **Publish** and your existing CI deploys it.
+
+- **Chat-first editing** — describe changes in plain language, no Markdown, no file paths
+- **Live preview** — per-project dev server with hot reload. When it errors out, one click hands the error straight to the assistant
+- **Real Git history** — every change is a real commit, attributed and reviewable
+- **Your existing pipeline** — Pages, Vercel, Netlify, Cloudflare, your VPS; Quillra never touches hosting
+
+### Run it for real customers
+
+Project-scoped membership with a branded portal designed for non-technical website owners.
+
+- **Branded client login** — per-project logo, email-code sign-in, no GitHub account required
+- **Role-aware permissions** — admin / editor / client scopes baked into the agent's tool permissions, so clients can edit content files but never touch config
+- **Email built in** — Resend or any SMTP provider. Invites, warnings, and reports all ride a shared HTML template that renders cleanly in Outlook and Gmail
+
+### Know (and cap) what it costs
+
+Designed for agencies passing Anthropic costs on to the customer.
+
+- **Per-turn cost checkpoint** visible in chat the moment a task finishes
+- **Organisation usage dashboard** with a per-user drill-down — 12-month chart + monthly / per-project / per-model tables
+- **Warn + hard-cap thresholds** at global, per-role, or per-user scope. Owners bypass caps; everyone else sees a friendly "please contact the site owner" message when they hit one, and the warning email reaches you first
+- **Monthly usage report** emailed to opted-in users — pass-through billing to clients, one click to enable per user
+
+### One-click migrate to Astro
+
+For vibe-coded React / Next / Gatsby sites that want a faster foundation. Design parity is a hard requirement — the migration agent won't ship a "mostly identical" port.
 
 <p align="center">
   <img src="assets/auto-migrate-astro.webp" alt="Convert to Astro toggle in the project settings" width="640" />
 </p>
 
-- 🏷️ **Branded client portal** — each project can set its own logo for the client sign-in page; clients log in with an email code, not GitHub
-- 📧 **Email built in** — Resend or any SMTP provider; invites, warnings, and reports all flow through a shared branded template that renders cleanly in Outlook and Gmail
-- 🌍 **Full i18n** — English and German UI today, more on request; the agent answers in the user's chosen language
-- 🏠 **Self-hosted by default** — one Docker container, your VPS, your data
+### Also
+
+- **Smart file handling** — paste, drag, or click to upload. Images are routed to the framework's asset folder and optimised only when the framework doesn't already
+- **Full i18n** — English and German UI today; the agent replies in the user's chosen language
+- **Self-hosted** — one Docker container, your VPS, your data
 
 ## Frameworks we know
 
@@ -132,9 +154,7 @@ Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms,
 
 ## Status
 
-**Ready for use.** Running in production on [cms.kanbon.at](https://cms.kanbon.at) and backing real agency work.
-
-Shipped: GitHub OAuth + email-code login for team and clients · projects with per-project membership · multi-conversation chat with persistent history and cost-per-turn checkpoints · live preview with stage-aware boot screen and one-click "ask the assistant to fix it" on errors · framework-aware file upload (images + text/content) · GitHub App-based publish · role-aware tooling (admin / editor / client) · branded client login portal (per-project logo) · pluggable email (Resend or SMTP) with a shared Outlook-safe template · Astro migration with hard design parity · organisation-wide usage dashboard with per-user drill-down (12-month chart + tables) · spend controls (warn + hard cap, global / per-role / per-user, owner-exempt) · monthly usage report email per user (opt-in, daily cron + boot-time catch-up) · full English/German i18n.
+**Ready for use.** Used in production by agencies handing real CMSes to real clients. The surface is stable; ongoing work is polish, wider framework coverage, and a managed SaaS.
 
 ## Contributing
 
