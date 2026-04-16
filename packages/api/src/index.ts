@@ -831,6 +831,7 @@ app.get(
               prompt,
               role,
               projectId,
+              previewDevCommandOverride: p.previewDevCommand ?? null,
               language: userLanguage,
               agentSessionId,
               migrationMode,

@@ -2,6 +2,7 @@ import { query, type PermissionResult, type SDKMessage } from "@anthropic-ai/cla
 import type { ProjectRole } from "../db/app-schema.js";
 import { getInstanceSetting } from "./instance-settings.js";
 import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
+import { buildAgentDiagnosticsMcpServer } from "./agent-diagnostics-tools.js";
 
 /**
  * System prompt that shapes how the agent talks to Quillra users.
@@ -135,6 +136,12 @@ function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: boolean }) 
     }
 
     if (role === "editor") {
+      // In-process diagnostic MCP tools (read-only preview status +
+      // restart). Editors are trusted enough to debug their own dev
+      // server without jumping to admin.
+      if (toolName.startsWith("mcp__quillra-diagnostics__")) {
+        return { behavior: "allow", toolUseID: id };
+      }
       if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
         return { behavior: "allow", toolUseID: id };
       }
@@ -237,6 +244,22 @@ const LANGUAGE_NAMES: Record<string, string> = {
   de: "German (Deutsch)",
 };
 
+/**
+ * Appended to the system prompt whenever the diagnostics MCP server is
+ * wired up (admin + editor roles). Tells the agent when to reach for
+ * the tools and — importantly — to NEVER mention them to the end user.
+ * The surface stays plain-language for the website owner.
+ */
+const DIAGNOSTICS_TOOL_HINT = `You have three tools for inspecting the live preview's dev server:
+
+- \`mcp__quillra-diagnostics__get_preview_status\` — returns JSON with the current stage (starting / ready / error), whether the child process is running, the exit code if it died, an HTTP probe of the dev server, the detected framework, the resolved dev command, and the last 20 stderr + 10 stdout log lines. This is your primary debugging tool.
+- \`mcp__quillra-diagnostics__tail_preview_logs\` — returns a larger interleaved slice of recent log lines when 20 isn't enough.
+- \`mcp__quillra-diagnostics__restart_preview\` — stops and restarts the dev server, waits a few seconds, returns the new status. Use this after you've fixed the cause of an error so the user doesn't have to click Restart themselves.
+
+Call \`get_preview_status\` whenever the user reports the site isn't working, the preview goes blank, you've just finished a migration or dependency install, or you suspect the dev server crashed. Read \`recentErrors\` first — it's usually enough to identify the problem (missing module, port conflict, bad config, OOM exit code).
+
+Never mention these tool names, the log fields, or "the dev server" in your reply to the user. Describe the outcome in plain language: "your site had a missing piece — I've added it and it's back online" rather than "restart_preview returned stage=ready". The user is non-technical.`;
+
 /** Raw usage summary yielded once per successful run. The numbers come
  *  straight from the SDK's result envelope so the caller persists what
  *  Anthropic actually billed, not our own approximation. */
@@ -257,6 +280,9 @@ export async function* runProjectAgent(params: {
   prompt: string;
   role: ProjectRole;
   projectId: string;
+  /** From projects.preview_dev_command — lets the diagnostics tools
+   *  resolve the exact dev command the user configured. */
+  previewDevCommandOverride?: string | null;
   language?: string | null;
   agentSessionId?: string | null;
   onSessionId?: (sessionId: string) => void;
@@ -294,6 +320,25 @@ export async function* runProjectAgent(params: {
   if (params.migrationMode) {
     systemPromptText = `${systemPromptText}\n\n---\n\n${ASTRO_MIGRATION_SYSTEM_PROMPT}`;
   }
+
+  // Technical roles (admin + editor) get in-process diagnostic tools
+  // wired up as an MCP server. Gives the agent a way to see why the
+  // live preview isn't working — previously it was blind to npm-install
+  // OOMs, dev-server crash loops, and Astro config errors and would
+  // either claim success or retry without understanding. Clients never
+  // touch the preview, so they don't get these tools.
+  const diagnosticsEligible = params.role === "admin" || params.role === "editor";
+  const diagnosticsServer = diagnosticsEligible
+    ? buildAgentDiagnosticsMcpServer({
+        projectId: params.projectId,
+        repoPath: params.cwd,
+        previewDevCommandOverride: params.previewDevCommandOverride ?? null,
+      })
+    : null;
+  if (diagnosticsServer) {
+    systemPromptText = `${systemPromptText}\n\n---\n\n${DIAGNOSTICS_TOOL_HINT}`;
+  }
+
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
   // Symbol thrown internally to trigger a retry without resume when the
@@ -315,6 +360,9 @@ export async function* runProjectAgent(params: {
           CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
         },
         tools: { type: "preset", preset: "claude_code" },
+        ...(diagnosticsServer
+          ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } }
+          : {}),
         includePartialMessages: true,
         persistSession: true,
         canUseTool: buildCanUseTool(params.role, { migrationMode: params.migrationMode }),
