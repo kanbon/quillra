@@ -439,20 +439,30 @@ export function sendMessage(
       // turn cost and how long it took. We trust the server's costUsd
       // and durationMs but fall back to a locally-measured duration if
       // the payload is missing one.
+      //
+      // Skip the card entirely when the turn paused on an <ask> block —
+      // the task isn't "done", the agent is waiting for the user's
+      // answer. Showing a "Done in 3s" card under an open question is
+      // misleading.
       const costUsd = typeof data.costUsd === "number" && Number.isFinite(data.costUsd) ? data.costUsd : 0;
       const serverMs = typeof data.durationMs === "number" && Number.isFinite(data.durationMs) ? data.durationMs : 0;
       const localMs = internal.turnStartedAt > 0 ? Date.now() - internal.turnStartedAt : 0;
       const durationMs = serverMs > 0 ? serverMs : localMs;
       const nextCumulative = snap.cumulativeCostUsd + costUsd;
-      updated.push({
-        id: crypto.randomUUID(),
-        kind: "checkpoint",
-        costUsd,
-        durationMs,
-        cumulativeCostUsd: nextCumulative,
-      });
+      const pausedForQuestion = data.pausedForQuestion === true;
+      if (!pausedForQuestion) {
+        updated.push({
+          id: crypto.randomUUID(),
+          kind: "checkpoint",
+          costUsd,
+          durationMs,
+          cumulativeCostUsd: nextCumulative,
+        });
+      }
       internal.ws = null;
       internal.turnStartedAt = 0;
+      // Cumulative cost still counts even when we don't render the card,
+      // so the next checkpoint picks up an accurate running total.
       update(currentK, { lines: updated, busy: false, cumulativeCostUsd: nextCumulative });
       // Always reload the preview when streaming finishes — the agent
       // may have edited files and the iframe should reflect the result.

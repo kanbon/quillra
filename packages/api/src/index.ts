@@ -950,6 +950,7 @@ app.get(
 
           const first = await runAgentOnce(promptText);
           assistantText += first.runText;
+          let pausedForQuestion = first.runEmittedAsk;
 
           // Skip the auto-nudge path during a migration run — migration
           // owns the whole conversation and must not get a surprise
@@ -958,6 +959,7 @@ app.get(
           if (!migrationMode && suspicious(first)) {
             const second = await runAgentOnce("Please continue.");
             assistantText += second.runText;
+            if (second.runEmittedAsk) pausedForQuestion = true;
             if (suspicious(second)) continueSuggested = true;
           }
 
@@ -967,12 +969,16 @@ app.get(
 
           // Single aggregated done event — carries cost for this whole
           // turn (including any auto-retry) plus wall-clock duration.
-          // The frontend renders a cost checkpoint card from these.
+          // `pausedForQuestion` tells the client this turn ended on an
+          // <ask> block: the frontend uses it to suppress the "Done"
+          // checkpoint card, since the task isn't actually finished —
+          // the agent is waiting for the user's answer.
           ws.send(
             JSON.stringify({
               type: "done",
               costUsd: totalCostUsd,
               durationMs: Date.now() - turnStartedAt,
+              pausedForQuestion,
             }),
           );
 
