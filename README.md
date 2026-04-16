@@ -67,7 +67,11 @@ Designed for agencies passing Anthropic costs on to the customer.
 
 ### One-click migrate to Astro
 
-For vibe-coded React / Next / Gatsby sites that want a faster foundation. Design parity is a hard requirement — the migration agent won't ship a "mostly identical" port.
+Built the site in **Lovable, Replit, Bolt, v0, or any other AI app builder**? You've got a React SPA that loads every page as a client bundle — fine to demo, rough to run for a real customer, and the builder's own UI is either too technical for them or exposes your credits and prompts.
+
+Flip one toggle and Quillra rewrites the project as Astro in place: every page becomes static by default, images optimise on the build, interactivity survives as islands, and the React code still sitting around gets swept out. **Design parity is a hard requirement** — the migration agent walks every page and fixes any visual drift before reporting done, so the site the client signs off on looks pixel-identical to the one you handed over.
+
+The end result: you hand the customer a clean, fast site and a chat-based editor they understand. The AI builder stays on your side of the fence.
 
 <p align="center">
   <img src="assets/auto-migrate-astro.webp" alt="Convert to Astro toggle in the project settings" width="640" />
