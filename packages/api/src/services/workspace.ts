@@ -293,10 +293,37 @@ export async function reinstallProjectDependencies(projectId: string): Promise<v
   await installDependenciesIfNeeded(dir, projectId);
 }
 
+/**
+ * Remove any stale `.git/index.lock` left behind by a previous crashed
+ * git operation. A container OOM-kill or process restart mid-`git
+ * commit` can leave this file, after which every subsequent checkout /
+ * pull fails with "Another git process seems to be running". This is
+ * safe to delete unconditionally — simple-git operations are sequential
+ * within a single repo dir, so if the file exists AND we're about to
+ * start a new operation, nobody else is holding it.
+ */
+function sweepStaleGitLocks(repoPath: string): void {
+  const lockPath = path.join(repoPath, ".git", "index.lock");
+  try {
+    if (fs.existsSync(lockPath)) {
+      fs.unlinkSync(lockPath);
+      console.warn(`[workspace] removed stale .git/index.lock in ${repoPath}`);
+    }
+  } catch { /* non-fatal */ }
+}
+
 export async function ensureRepoCloned(
   projectId: string,
   githubRepoFullName: string,
   branch: string,
+  opts: {
+    /** Skip running npm/yarn/pnpm install on the cloned repo. Set
+     *  when the caller is about to rewrite package.json (migration)
+     *  so we don't waste minutes installing a dep tree the agent
+     *  will just throw away — or worse, OOM the container on an
+     *  ancient CRA / Gatsby dep graph before the agent even runs. */
+    skipInstall?: boolean;
+  } = {},
 ): Promise<string> {
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
@@ -309,8 +336,9 @@ export async function ensureRepoCloned(
     setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     await simpleGit().clone(url, dir, ["--branch", branch, "--single-branch", "--depth", "1"]);
-    await installDependenciesIfNeeded(dir, projectId);
+    if (!opts.skipInstall) await installDependenciesIfNeeded(dir, projectId);
   } else {
+    sweepStaleGitLocks(dir);
     const g = simpleGit(dir);
     if (token) {
       await g.remote(["set-url", "origin", url]).catch(() => undefined);
@@ -318,7 +346,7 @@ export async function ensureRepoCloned(
     await g.fetch("origin", branch);
     await g.checkout(branch);
     await g.pull("origin", branch).catch(() => undefined);
-    await installDependenciesIfNeeded(dir, projectId);
+    if (!opts.skipInstall) await installDependenciesIfNeeded(dir, projectId);
   }
   // Register .quillra-temp/ with git's local exclude so chat
   // attachments never show up in a diff, a status, or a commit.

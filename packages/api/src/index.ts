@@ -502,7 +502,21 @@ app.get(
 
           let repoPath: string;
           try {
-            repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
+            // Skip the automatic dependency install when the project is
+            // flagged for an Astro migration. The old framework's
+            // package.json is about to be wholesale replaced by the
+            // agent, so installing its (often ancient, often massive)
+            // dep tree is wasted work — and historically has been
+            // OOM-killing the container before the agent ever runs.
+            // The agent will run `npm install` itself once it's
+            // written the new Astro package.json.
+            const isMigrating = p.migrationTarget === "astro";
+            repoPath = await ensureRepoCloned(
+              p.id,
+              p.githubRepoFullName,
+              p.defaultBranch,
+              { skipInstall: isMigrating },
+            );
           } catch (e) {
             ws.send(
               JSON.stringify({
