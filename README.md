@@ -9,7 +9,7 @@
   <br />
   Hand the keys to your clients without bolting WordPress, Typo3, or a headless CMS subscription onto a clean codebase.
   <br />
-  <em>Self-host for free, or use our paid SaaS.</em>
+  <em>Self-host for free, or <a href="https://www.quillra.com">join the waitlist for the managed SaaS</a>.</em>
 </p>
 
 <p align="center">
@@ -126,7 +126,7 @@ The **Sites** dashboard lists every project you can access; from the editor, use
 
 ### Don't want to self-host?
 
-We're rolling out a managed SaaS — same product, we run the box. Check the website for the waitlist.
+We're rolling out a managed SaaS — same product, we run the box. **Join the waitlist at [quillra.com](https://www.quillra.com).**
 
 ---
 
@@ -158,7 +158,7 @@ Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms,
 
 ## Status
 
-**Ready for use.** Used in production by agencies handing real CMSes to real clients. The surface is stable; ongoing work is polish, wider framework coverage, and a managed SaaS.
+**Ready for use.** Used in production by agencies handing real CMSes to real clients. The surface is stable; ongoing work is polish, wider framework coverage, and the managed SaaS (waitlist open at [quillra.com](https://www.quillra.com)).
 
 ## Contributing
 
