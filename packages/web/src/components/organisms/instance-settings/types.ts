@@ -17,10 +17,7 @@ export type StatusResponse = {
 };
 
 /** Convenience getter — returns a zero-state entry if the key is missing. */
-export function getStatus(
-  status: StatusResponse | null,
-  key: string,
-): SettingStatus {
+export function getStatus(status: StatusResponse | null, key: string): SettingStatus {
   return (
     status?.values[key] ?? {
       set: false,

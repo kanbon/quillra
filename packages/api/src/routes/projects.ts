@@ -1,13 +1,22 @@
+import fs from "node:fs";
+import path from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
+import sharp from "sharp";
+import { simpleGit } from "simple-git";
 import { z } from "zod";
-import { db, rawSqlite } from "../db/index.js";
 import { user } from "../db/auth-schema.js";
+import { db, rawSqlite } from "../db/index.js";
 import { conversations, messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
-import type { ProjectRole } from "../db/app-schema.js";
+import { detectFramework } from "../services/framework.js";
+import { processUploadToWebP } from "../services/image.js";
+import { getInstanceSetting } from "../services/instance-settings.js";
+import { beat as presenceBeat, listOthers as presenceListOthers } from "../services/presence.js";
+import { getPreviewStatus } from "../services/preview-status.js";
 import {
+  QUILLRA_TEMP_DIR,
   clearProjectRepoClone,
   ensureQuillraTempIgnored,
   ensureRepoCloned,
@@ -18,21 +27,10 @@ import {
   previewPortForProject,
   projectRepoPath,
   pushToGitHub,
-  QUILLRA_TEMP_DIR,
   reinstallProjectDependencies,
   resolveDevCommand,
   startDevPreview,
-  stopPreview,
 } from "../services/workspace.js";
-import { getPreviewStatus } from "../services/preview-status.js";
-import { processUploadToWebP } from "../services/image.js";
-import { detectFramework } from "../services/framework.js";
-import { getInstanceSetting } from "../services/instance-settings.js";
-import { beat as presenceBeat, listOthers as presenceListOthers } from "../services/presence.js";
-import sharp from "sharp";
-import { simpleGit } from "simple-git";
-import fs from "node:fs";
-import path from "node:path";
 
 type Variables = {
   user: SessionUser | null;
@@ -40,7 +38,10 @@ type Variables = {
   clientSession: { projectId: string } | null;
 };
 
-async function requireUser(c: { get: (k: "user") => SessionUser | null; json: (b: unknown, s: number) => Response }) {
+async function requireUser(c: {
+  get: (k: "user") => SessionUser | null;
+  json: (b: unknown, s: number) => Response;
+}) {
   const user = c.get("user");
   if (!user) return { error: c.json({ error: "Unauthorized" }, 401) };
   return { user };
@@ -150,7 +151,10 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const schema = z.object({
       name: z.string().min(1).max(200).optional(),
       previewDevCommand: z.string().max(2000).nullable().optional(),
-      githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
+      githubRepoFullName: z
+        .string()
+        .regex(/^[\w.-]+\/[\w.-]+$/)
+        .optional(),
       defaultBranch: z.string().min(1).max(255).optional(),
       // Accepts either a real https URL or a data: URL (from the logo upload endpoint)
       logoUrl: z
@@ -174,13 +178,16 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       updatedAt: Date;
     } = { updatedAt: new Date() };
     if (parsed.data.name !== undefined) patch.name = parsed.data.name;
-    if (parsed.data.previewDevCommand !== undefined) patch.previewDevCommand = parsed.data.previewDevCommand;
-    if (parsed.data.githubRepoFullName !== undefined) patch.githubRepoFullName = parsed.data.githubRepoFullName;
+    if (parsed.data.previewDevCommand !== undefined)
+      patch.previewDevCommand = parsed.data.previewDevCommand;
+    if (parsed.data.githubRepoFullName !== undefined)
+      patch.githubRepoFullName = parsed.data.githubRepoFullName;
     if (parsed.data.defaultBranch !== undefined) patch.defaultBranch = parsed.data.defaultBranch;
     if (parsed.data.logoUrl !== undefined) patch.logoUrl = parsed.data.logoUrl;
 
     const repoChanged =
-      patch.githubRepoFullName !== undefined && patch.githubRepoFullName !== existing.githubRepoFullName;
+      patch.githubRepoFullName !== undefined &&
+      patch.githubRepoFullName !== existing.githubRepoFullName;
     const branchChanged =
       patch.defaultBranch !== undefined && patch.defaultBranch !== existing.defaultBranch;
     if (repoChanged || branchChanged) {
@@ -222,7 +229,9 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
           const log = await g.log({ from: `origin/${p.defaultBranch}`, to: "HEAD", maxCount: 100 });
           unpushed = log.total;
         }
-      } catch { /* no remote yet */ }
+      } catch {
+        /* no remote yet */
+      }
       const hasChanges = dirty.length > 0 || unpushed > 0;
 
       // Generate a plain-English summary using Claude. This is the
@@ -246,18 +255,22 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
               body: JSON.stringify({
                 model: "claude-haiku-4-5-20251001",
                 max_tokens: 150,
-                messages: [{
-                  role: "user",
-                  content: `Summarize these website changes for a non-technical person. Write exactly 1-3 bullet points using markdown "- " syntax (dash space). Each bullet on its own line. Be specific (e.g. "Updated the homepage title"). No headings, no code, no filenames. Example format:\n- Changed the hero text\n- Added a new page\n\nChanged files:\n${dirty.join("\n")}\n\nDiff summary:\n${diffOutput.slice(0, 1000)}`,
-                }],
+                messages: [
+                  {
+                    role: "user",
+                    content: `Summarize these website changes for a non-technical person. Write exactly 1-3 bullet points using markdown "- " syntax (dash space). Each bullet on its own line. Be specific (e.g. "Updated the homepage title"). No headings, no code, no filenames. Example format:\n- Changed the hero text\n- Added a new page\n\nChanged files:\n${dirty.join("\n")}\n\nDiff summary:\n${diffOutput.slice(0, 1000)}`,
+                  },
+                ],
               }),
             });
             if (res.ok) {
-              const body = await res.json() as { content?: { text?: string }[] };
+              const body = (await res.json()) as { content?: { text?: string }[] };
               summary = body.content?.[0]?.text ?? "";
             }
           }
-        } catch { /* summary is optional */ }
+        } catch {
+          /* summary is optional */
+        }
       }
 
       return c.json({ dirty, unpushed, hasChanges, summary });
@@ -284,11 +297,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
-    const [p] = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
@@ -306,19 +315,14 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
 
       const files: FileChange[] = [];
       const seen = new Set<string>();
-      const pushFile = async (
-        path: string,
-        fileStatus: FileChange["status"],
-      ) => {
+      const pushFile = async (path: string, fileStatus: FileChange["status"]) => {
         if (seen.has(path)) return;
         seen.add(path);
         let diff = "";
         let isBinary = false;
         try {
           if (fileStatus === "untracked") {
-            diff = await g
-              .raw(["diff", "--no-index", "--", "/dev/null", path])
-              .catch(() => "");
+            diff = await g.raw(["diff", "--no-index", "--", "/dev/null", path]).catch(() => "");
           } else {
             diff = await g.diff(["--", path]);
           }
@@ -339,7 +343,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
         // doesn't make the modal unusable. 200kB is plenty for real
         // human edits.
         if (diff.length > 200_000) {
-          diff = diff.slice(0, 200_000) + "\n… (truncated)";
+          diff = `${diff.slice(0, 200_000)}\n… (truncated)`;
         }
         files.push({ path, status: fileStatus, additions, deletions, diff, isBinary });
       };
@@ -409,11 +413,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     if (!m || (m.role !== "admin" && m.role !== "editor")) {
       return c.json({ error: "Only editors and admins can discard changes." }, 403);
     }
-    const [p] = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
@@ -462,11 +462,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
     if (!m || (m.role !== "admin" && m.role !== "editor")) {
       return c.json({ error: "Only editors and admins can cancel migrations." }, 403);
     }
-    const [p] = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       await db
@@ -601,10 +597,7 @@ Output ONLY the commit message, nothing else.`,
       const url = getPreviewUrl(projectId, port);
       return c.json({ url, port, previewLabel: label });
     } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Failed to start preview" },
-        500,
-      );
+      return c.json({ error: e instanceof Error ? e.message : "Failed to start preview" }, 500);
     }
   })
   /**
@@ -624,10 +617,7 @@ Output ONLY the commit message, nothing else.`,
       await reinstallProjectDependencies(projectId);
       return c.json({ ok: true });
     } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Reinstall failed" },
-        500,
-      );
+      return c.json({ error: e instanceof Error ? e.message : "Reinstall failed" }, 500);
     }
   })
   /**
@@ -664,7 +654,9 @@ Output ONLY the commit message, nothing else.`,
           });
           pushedSet = new Set(remoteLog.all.map((l) => l.hash));
         }
-      } catch { /* no remote yet */ }
+      } catch {
+        /* no remote yet */
+      }
 
       const log = await g.log({ maxCount: limit });
       const commits = log.all.map((c) => ({
@@ -739,7 +731,9 @@ Output ONLY the commit message, nothing else.`,
           scripts?: Record<string, string>;
         };
         packageJsonScripts = pkg.scripts ?? null;
-      } catch { /* ignore malformed */ }
+      } catch {
+        /* ignore malformed */
+      }
       if (fs.existsSync(path.join(repoPath, "yarn.lock"))) packageManager = "yarn";
       else if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) packageManager = "pnpm";
       else packageManager = "npm";
@@ -748,12 +742,13 @@ Output ONLY the commit message, nothing else.`,
     let rootFiles: string[] = [];
     try {
       if (repoExists) rootFiles = fs.readdirSync(repoPath).slice(0, 80);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     const fw = repoExists ? detectFramework(repoPath) : null;
-    const dev = repoExists && hasPackageJson
-      ? resolveDevCommand(repoPath, port, p.previewDevCommand)
-      : null;
+    const dev =
+      repoExists && hasPackageJson ? resolveDevCommand(repoPath, port, p.previewDevCommand) : null;
 
     const processInfo = getPreviewProcessInfo(projectId);
     const previewStatus = getPreviewStatus(projectId);
@@ -787,9 +782,16 @@ Output ONLY the commit message, nothing else.`,
         defaultBranch: p.defaultBranch,
         previewDevCommandOverride: p.previewDevCommand,
       },
-      framework: fw && fw.id !== "unknown"
-        ? { id: fw.id, label: fw.label, iconSlug: fw.iconSlug, color: fw.color, optimizes: fw.optimizes }
-        : null,
+      framework:
+        fw && fw.id !== "unknown"
+          ? {
+              id: fw.id,
+              label: fw.label,
+              iconSlug: fw.iconSlug,
+              color: fw.color,
+              optimizes: fw.optimizes,
+            }
+          : null,
       workspace: {
         repoPath,
         repoExists,
@@ -799,9 +801,7 @@ Output ONLY the commit message, nothing else.`,
         packageJsonScripts,
         rootFiles,
       },
-      devCommand: dev
-        ? { command: dev.command, args: dev.args, label: dev.label }
-        : null,
+      devCommand: dev ? { command: dev.command, args: dev.args, label: dev.label } : null,
       preview: {
         port,
         previewUrl,
@@ -834,7 +834,10 @@ Output ONLY the commit message, nothing else.`,
       m.role === "client"
         ? and(eq(conversations.projectId, projectId), eq(conversations.createdByUserId, r.user.id))
         : filterUserId
-          ? and(eq(conversations.projectId, projectId), eq(conversations.createdByUserId, filterUserId))
+          ? and(
+              eq(conversations.projectId, projectId),
+              eq(conversations.createdByUserId, filterUserId),
+            )
           : eq(conversations.projectId, projectId);
 
     const rows = await db
@@ -876,7 +879,7 @@ Output ONLY the commit message, nothing else.`,
         title: x.title,
         updatedAt: x.updatedAt.getTime(),
         createdByUserId: x.createdByUserId,
-        author: x.createdByUserId ? authors.get(x.createdByUserId) ?? null : null,
+        author: x.createdByUserId ? (authors.get(x.createdByUserId) ?? null) : null,
       })),
     });
   })
@@ -900,7 +903,11 @@ Output ONLY the commit message, nothing else.`,
       messages: rows.reverse().map((x) => {
         let attachments: { path: string; originalName: string }[] | undefined;
         if (x.attachments) {
-          try { attachments = JSON.parse(x.attachments); } catch { /* ignore */ }
+          try {
+            attachments = JSON.parse(x.attachments);
+          } catch {
+            /* ignore */
+          }
         }
         return {
           id: x.id,
@@ -964,8 +971,13 @@ Output ONLY the commit message, nothing else.`,
     if (!fs.existsSync(resolved)) return c.json({ error: "Not found" }, 404);
     const ext = path.extname(resolved).toLowerCase().slice(1);
     const mime: Record<string, string> = {
-      jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
-      gif: "image/gif", svg: "image/svg+xml", avif: "image/avif",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      gif: "image/gif",
+      svg: "image/svg+xml",
+      avif: "image/avif",
     };
     const buf = fs.readFileSync(resolved);
     return new Response(new Uint8Array(buf), {
@@ -1078,7 +1090,9 @@ Output ONLY the commit message, nothing else.`,
           const meta = await sharp(inputBuf).metadata();
           const isJpeg = meta.format === "jpeg" || meta.format === "jpg";
           const isPng = meta.format === "png";
-          const pipeline = sharp(inputBuf).rotate().resize(2400, 2400, { fit: "inside", withoutEnlargement: true });
+          const pipeline = sharp(inputBuf)
+            .rotate()
+            .resize(2400, 2400, { fit: "inside", withoutEnlargement: true });
           if (isJpeg) {
             outBuf = await pipeline.jpeg({ quality: 90 }).toBuffer();
             ext = "jpg";
@@ -1137,7 +1151,7 @@ Output ONLY the commit message, nothing else.`,
     if (!m) return c.json({ error: "Not found" }, 404);
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
-    const body = await c.req.json().catch(() => null) as { path?: string } | null;
+    const body = (await c.req.json().catch(() => null)) as { path?: string } | null;
     const rel = body?.path?.replace(/^\/+/, "");
     if (!rel) return c.json({ error: "path required" }, 400);
     // Path safety: must stay inside the repo
@@ -1148,7 +1162,9 @@ Output ONLY the commit message, nothing else.`,
     }
     try {
       fs.unlinkSync(resolved);
-    } catch { /* already gone */ }
+    } catch {
+      /* already gone */
+    }
     return c.json({ ok: true });
   })
   /**
@@ -1201,7 +1217,10 @@ Output ONLY the commit message, nothing else.`,
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-    await db.update(projects).set({ logoUrl: null, updatedAt: new Date() }).where(eq(projects.id, projectId));
+    await db
+      .update(projects)
+      .set({ logoUrl: null, updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
     return c.json({ ok: true });
   })
   /**

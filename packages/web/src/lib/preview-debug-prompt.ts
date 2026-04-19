@@ -8,7 +8,10 @@ import type { PreviewStatus } from "@/lib/use-preview-status";
  */
 export function buildPreviewDebugPrompt(status: PreviewStatus): string {
   const message = status.stageMessage?.trim() || "The preview stopped responding.";
-  const tail = status.recentErrors.slice(-20).map((l) => l.trim()).filter(Boolean);
+  const tail = status.recentErrors
+    .slice(-20)
+    .map((l) => l.trim())
+    .filter(Boolean);
   const lines: string[] = [];
   lines.push("The live preview has an error.");
   lines.push("");

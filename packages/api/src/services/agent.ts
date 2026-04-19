@@ -17,16 +17,12 @@
  */
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
-import { getInstanceSetting } from "./instance-settings.js";
-import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
 import { buildAgentDiagnosticsMcpServer } from "./agent-diagnostics-tools.js";
 import { buildCanUseTool } from "./agent-permissions.js";
-import {
-  DIAGNOSTICS_TOOL_HINT,
-  LANGUAGE_NAMES,
-  QUILLRA_SYSTEM_PROMPT,
-} from "./agent-prompts.js";
+import { DIAGNOSTICS_TOOL_HINT, LANGUAGE_NAMES, QUILLRA_SYSTEM_PROMPT } from "./agent-prompts.js";
 import { mapSdkMessageToClient } from "./agent-stream-mapper.js";
+import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
+import { getInstanceSetting } from "./instance-settings.js";
 
 export { mapSdkMessageToClient } from "./agent-stream-mapper.js";
 
@@ -163,9 +159,7 @@ export async function* runProjectAgent(params: {
           IS_SANDBOX: "1",
         },
         tools: { type: "preset", preset: "claude_code" },
-        ...(diagnosticsServer
-          ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } }
-          : {}),
+        ...(diagnosticsServer ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } } : {}),
         // Opus 4.7 (and the Claude 4.6+ line) requires BOTH adaptive
         // thinking AND an explicit effort level — setting one without
         // the other either triggers an API 400 (on Opus) or silently
@@ -273,7 +267,10 @@ export async function* runProjectAgent(params: {
           yield { type: "error", message: "Could not start agent session" };
           return;
         }
-        yield { type: "error", message: retryErr instanceof Error ? retryErr.message : String(retryErr) };
+        yield {
+          type: "error",
+          message: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        };
         return;
       }
     }
@@ -290,7 +287,10 @@ export async function* runProjectAgent(params: {
         yield* run(null);
         return;
       } catch (retryErr) {
-        yield { type: "error", message: retryErr instanceof Error ? retryErr.message : String(retryErr) };
+        yield {
+          type: "error",
+          message: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        };
         return;
       }
     }

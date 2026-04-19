@@ -1,3 +1,5 @@
+import { renderBrandedEmail } from "./email-template.js";
+import { getOrganizationInfo } from "./instance-settings.js";
 /**
  * Rendering + dispatch for the two alert emails the usage-limits
  * system can fire: a soft "warn" at first threshold crossing, and a
@@ -5,9 +7,7 @@
  * inbox (or wherever USAGE_ALERT_EMAIL points), not the end user's —
  * the user finds out they're over via the friendly in-chat error.
  */
-import { sendEmail, isMailerEnabled } from "./mailer.js";
-import { renderBrandedEmail } from "./email-template.js";
-import { getOrganizationInfo } from "./instance-settings.js";
+import { isMailerEnabled, sendEmail } from "./mailer.js";
 
 type Who = {
   email: string;
@@ -39,7 +39,7 @@ export async function sendWarnAlert(opts: {
     title: `Usage warning · ${opts.who.name}`,
     preheader: `${opts.who.name} crossed ${formatUsd(opts.warnUsd)} in ${opts.monthLabel}.`,
     body: {
-      greeting: `Hi${org.operatorName ? " " + org.operatorName.split(" ")[0] : ""},`,
+      greeting: `Hi${org.operatorName ? ` ${org.operatorName.split(" ")[0]}` : ""},`,
       paragraphs: [
         `${opts.who.name} (${opts.who.email}) has just crossed the ${formatUsd(opts.warnUsd)} warning threshold for ${opts.monthLabel}. Month-to-date spend is now ${formatUsd(opts.spendUsd)}.`,
         opts.hardUsd != null
@@ -56,7 +56,7 @@ export async function sendWarnAlert(opts: {
           ["Period", opts.monthLabel],
         ],
       },
-      signature: `— Quillra`,
+      signature: "— Quillra",
     },
   });
   await sendEmail({
@@ -83,11 +83,11 @@ export async function sendHardCapAlert(opts: {
     title: `Usage cap reached · ${opts.who.name}`,
     preheader: `${opts.who.name} hit the ${formatUsd(opts.hardUsd)} cap in ${opts.monthLabel}.`,
     body: {
-      greeting: `Hi${org.operatorName ? " " + org.operatorName.split(" ")[0] : ""},`,
+      greeting: `Hi${org.operatorName ? ` ${org.operatorName.split(" ")[0]}` : ""},`,
       paragraphs: [
         `${opts.who.name} (${opts.who.email}) has reached the hard cap of ${formatUsd(opts.hardUsd)} for ${opts.monthLabel}. Further chat messages from them are blocked until ${nextMonthLabel(opts.monthLabel)}.`,
         `This rule came from: ${opts.who.scopeDescription}. Their current month-to-date spend is ${formatUsd(opts.spendUsd)}.`,
-        `If they should be allowed to continue, raise the cap or remove the rule in Organization Settings → Usage.`,
+        "If they should be allowed to continue, raise the cap or remove the rule in Organization Settings → Usage.",
       ],
       table: {
         headers: ["Metric", "Value"],
@@ -97,7 +97,7 @@ export async function sendHardCapAlert(opts: {
           ["Period", opts.monthLabel],
         ],
       },
-      signature: `— Quillra`,
+      signature: "— Quillra",
     },
   });
   await sendEmail({
@@ -109,14 +109,14 @@ export async function sendHardCapAlert(opts: {
 }
 
 function nextMonthLabel(ymd: string): string {
-  const [y, m] = ymd.split("-").map((n) => parseInt(n, 10));
+  const [y, m] = ymd.split("-").map((n) => Number.parseInt(n, 10));
   if (!y || !m) return "next month";
   const next = new Date(y, m, 1);
   return next.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
 export function monthLabelFromYmd(ymd: string): string {
-  const [y, m] = ymd.split("-").map((n) => parseInt(n, 10));
+  const [y, m] = ymd.split("-").map((n) => Number.parseInt(n, 10));
   if (!y || !m) return ymd;
   return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }

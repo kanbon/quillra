@@ -9,9 +9,9 @@
  * the UI surfaces "install the Quillra GitHub App on this repo".
  */
 import {
+  getInstallationTokenForRepo,
   isGithubAppConfigured,
   listRepositoriesAcrossInstallations,
-  getInstallationTokenForRepo,
 } from "./github-app.js";
 
 const API = "https://api.github.com";
@@ -93,10 +93,7 @@ export async function listBranches(owner: string, repo: string): Promise<string[
   return names;
 }
 
-export async function getRepoMeta(
-  owner: string,
-  repo: string,
-): Promise<{ defaultBranch: string }> {
+export async function getRepoMeta(owner: string, repo: string): Promise<{ defaultBranch: string }> {
   const data = await ghJsonAsRepo<{ default_branch: string }>(
     owner,
     repo,
@@ -115,7 +112,10 @@ export async function fetchRepoManifest(
   repo: string,
   ref: string,
 ): Promise<{
-  packageJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null;
+  packageJson: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  } | null;
   rootFiles: string[];
 }> {
   // 1) List root files
@@ -132,7 +132,10 @@ export async function fetchRepoManifest(
   }
 
   // 2) Try to fetch package.json (gracefully nullable)
-  let packageJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
+  let packageJson: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  } | null = null;
   if (rootFiles.includes("package.json")) {
     try {
       const file = await ghJsonAsRepo<{ content: string; encoding: string }>(
@@ -140,7 +143,10 @@ export async function fetchRepoManifest(
         repo,
         `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/package.json?ref=${encodeURIComponent(ref)}`,
       );
-      const raw = file.encoding === "base64" ? Buffer.from(file.content, "base64").toString("utf8") : file.content;
+      const raw =
+        file.encoding === "base64"
+          ? Buffer.from(file.content, "base64").toString("utf8")
+          : file.content;
       packageJson = JSON.parse(raw);
     } catch {
       /* malformed package.json — leave null, detector falls back to root files */

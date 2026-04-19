@@ -1,5 +1,5 @@
-import type { ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
+import type { ButtonHTMLAttributes } from "react";
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "brand" | "ghost" | "outline";
@@ -17,7 +17,8 @@ export function Button({ className, variant = "primary", disabled, ...props }: P
         variant === "brand" &&
           "bg-brand text-white shadow-sm hover:bg-[#a50e19] active:scale-[0.98] disabled:hover:bg-brand",
         variant === "ghost" && "bg-transparent text-neutral-800 hover:bg-neutral-100",
-        variant === "outline" && "border border-neutral-300 bg-white text-neutral-900 hover:bg-neutral-50",
+        variant === "outline" &&
+          "border border-neutral-300 bg-white text-neutral-900 hover:bg-neutral-50",
         className,
       )}
       {...props}

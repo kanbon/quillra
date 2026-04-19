@@ -92,7 +92,11 @@ async function sendViaResend(msg: MailMessage): Promise<SendResult> {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      return { sent: false, backend: "resend", reason: `Resend ${res.status}: ${text.slice(0, 200)}` };
+      return {
+        sent: false,
+        backend: "resend",
+        reason: `Resend ${res.status}: ${text.slice(0, 200)}`,
+      };
     }
     const data = (await res.json().catch(() => ({}))) as { id?: string };
     return { sent: true, backend: "resend", id: data.id };

@@ -1,10 +1,10 @@
-import { betterAuth, APIError } from "better-auth";
+import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { sql, eq, isNull, and } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { instanceInvites } from "../db/app-schema.js";
+import { type InstanceRole, user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { user, type InstanceRole } from "../db/auth-schema.js";
-import { instanceInvites } from "../db/app-schema.js";
 
 function trustedOrigins(): string[] {
   const raw =
@@ -36,9 +36,7 @@ export const auth = betterAuth({
     user: {
       create: {
         async before(userData) {
-          const [{ count }] = await db
-            .select({ count: sql<number>`count(*)` })
-            .from(user);
+          const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(user);
 
           if (count === 0) {
             return { data: { ...userData, instanceRole: "owner" as InstanceRole } };
@@ -49,12 +47,7 @@ export const auth = betterAuth({
             const [invite] = await db
               .select()
               .from(instanceInvites)
-              .where(
-                and(
-                  eq(instanceInvites.email, email),
-                  isNull(instanceInvites.acceptedAt),
-                ),
-              )
+              .where(and(eq(instanceInvites.email, email), isNull(instanceInvites.acceptedAt)))
               .limit(1);
 
             if (invite) {

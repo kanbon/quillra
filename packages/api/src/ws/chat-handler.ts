@@ -1,3 +1,4 @@
+import { and, eq } from "drizzle-orm";
 /**
  * WebSocket handler for `/ws/chat/:projectId` — the single big piece of
  * Quillra's runtime behaviour. Every chat message the user sends lands
@@ -25,21 +26,18 @@
  * a third place.
  */
 import type { Context } from "hono";
-import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { db } from "../db/index.js";
-import { user } from "../db/auth-schema.js";
-import {
-  agentRuns,
-  conversations,
-  messages,
-  projectMembers,
-  projects,
-} from "../db/schema.js";
 import type { ProjectRole } from "../db/app-schema.js";
+import { user } from "../db/auth-schema.js";
+import { db } from "../db/index.js";
+import { agentRuns, conversations, messages, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import { runProjectAgent } from "../services/agent.js";
-import { ensureRepoCloned } from "../services/workspace.js";
+import {
+  monthLabelFromYmd,
+  sendHardCapAlert,
+  sendWarnAlert,
+} from "../services/usage-alert-emails.js";
 import {
   currentMonthYmd,
   getAlertRecipientEmail,
@@ -49,11 +47,7 @@ import {
   markAlertSent,
   shouldBlockRun,
 } from "../services/usage-limits.js";
-import {
-  monthLabelFromYmd,
-  sendHardCapAlert,
-  sendWarnAlert,
-} from "../services/usage-alert-emails.js";
+import { ensureRepoCloned } from "../services/workspace.js";
 
 type ChatVariables = {
   user: SessionUser | null;
@@ -95,7 +89,8 @@ async function maybeNotifyThresholdCrossing(ctx: {
 
   // Warn
   if (limits.warnUsd != null && ctx.preRunSpend < limits.warnUsd && spend >= limits.warnUsd) {
-    const target = limits.warnSource === "user" ? ctx.userId : limits.warnSource === "role" ? ctx.role : "";
+    const target =
+      limits.warnSource === "user" ? ctx.userId : limits.warnSource === "role" ? ctx.role : "";
     const fresh = await markAlertSent(limits.warnSource, target, month, "warn");
     if (fresh) {
       await sendWarnAlert({
@@ -114,7 +109,8 @@ async function maybeNotifyThresholdCrossing(ctx: {
   }
   // Hard
   if (limits.hardUsd != null && ctx.preRunSpend < limits.hardUsd && spend >= limits.hardUsd) {
-    const target = limits.hardSource === "user" ? ctx.userId : limits.hardSource === "role" ? ctx.role : "";
+    const target =
+      limits.hardSource === "user" ? ctx.userId : limits.hardSource === "role" ? ctx.role : "";
     const fresh = await markAlertSent(limits.hardSource, target, month, "hard");
     if (fresh) {
       await sendHardCapAlert({
@@ -173,7 +169,11 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           conversationId?: string;
           attachments?: { path: string; originalName: string; kind?: "image" | "content" }[];
         };
-        if (parsed.type !== "message" || typeof parsed.content !== "string" || !parsed.content.trim()) {
+        if (
+          parsed.type !== "message" ||
+          typeof parsed.content !== "string" ||
+          !parsed.content.trim()
+        ) {
           ws.send(JSON.stringify({ type: "error", message: "Invalid message payload" }));
           return;
         }
@@ -186,12 +186,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         let m = await db
           .select()
           .from(projectMembers)
-          .where(
-            and(
-              eq(projectMembers.projectId, projectId),
-              eq(projectMembers.userId, wsUser.id),
-            ),
-          )
+          .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, wsUser.id)))
           .limit(1)
           .then((rows) => rows[0]);
         if (!m && wsClientSession && wsClientSession.projectId === projectId) {
@@ -235,17 +230,12 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           // The agent will run `npm install` itself once it's
           // written the new Astro package.json.
           const isMigrating = p.migrationTarget === "astro";
-          repoPath = await ensureRepoCloned(
-            p.id,
-            p.githubRepoFullName,
-            p.defaultBranch,
-            {
-              skipInstall: isMigrating,
-              onInstallFailed: (err: string) => {
-                installFailureContext = err;
-              },
+          repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+            skipInstall: isMigrating,
+            onInstallFailed: (err: string) => {
+              installFailureContext = err;
             },
-          );
+          });
         } catch (e) {
           ws.send(
             JSON.stringify({
@@ -263,7 +253,11 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         let convId = parsed.conversationId;
         let agentSessionId: string | null = null;
         if (convId) {
-          const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
+          const [conv] = await db
+            .select()
+            .from(conversations)
+            .where(eq(conversations.id, convId))
+            .limit(1);
           agentSessionId = conv?.agentSessionId ?? null;
         } else {
           convId = nanoid();
@@ -428,10 +422,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
                 question?: unknown;
                 options?: unknown;
               };
-              if (
-                typeof parsedBlock.question === "string" &&
-                Array.isArray(parsedBlock.options)
-              ) {
+              if (typeof parsedBlock.question === "string" && Array.isArray(parsedBlock.options)) {
                 out.push({
                   kind: "ask",
                   question: parsedBlock.question,
@@ -486,7 +477,11 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
             migrationMode,
             onSessionId: (sid) => {
               agentSessionId = sid;
-              void db.update(conversations).set({ agentSessionId: sid }).where(eq(conversations.id, convId!)).catch(() => {});
+              void db
+                .update(conversations)
+                .set({ agentSessionId: sid })
+                .where(eq(conversations.id, convId!))
+                .catch(() => {});
             },
             onResult: (usage) => {
               // Persist the usage row first, then — once it's in — run
@@ -591,10 +586,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           runErrored: boolean;
           runEmittedAsk: boolean;
         }) =>
-          !r.runErrored &&
-          !r.runEmittedAsk &&
-          r.runText.trim().length < 20 &&
-          r.runToolCount > 0;
+          !r.runErrored && !r.runEmittedAsk && r.runText.trim().length < 20 && r.runToolCount > 0;
 
         const first = await runAgentOnce(promptText);
         assistantText += first.runText;
@@ -640,11 +632,21 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
             createdAt: new Date(),
           });
           // Update conversation title from first assistant response if it was auto-generated
-          const [conv] = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
+          const [conv] = await db
+            .select()
+            .from(conversations)
+            .where(eq(conversations.id, convId))
+            .limit(1);
           if (conv && !conv.title?.includes(" ")) {
-            await db.update(conversations).set({ title: parsed.content.slice(0, 100), updatedAt: new Date() }).where(eq(conversations.id, convId));
+            await db
+              .update(conversations)
+              .set({ title: parsed.content.slice(0, 100), updatedAt: new Date() })
+              .where(eq(conversations.id, convId));
           } else {
-            await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, convId));
+            await db
+              .update(conversations)
+              .set({ updatedAt: new Date() })
+              .where(eq(conversations.id, convId));
           }
         }
 
@@ -658,7 +660,9 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
             .update(projects)
             .set({ migrationTarget: null, updatedAt: new Date() })
             .where(eq(projects.id, projectId))
-            .catch(() => { /* non-fatal */ });
+            .catch(() => {
+              /* non-fatal */
+            });
           ws.send(JSON.stringify({ type: "migration_complete" }));
         }
 

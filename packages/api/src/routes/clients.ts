@@ -13,21 +13,16 @@
  *   GET  /api/clients/me                         — returns the active client session
  */
 
-import { Hono } from "hono";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { eq, and } from "drizzle-orm";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
-import { db } from "../db/index.js";
-import {
-  projects,
-  projectMembers,
-  clientSessions,
-  clientLoginCodes,
-} from "../db/schema.js";
 import { user } from "../db/auth-schema.js";
-import { sendEmail, isMailerEnabled } from "../services/mailer.js";
+import { db } from "../db/index.js";
+import { clientLoginCodes, clientSessions, projectMembers, projects } from "../db/schema.js";
 import { loginCodeEmailHtml } from "../services/email-templates.js";
+import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
 const CLIENT_COOKIE = "quillra_client_session";
 const CODE_TTL_MINUTES = 15;
@@ -66,16 +61,15 @@ export const clientsRouter = new Hono()
 
   /** Send a 6-digit login code to a client's email for the given project */
   .post("/request-code", async (c) => {
-    const body = await c.req.json().catch(() => null) as { projectId?: string; email?: string } | null;
+    const body = (await c.req.json().catch(() => null)) as {
+      projectId?: string;
+      email?: string;
+    } | null;
     const projectId = body?.projectId?.trim();
     const email = body?.email?.trim().toLowerCase();
     if (!projectId || !email) return c.json({ error: "projectId and email required" }, 400);
 
-    const [p] = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Project not found" }, 404);
 
     // Check that this email belongs to a known client member of the project.
@@ -86,7 +80,9 @@ export const clientsRouter = new Hono()
       const [m] = await db
         .select()
         .from(projectMembers)
-        .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, clientUserId)))
+        .where(
+          and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, clientUserId)),
+        )
         .limit(1);
       if (!m || m.role !== "client") clientUserId = null;
     }
@@ -143,13 +139,16 @@ export const clientsRouter = new Hono()
 
   /** Exchange a 6-digit code for a client session cookie */
   .post("/verify-code", async (c) => {
-    const body = await c.req.json().catch(() => null) as
-      | { projectId?: string; email?: string; code?: string }
-      | null;
+    const body = (await c.req.json().catch(() => null)) as {
+      projectId?: string;
+      email?: string;
+      code?: string;
+    } | null;
     const projectId = body?.projectId?.trim();
     const email = body?.email?.trim().toLowerCase();
     const code = body?.code?.trim();
-    if (!projectId || !email || !code) return c.json({ error: "projectId, email, code required" }, 400);
+    if (!projectId || !email || !code)
+      return c.json({ error: "projectId, email, code required" }, 400);
 
     const [row] = await db
       .select()
@@ -213,7 +212,11 @@ export const clientsRouter = new Hono()
   .get("/me", async (c) => {
     const token = getCookie(c, CLIENT_COOKIE);
     if (!token) return c.json({ user: null }, 401);
-    const [s] = await db.select().from(clientSessions).where(eq(clientSessions.token, token)).limit(1);
+    const [s] = await db
+      .select()
+      .from(clientSessions)
+      .where(eq(clientSessions.token, token))
+      .limit(1);
     if (!s || s.expiresAt.getTime() < Date.now()) return c.json({ user: null }, 401);
     const [u] = await db.select().from(user).where(eq(user.id, s.userId)).limit(1);
     if (!u) return c.json({ user: null }, 401);
@@ -235,7 +238,11 @@ export const clientsRouter = new Hono()
 /** Helper used by the global auth middleware to resolve a client session from a request */
 export async function getClientSessionFromCookie(token: string | undefined) {
   if (!token) return null;
-  const [s] = await db.select().from(clientSessions).where(eq(clientSessions.token, token)).limit(1);
+  const [s] = await db
+    .select()
+    .from(clientSessions)
+    .where(eq(clientSessions.token, token))
+    .limit(1);
   if (!s || s.expiresAt.getTime() < Date.now()) return null;
   const [u] = await db.select().from(user).where(eq(user.id, s.userId)).limit(1);
   if (!u) return null;

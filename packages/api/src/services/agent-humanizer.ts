@@ -30,7 +30,11 @@ function humanFile(fp: string): string {
   if (compMatch) return `the ${compMatch[1].replace(/[-_]/g, " ").toLowerCase()} section`;
   // Content
   if (/\/content\/.+\.(md|mdx)$/i.test(p)) {
-    const slug = p.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
+    const slug =
+      p
+        .split("/")
+        .pop()
+        ?.replace(/\.[^.]+$/, "") ?? "";
     return slug ? `the ${slug.replace(/[-_]/g, " ")} post` : "a post";
   }
   // Config-ish
@@ -38,7 +42,11 @@ function humanFile(fp: string): string {
   if (/astro\.config|next\.config|vite\.config|tsconfig/.test(p)) return "the site's configuration";
   if (p.endsWith(".css") && /global|styles?/i.test(p)) return "the global styles";
   // Fallback: the file name, stripped
-  const name = p.split("/").pop()?.replace(/\.[^.]+$/, "") ?? p;
+  const name =
+    p
+      .split("/")
+      .pop()
+      ?.replace(/\.[^.]+$/, "") ?? p;
   return name.replace(/[-_]/g, " ");
 }
 
@@ -64,10 +72,7 @@ function humanBash(command: string): string {
 /** Turn a (tool name, input) pair into a single plain-language line for
  *  the chat transcript. Never returns a file path, tool name, or raw
  *  command. Unknown tools fall back to "Working on your site". */
-export function humanizeToolCall(
-  toolName: string,
-  input: Record<string, unknown>,
-): string {
+export function humanizeToolCall(toolName: string, input: Record<string, unknown>): string {
   const filePath =
     typeof input.file_path === "string"
       ? input.file_path

@@ -1,3 +1,8 @@
+import { Button } from "@/components/atoms/Button";
+import { Heading } from "@/components/atoms/Heading";
+import { Input } from "@/components/atoms/Input";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 /**
  * Team management tab: list of instance members, pending invites, and
  * the invite form. Moved wholesale from the old monolithic InstanceSettings
@@ -6,11 +11,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Button } from "@/components/atoms/Button";
-import { Heading } from "@/components/atoms/Heading";
-import { Input } from "@/components/atoms/Input";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
 
 type ProjectBadge = { id: string; name: string; role: string };
 type Member = {
@@ -73,8 +73,7 @@ export function TeamTab() {
   });
 
   const removeMut = useMutation({
-    mutationFn: (userId: string) =>
-      apiJson(`/api/admin/members/${userId}`, { method: "DELETE" }),
+    mutationFn: (userId: string) => apiJson(`/api/admin/members/${userId}`, { method: "DELETE" }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["admin-members"] }),
   });
 
@@ -170,7 +169,11 @@ export function TeamTab() {
             (members?.members ?? []).map((m) => (
               <div key={m.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start">
                 {m.image ? (
-                  <img src={m.image} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                  <img
+                    src={m.image}
+                    alt=""
+                    className="h-9 w-9 shrink-0 rounded-full object-cover"
+                  />
                 ) : (
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-neutral-100 to-neutral-200 text-[11px] font-semibold text-neutral-500">
                     {m.name?.[0]?.toUpperCase() ?? "?"}
@@ -217,7 +220,9 @@ export function TeamTab() {
                     variant="ghost"
                     className="shrink-0 text-xs text-red-500"
                     onClick={() => {
-                      if (confirm(t("instanceSettings.removeConfirm", { name: m.name || m.email }))) {
+                      if (
+                        confirm(t("instanceSettings.removeConfirm", { name: m.name || m.email }))
+                      ) {
                         removeMut.mutate(m.id);
                       }
                     }}

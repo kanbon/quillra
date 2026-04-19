@@ -1,3 +1,4 @@
+import { and, eq } from "drizzle-orm";
 /**
  * Durable monthly-report scheduler. Fires daily and, on each tick, looks
  * for users who (a) opted into monthly reports and (b) have not yet
@@ -9,13 +10,12 @@
  * the 2nd still sends March's report; monthly-exact cron would miss it.
  */
 import cron, { type ScheduledTask } from "node-cron";
-import { and, eq } from "drizzle-orm";
-import { db, rawSqlite } from "../db/index.js";
-import { user } from "../db/auth-schema.js";
 import { usageReportsSent } from "../db/app-schema.js";
-import { isMailerEnabled, sendEmail } from "./mailer.js";
+import { user } from "../db/auth-schema.js";
+import { db, rawSqlite } from "../db/index.js";
 import { renderBrandedEmail } from "./email-template.js";
 import { getInstanceSetting } from "./instance-settings.js";
+import { isMailerEnabled, sendEmail } from "./mailer.js";
 
 /** "YYYY-MM" for the calendar month that just ended. Run on March 1 →
  *  returns "2026-02". */
@@ -25,7 +25,7 @@ function previousMonthYmd(now: Date = new Date()): string {
 }
 
 function ymdToRange(ymd: string): { fromMs: number; untilMs: number; monthLabel: string } {
-  const [y, m] = ymd.split("-").map((n) => parseInt(n, 10));
+  const [y, m] = ymd.split("-").map((n) => Number.parseInt(n, 10));
   const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
   const end = new Date(y, m, 1, 0, 0, 0, 0); // first instant of next month
   const label = start.toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -71,7 +71,12 @@ function formatUsd(n: number): string {
  * after a successful send so a failed delivery will retry on the next
  * tick.
  */
-async function sendOneUserReport(userId: string, userEmail: string, userName: string, ymd: string): Promise<boolean> {
+async function sendOneUserReport(
+  userId: string,
+  userEmail: string,
+  userName: string,
+  ymd: string,
+): Promise<boolean> {
   const { fromMs, untilMs, monthLabel } = ymdToRange(ymd);
   const rows = buildReportRows(userId, fromMs, untilMs);
   if (rows.length === 0) {
@@ -92,7 +97,7 @@ async function sendOneUserReport(userId: string, userEmail: string, userName: st
     title: `Your ${monthLabel} usage report`,
     preheader: `${totalRuns} tasks across ${rows.length} site${rows.length === 1 ? "" : "s"} · ${formatUsd(totalCost)}`,
     body: {
-      greeting: `Hi${userName ? " " + userName.split(" ")[0] : ""},`,
+      greeting: `Hi${userName ? ` ${userName.split(" ")[0]}` : ""},`,
       paragraphs: [
         `Here's a summary of the Quillra activity on your account for ${monthLabel}.`,
         `You ran ${totalRuns} task${totalRuns === 1 ? "" : "s"} across ${rows.length} site${rows.length === 1 ? "" : "s"}, for a total of ${formatUsd(totalCost)}.`,
@@ -149,7 +154,7 @@ export async function reconcileMonthlyReports(): Promise<{
   const alreadySent = new Set(
     (
       rawSqlite
-        .prepare(`SELECT user_id FROM usage_reports_sent WHERE month_ymd = ?`)
+        .prepare("SELECT user_id FROM usage_reports_sent WHERE month_ymd = ?")
         .all(targetMonth) as { user_id: string }[]
     ).map((r) => r.user_id),
   );
@@ -194,9 +199,7 @@ export function startReportScheduler(): void {
   });
   // Boot-time catch-up. Fire-and-forget so it never blocks request
   // serving — any mailer failure is logged.
-  void reconcileMonthlyReports().catch((e) =>
-    console.warn("[reports] boot reconcile failed:", e),
-  );
+  void reconcileMonthlyReports().catch((e) => console.warn("[reports] boot reconcile failed:", e));
 }
 
 // Reference the eq helper so a no-call import doesn't get tree-shaken.

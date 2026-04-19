@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Navigate, useParams } from "react-router-dom";
 import { Spinner } from "@/components/atoms/Spinner";
-import { authClient } from "@/lib/auth-client";
 import { apiJson } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
+import { type ReactNode, useEffect, useState } from "react";
+import { Navigate, useParams } from "react-router-dom";
 
 /**
  * Gate for every protected route in the app. Three session types are
@@ -52,9 +52,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
         apiJson<{ user: SessionUser | null }>("/api/session").catch(
           () => ({ user: null }) as { user: SessionUser | null },
         ),
-        apiJson<{ user: SessionUser | null; projectId?: string }>(
-          "/api/clients/me",
-        ).catch(() => ({ user: null }) as { user: SessionUser | null; projectId?: string }),
+        apiJson<{ user: SessionUser | null; projectId?: string }>("/api/clients/me").catch(
+          () => ({ user: null }) as { user: SessionUser | null; projectId?: string },
+        ),
       ]);
       if (cancelled) return;
       // Any signal of a valid user → authed. The client endpoint is
@@ -84,11 +84,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
 
   // Client on the wrong project's URL — bounce them back to their own.
-  if (
-    unified.clientProjectId &&
-    params.projectId &&
-    params.projectId !== unified.clientProjectId
-  ) {
+  if (unified.clientProjectId && params.projectId && params.projectId !== unified.clientProjectId) {
     return <Navigate to={`/p/${unified.clientProjectId}`} replace />;
   }
 

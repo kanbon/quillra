@@ -1,3 +1,4 @@
+import type { PresenceUser } from "@/hooks/useProjectPresence";
 /**
  * Stack of small circular avatars for the users currently viewing a
  * project, displayed in the ProjectHeader next to the version-history
@@ -9,7 +10,6 @@
  * viewer's name, email, and role (team / client).
  */
 import { useT } from "@/i18n/i18n";
-import type { PresenceUser } from "@/hooks/useProjectPresence";
 import { cn } from "@/lib/cn";
 
 type Props = {

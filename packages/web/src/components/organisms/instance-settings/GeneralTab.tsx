@@ -1,3 +1,7 @@
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 /**
  * Organization / Impressum identity — the publicly visible fields.
  * Mirror of the Setup wizard's "organization" step, but designed for
@@ -5,10 +9,6 @@
  */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
 import type { StatusResponse } from "./types";
 
 type OrgForm = {

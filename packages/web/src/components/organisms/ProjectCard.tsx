@@ -1,5 +1,5 @@
-import { Link } from "react-router-dom";
 import { useT } from "@/i18n/i18n";
+import { Link } from "react-router-dom";
 
 type Props = {
   id: string;
@@ -43,7 +43,9 @@ export function ProjectCard({ id, name, repo, role, updatedAt }: Props) {
           {initialsOf(name)}
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-[15px] font-semibold tracking-tight text-neutral-900">{name}</h3>
+          <h3 className="truncate text-[15px] font-semibold tracking-tight text-neutral-900">
+            {name}
+          </h3>
           <p className="truncate font-mono text-[11px] text-neutral-400">{repo}</p>
         </div>
       </div>
@@ -52,7 +54,9 @@ export function ProjectCard({ id, name, repo, role, updatedAt }: Props) {
           {role}
         </span>
         {updatedAt ? (
-          <span className="text-neutral-400">{t("dashboard.updated", { date: formatUpdated(updatedAt) })}</span>
+          <span className="text-neutral-400">
+            {t("dashboard.updated", { date: formatUpdated(updatedAt) })}
+          </span>
         ) : null}
       </div>
     </Link>

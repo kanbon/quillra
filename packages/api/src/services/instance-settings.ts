@@ -79,7 +79,7 @@ export const SECRET_KEYS = new Set<SettableKey>([
 (function migrateLegacyPlaintextSecrets() {
   try {
     const rows = rawSqlite
-      .prepare(`SELECT key, value FROM instance_settings WHERE value IS NOT NULL`)
+      .prepare("SELECT key, value FROM instance_settings WHERE value IS NOT NULL")
       .all() as { key: string; value: string }[];
     for (const row of rows) {
       if (!SECRET_KEYS.has(row.key as SettableKey)) continue;
@@ -87,9 +87,8 @@ export const SECRET_KEYS = new Set<SettableKey>([
       try {
         const enc = encryptSecret(row.value);
         rawSqlite
-          .prepare(`UPDATE instance_settings SET value = ?, updated_at = ? WHERE key = ?`)
+          .prepare("UPDATE instance_settings SET value = ?, updated_at = ? WHERE key = ?")
           .run(enc, Date.now(), row.key);
-        console.log(`[instance-settings] re-encrypted legacy secret ${row.key}`);
       } catch (e) {
         console.warn(`[instance-settings] failed to encrypt ${row.key}:`, e);
       }
@@ -108,9 +107,9 @@ export const SECRET_KEYS = new Set<SettableKey>([
 function readDbValue(key: string): string | undefined {
   let dbVal: string | undefined;
   try {
-    const row = rawSqlite
-      .prepare(`SELECT value FROM instance_settings WHERE key = ?`)
-      .get(key) as Row | undefined;
+    const row = rawSqlite.prepare("SELECT value FROM instance_settings WHERE key = ?").get(key) as
+      | Row
+      | undefined;
     dbVal = row?.value ?? undefined;
   } catch {
     return undefined;
@@ -131,7 +130,11 @@ function readDbValue(key: string): string | undefined {
  * Get a setting with DB → env → default precedence. Most callers only
  * need to pass the key; we look up the same env var name by convention.
  */
-export function getInstanceSetting(key: string, envKey?: string, fallback?: string): string | undefined {
+export function getInstanceSetting(
+  key: string,
+  envKey?: string,
+  fallback?: string,
+): string | undefined {
   const v = readDbValue(key)?.trim();
   if (v) return v;
   const envValue = process.env[envKey ?? key]?.trim();
@@ -141,7 +144,7 @@ export function getInstanceSetting(key: string, envKey?: string, fallback?: stri
 
 export function setInstanceSetting(key: SettableKey, value: string | null): void {
   if (value === null || value === "") {
-    rawSqlite.prepare(`DELETE FROM instance_settings WHERE key = ?`).run(key);
+    rawSqlite.prepare("DELETE FROM instance_settings WHERE key = ?").run(key);
     return;
   }
   const stored = SECRET_KEYS.has(key) ? encryptSecret(value) : value;
@@ -222,7 +225,9 @@ export function getSetupStatus(): {
   // wizard must also walk the new owner through the GitHub OAuth step.
   let needsOwner = false;
   try {
-    const row = rawSqlite.prepare(`SELECT count(*) as c FROM user`).get() as { c: number } | undefined;
+    const row = rawSqlite.prepare("SELECT count(*) as c FROM user").get() as
+      | { c: number }
+      | undefined;
     needsOwner = !row || row.c === 0;
   } catch {
     needsOwner = true;

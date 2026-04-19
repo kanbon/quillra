@@ -66,10 +66,7 @@ type InstallationTokenResponse = {
 /** Installation token cache — tokens are valid for 1 hour, we keep each
  *  one for 50 minutes and refresh early. Per-process, not shared across
  *  workers, intentionally — shared caches are a multi-tenant concern. */
-const installationTokenCache = new Map<
-  string,
-  { token: string; expiresAt: number }
->();
+const installationTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 export function isGithubAppConfigured(): boolean {
   const appId = getInstanceSetting("GITHUB_APP_ID");
@@ -158,10 +155,7 @@ export async function getInstallationToken(installationId: string): Promise<stri
  * when the App isn't installed on that repo (the caller should show
  * the user a helpful "install the App on this repo" message).
  */
-export async function findInstallationForRepo(
-  owner: string,
-  repo: string,
-): Promise<string | null> {
+export async function findInstallationForRepo(owner: string, repo: string): Promise<string | null> {
   if (!isGithubAppConfigured()) return null;
   try {
     const data = await ghApp<{ id: number }>(
@@ -208,17 +202,14 @@ export type InstallationsResult = {
 export async function listInstallations(): Promise<InstallationsResult> {
   if (!isGithubAppConfigured()) return { installations: [] };
   try {
-    const installations = await ghApp<Installation[]>(`/app/installations`);
+    const installations = await ghApp<Installation[]>("/app/installations");
     return { installations };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "";
     // ghApp throws `GitHub App API 404: ...` on 404 responses. Match on
     // both the HTTP status and the "Integration not found" body, because
     // some other 404 could mean a different problem (e.g. revoked auth).
-    if (
-      msg.includes("GitHub App API 404") &&
-      msg.toLowerCase().includes("integration not found")
-    ) {
+    if (msg.includes("GitHub App API 404") && msg.toLowerCase().includes("integration not found")) {
       console.warn(
         "[github-app] remote App is gone (404 Integration not found) — clearing stored credentials",
       );

@@ -85,9 +85,7 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
       }
       if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
         const fp = String(
-          (input as { file_path?: string }).file_path ??
-            (input as { path?: string }).path ??
-            "",
+          (input as { file_path?: string }).file_path ?? (input as { path?: string }).path ?? "",
         );
         if (editorBlockedPath(fp)) {
           return { behavior: "deny", message: "Editors cannot change this path.", toolUseID: id };
@@ -117,12 +115,11 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
       }
       if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
         const fp = String(
-          (input as { file_path?: string }).file_path ??
-            (input as { path?: string }).path ??
-            "",
+          (input as { file_path?: string }).file_path ?? (input as { path?: string }).path ?? "",
         ).replace(/\\/g, "/");
         // Allow content paths and asset paths only
-        const isContentPath = /(^|\/)(content|data|public|src\/content|src\/data|src\/assets|assets)\//i.test(fp);
+        const isContentPath =
+          /(^|\/)(content|data|public|src\/content|src\/data|src\/assets|assets)\//i.test(fp);
         const isContentExt = /\.(md|markdown|mdx|txt|json|yaml|yml|html|htm)$/i.test(fp);
         const isImageExt = /\.(jpe?g|png|gif|webp|svg|avif)$/i.test(fp);
         if ((isContentPath && (isContentExt || isImageExt)) || (isContentExt && isContentPath)) {
@@ -130,7 +127,8 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
         }
         return {
           behavior: "deny",
-          message: "Clients can only edit content files (text, images) inside content/ or assets/ directories.",
+          message:
+            "Clients can only edit content files (text, images) inside content/ or assets/ directories.",
           toolUseID: id,
         };
       }

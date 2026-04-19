@@ -1,3 +1,9 @@
+import { Input } from "@/components/atoms/Input";
+import { LogoMark } from "@/components/atoms/LogoMark";
+import { clearSetupGateCache } from "@/components/templates/SetupGate";
+import { apiJson } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/cn";
 /**
  * First-run instance setup wizard.
  *
@@ -9,12 +15,6 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { apiJson } from "@/lib/api";
-import { authClient } from "@/lib/auth-client";
-import { cn } from "@/lib/cn";
-import { Input } from "@/components/atoms/Input";
-import { LogoMark } from "@/components/atoms/LogoMark";
-import { clearSetupGateCache } from "@/components/templates/SetupGate";
 
 type StatusResponse = {
   needsSetup: boolean;
@@ -43,7 +43,13 @@ export function SetupPage() {
   const [emailProvider, setEmailProvider] = useState<"none" | "resend" | "smtp">("none");
   const [emailFrom, setEmailFrom] = useState("Quillra <hello@quillra.com>");
   const [resendKey, setResendKey] = useState("");
-  const [smtp, setSmtp] = useState({ host: "", port: "587", user: "", password: "", secure: "false" });
+  const [smtp, setSmtp] = useState({
+    host: "",
+    port: "587",
+    user: "",
+    password: "",
+    secure: "false",
+  });
   const [org, setOrg] = useState({
     instanceName: "Quillra",
     operatorName: "",
@@ -77,7 +83,9 @@ export function SetupPage() {
           // Already configured — nothing to do here
           nav("/dashboard", { replace: true });
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     })();
   }, [nav]);
 
@@ -104,7 +112,9 @@ export function SetupPage() {
     try {
       await saveValues({ ANTHROPIC_API_KEY: anthropicKey.trim() });
       setStep("githubApp");
-    } catch { /* stay on step */ }
+    } catch {
+      /* stay on step */
+    }
   }
 
   // The GitHub App step has no "next" handler that saves fields — the
@@ -134,7 +144,9 @@ export function SetupPage() {
     try {
       await saveValues(values);
       setStep("organization");
-    } catch { /* stay on step */ }
+    } catch {
+      /* stay on step */
+    }
   }
 
   async function handleOrganizationNext() {
@@ -149,7 +161,9 @@ export function SetupPage() {
     try {
       await saveValues(values);
       setStep("signin");
-    } catch { /* stay on step */ }
+    } catch {
+      /* stay on step */
+    }
   }
 
   if (!status) {
@@ -166,7 +180,9 @@ export function SetupPage() {
         <div className="mb-10 flex items-center gap-3">
           <LogoMark size={28} />
           <span className="font-brand text-xl font-bold tracking-tight">Quillra</span>
-          <span className="ml-auto text-[11px] font-medium uppercase tracking-wider text-neutral-400">Setup</span>
+          <span className="ml-auto text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+            Setup
+          </span>
         </div>
 
         {/* Step indicator */}
@@ -176,7 +192,9 @@ export function SetupPage() {
               Step <span className="text-neutral-900">{stepIndex + 1}</span>
               <span className="text-neutral-400"> / {STEPS.length}</span>
             </span>
-            <span className="uppercase tracking-wider text-neutral-400">{STEPS[stepIndex]?.label}</span>
+            <span className="uppercase tracking-wider text-neutral-400">
+              {STEPS[stepIndex]?.label}
+            </span>
           </div>
           <div className="flex items-center gap-1.5">
             {STEPS.map((s, i) => (
@@ -198,16 +216,27 @@ export function SetupPage() {
         <div className="overflow-hidden rounded-3xl border border-neutral-200/80 bg-white shadow-sm">
           {step === "welcome" && (
             <div className="p-8">
-              <h1 className="text-[22px] font-semibold tracking-tight text-neutral-900">Welcome to Quillra</h1>
+              <h1 className="text-[22px] font-semibold tracking-tight text-neutral-900">
+                Welcome to Quillra
+              </h1>
               <p className="mt-2 text-sm leading-relaxed text-neutral-600">
-                A few short steps to get this instance running. You'll connect Claude for the
-                AI editor and install a GitHub App so Quillra can push to your repos. Email
-                delivery is optional.
+                A few short steps to get this instance running. You'll connect Claude for the AI
+                editor and install a GitHub App so Quillra can push to your repos. Email delivery is
+                optional.
               </p>
               <ul className="mt-6 divide-y divide-neutral-100 rounded-xl border border-neutral-200/70 bg-neutral-50/50">
                 <li className="flex items-center gap-3 px-4 py-3">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-neutral-700 ring-1 ring-neutral-200">
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <svg
+                      className="h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
                       <path d="M15 7a4 4 0 1 1-3.9 5H8v3H5v-3H3v-3h8.1A4 4 0 0 1 15 7Z" />
                       <circle cx="15" cy="11" r="1" fill="currentColor" />
                     </svg>
@@ -219,27 +248,46 @@ export function SetupPage() {
                 </li>
                 <li className="flex items-center gap-3 px-4 py-3">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-neutral-700 ring-1 ring-neutral-200">
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <svg
+                      className="h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
                       <path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.575.105.785-.25.785-.555 0-.275-.01-1-.015-1.965-3.2.695-3.875-1.54-3.875-1.54-.525-1.33-1.28-1.685-1.28-1.685-1.045-.715.08-.7.08-.7 1.155.08 1.765 1.185 1.765 1.185 1.03 1.765 2.7 1.255 3.36.96.105-.745.4-1.255.73-1.545-2.555-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.185-3.095-.12-.29-.515-1.465.11-3.055 0 0 .965-.31 3.165 1.18a10.98 10.98 0 0 1 2.88-.385c.98.005 1.97.13 2.88.385 2.195-1.49 3.16-1.18 3.16-1.18.625 1.59.23 2.765.115 3.055.735.805 1.18 1.835 1.18 3.095 0 4.43-2.69 5.405-5.255 5.69.41.355.78 1.055.78 2.125 0 1.535-.015 2.77-.015 3.15 0 .31.205.665.79.555A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" />
                     </svg>
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-semibold text-neutral-900">GitHub App</p>
-                    <p className="text-[12px] text-neutral-500">Scoped access to the repos you pick — revoke anytime</p>
+                    <p className="text-[12px] text-neutral-500">
+                      Scoped access to the repos you pick — revoke anytime
+                    </p>
                   </div>
                 </li>
                 <li className="flex items-center gap-3 px-4 py-3">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-neutral-700 ring-1 ring-neutral-200">
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <svg
+                      className="h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
                       <rect x="3" y="5" width="18" height="14" rx="2" />
                       <path d="m3 7 9 6 9-6" />
                     </svg>
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-semibold text-neutral-900">
-                      Email delivery <span className="ml-1 font-normal text-neutral-400">· optional</span>
+                      Email delivery{" "}
+                      <span className="ml-1 font-normal text-neutral-400">· optional</span>
                     </p>
-                    <p className="text-[12px] text-neutral-500">Send real invite emails instead of shareable links</p>
+                    <p className="text-[12px] text-neutral-500">
+                      Send real invite emails instead of shareable links
+                    </p>
                   </div>
                 </li>
               </ul>
@@ -249,7 +297,16 @@ export function SetupPage() {
                 className="mt-8 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-neutral-900 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-neutral-800"
               >
                 Get started
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M5 12h14M13 5l7 7-7 7" />
                 </svg>
               </button>
@@ -258,7 +315,9 @@ export function SetupPage() {
 
           {step === "anthropic" && (
             <div className="p-8">
-              <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">Anthropic API key</h2>
+              <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">
+                Anthropic API key
+              </h2>
               <p className="mt-2 text-sm text-neutral-500">
                 Quillra uses Claude to edit your site. Paste your API key below —
                 <a
@@ -272,7 +331,9 @@ export function SetupPage() {
                 .
               </p>
               <div className="mt-5">
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">API key</label>
+                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                  API key
+                </label>
                 <Input
                   type="password"
                   value={anthropicKey}
@@ -280,11 +341,12 @@ export function SetupPage() {
                   placeholder="sk-ant-api03-…"
                   autoFocus
                 />
-                {status.values.ANTHROPIC_API_KEY.set && status.values.ANTHROPIC_API_KEY.source === "env" && (
-                  <p className="mt-2 text-xs text-neutral-500">
-                    A key is already set in the environment. You can leave this blank to keep it.
-                  </p>
-                )}
+                {status.values.ANTHROPIC_API_KEY.set &&
+                  status.values.ANTHROPIC_API_KEY.source === "env" && (
+                    <p className="mt-2 text-xs text-neutral-500">
+                      A key is already set in the environment. You can leave this blank to keep it.
+                    </p>
+                  )}
               </div>
               {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
               <div className="mt-6 flex items-center justify-between">
@@ -301,7 +363,9 @@ export function SetupPage() {
                   disabled={saving || !anthropicKey.trim()}
                   className={cn(
                     "inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm",
-                    saving || !anthropicKey.trim() ? "cursor-not-allowed opacity-50" : "hover:bg-brand/90",
+                    saving || !anthropicKey.trim()
+                      ? "cursor-not-allowed opacity-50"
+                      : "hover:bg-brand/90",
                   )}
                 >
                   {saving ? "Saving…" : "Continue"}
@@ -310,107 +374,135 @@ export function SetupPage() {
             </div>
           )}
 
-          {step === "githubApp" && (() => {
-            const appConfigured = Boolean(
-              status?.values.GITHUB_APP_ID?.set && status?.values.GITHUB_APP_PRIVATE_KEY?.set,
-            );
-            const appName = status?.values.GITHUB_APP_NAME?.value;
-            // `installed=1` arrives from /api/setup/github-app/installed
-            // after github.com bounces the user back from the install
-            // screen. `installation_id` is the numeric id GitHub sends.
-            const justInstalled = searchParams.get("installed") === "1";
-            const installationId = searchParams.get("installation_id");
-            return (
-              <div className="p-8">
-                <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">GitHub App</h2>
-                <p className="mt-2 text-sm leading-relaxed text-neutral-500">
-                  Quillra pushes commits through its own GitHub App — no personal access
-                  tokens, installation tokens rotate automatically every hour, and you can
-                  revoke everything in one click from github.com.
-                </p>
+          {step === "githubApp" &&
+            (() => {
+              const appConfigured = Boolean(
+                status?.values.GITHUB_APP_ID?.set && status?.values.GITHUB_APP_PRIVATE_KEY?.set,
+              );
+              const appName = status?.values.GITHUB_APP_NAME?.value;
+              // `installed=1` arrives from /api/setup/github-app/installed
+              // after github.com bounces the user back from the install
+              // screen. `installation_id` is the numeric id GitHub sends.
+              const justInstalled = searchParams.get("installed") === "1";
+              const installationId = searchParams.get("installation_id");
+              return (
+                <div className="p-8">
+                  <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">
+                    GitHub App
+                  </h2>
+                  <p className="mt-2 text-sm leading-relaxed text-neutral-500">
+                    Quillra pushes commits through its own GitHub App — no personal access tokens,
+                    installation tokens rotate automatically every hour, and you can revoke
+                    everything in one click from github.com.
+                  </p>
 
-                {!appConfigured ? (
-                  <>
-                    <div className="mt-6 rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-[13px] leading-relaxed text-neutral-600">
-                      <p className="font-semibold text-neutral-900">What happens next:</p>
-                      <ol className="mt-2 list-decimal space-y-1 pl-5">
-                        <li>You click the button below</li>
-                        <li>GitHub asks you to approve creating the App (one click)</li>
-                        <li>GitHub asks you which repos to install it on (second click)</li>
-                        <li>You come back here, ready to go</li>
-                      </ol>
-                    </div>
-                    <a
-                      href="/api/setup/github-app/start"
-                      className="mt-5 flex h-11 w-full items-center justify-center gap-2.5 rounded-md bg-[#24292F] px-4 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-[#32383F]"
-                    >
-                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.575.105.785-.25.785-.555 0-.275-.01-1-.015-1.965-3.2.695-3.875-1.54-3.875-1.54-.525-1.33-1.28-1.685-1.28-1.685-1.045-.715.08-.7.08-.7 1.155.08 1.765 1.185 1.765 1.185 1.03 1.765 2.7 1.255 3.36.96.105-.745.4-1.255.73-1.545-2.555-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.185-3.095-.12-.29-.515-1.465.11-3.055 0 0 .965-.31 3.165 1.18a10.98 10.98 0 0 1 2.88-.385c.98.005 1.97.13 2.88.385 2.195-1.49 3.16-1.18 3.16-1.18.625 1.59.23 2.765.115 3.055.735.805 1.18 1.835 1.18 3.095 0 4.43-2.69 5.405-5.255 5.69.41.355.78 1.055.78 2.125 0 1.535-.015 2.77-.015 3.15 0 .31.205.665.79.555A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" />
-                      </svg>
-                      Create &amp; install GitHub App
-                    </a>
-                    <p className="mt-4 text-[11px] leading-snug text-neutral-400">
-                      Already have an App? Set <code className="rounded bg-neutral-100 px-1 font-mono">GITHUB_APP_ID</code> and{" "}
-                      <code className="rounded bg-neutral-100 px-1 font-mono">GITHUB_APP_PRIVATE_KEY</code> as environment variables and skip this step.
-                    </p>
-                    <div className="mt-6">
-                      <button
-                        type="button"
-                        onClick={() => setStep("anthropic")}
-                        className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-900"
+                  {!appConfigured ? (
+                    <>
+                      <div className="mt-6 rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-[13px] leading-relaxed text-neutral-600">
+                        <p className="font-semibold text-neutral-900">What happens next:</p>
+                        <ol className="mt-2 list-decimal space-y-1 pl-5">
+                          <li>You click the button below</li>
+                          <li>GitHub asks you to approve creating the App (one click)</li>
+                          <li>GitHub asks you which repos to install it on (second click)</li>
+                          <li>You come back here, ready to go</li>
+                        </ol>
+                      </div>
+                      <a
+                        href="/api/setup/github-app/start"
+                        className="mt-5 flex h-11 w-full items-center justify-center gap-2.5 rounded-md bg-[#24292F] px-4 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-[#32383F]"
                       >
-                        Back
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="mt-6 rounded-xl border border-green-200 bg-green-50/80 p-4">
-                      <div className="flex items-start gap-2.5">
-                        <svg className="mt-0.5 h-5 w-5 shrink-0 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        <svg
+                          className="h-4 w-4"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.575.105.785-.25.785-.555 0-.275-.01-1-.015-1.965-3.2.695-3.875-1.54-3.875-1.54-.525-1.33-1.28-1.685-1.28-1.685-1.045-.715.08-.7.08-.7 1.155.08 1.765 1.185 1.765 1.185 1.03 1.765 2.7 1.255 3.36.96.105-.745.4-1.255.73-1.545-2.555-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.185-3.095-.12-.29-.515-1.465.11-3.055 0 0 .965-.31 3.165 1.18a10.98 10.98 0 0 1 2.88-.385c.98.005 1.97.13 2.88.385 2.195-1.49 3.16-1.18 3.16-1.18.625 1.59.23 2.765.115 3.055.735.805 1.18 1.835 1.18 3.095 0 4.43-2.69 5.405-5.255 5.69.41.355.78 1.055.78 2.125 0 1.535-.015 2.77-.015 3.15 0 .31.205.665.79.555A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" />
                         </svg>
-                        <div>
-                          <p className="text-sm font-semibold text-green-900">
-                            {justInstalled ? "App installed." : "App configured."}
-                          </p>
-                          <p className="mt-0.5 text-[12px] leading-snug text-green-800">
-                            {appName ? <><span className="font-mono">{appName}</span>{" "}</> : null}
-                            {installationId ? (
-                              <>Installation <span className="font-mono">#{installationId}</span> is active.</>
-                            ) : (
-                              "Ready to push to the repos you selected."
-                            )}
-                          </p>
+                        Create &amp; install GitHub App
+                      </a>
+                      <p className="mt-4 text-[11px] leading-snug text-neutral-400">
+                        Already have an App? Set{" "}
+                        <code className="rounded bg-neutral-100 px-1 font-mono">GITHUB_APP_ID</code>{" "}
+                        and{" "}
+                        <code className="rounded bg-neutral-100 px-1 font-mono">
+                          GITHUB_APP_PRIVATE_KEY
+                        </code>{" "}
+                        as environment variables and skip this step.
+                      </p>
+                      <div className="mt-6">
+                        <button
+                          type="button"
+                          onClick={() => setStep("anthropic")}
+                          className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-900"
+                        >
+                          Back
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mt-6 rounded-xl border border-green-200 bg-green-50/80 p-4">
+                        <div className="flex items-start gap-2.5">
+                          <svg
+                            className="mt-0.5 h-5 w-5 shrink-0 text-green-600"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2.5}
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                          <div>
+                            <p className="text-sm font-semibold text-green-900">
+                              {justInstalled ? "App installed." : "App configured."}
+                            </p>
+                            <p className="mt-0.5 text-[12px] leading-snug text-green-800">
+                              {appName ? (
+                                <>
+                                  <span className="font-mono">{appName}</span>{" "}
+                                </>
+                              ) : null}
+                              {installationId ? (
+                                <>
+                                  Installation <span className="font-mono">#{installationId}</span>{" "}
+                                  is active.
+                                </>
+                              ) : (
+                                "Ready to push to the repos you selected."
+                              )}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="mt-6 flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={() => setStep("anthropic")}
-                        className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-900"
-                      >
-                        Back
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleGithubAppNext}
-                        className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm hover:bg-brand/90"
-                      >
-                        Continue
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })()}
+                      <div className="mt-6 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => setStep("anthropic")}
+                          className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-900"
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleGithubAppNext}
+                          className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm hover:bg-brand/90"
+                        >
+                          Continue
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
 
           {step === "email" && (
             <div className="p-8">
-              <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">Email delivery</h2>
+              <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">
+                Email delivery
+              </h2>
               <p className="mt-2 text-sm text-neutral-500">
                 Real emails for invites and client logins. You can change this later in settings.
               </p>
@@ -559,16 +651,24 @@ export function SetupPage() {
 
           {step === "organization" && (
             <div className="p-8">
-              <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">Who's running this instance?</h2>
+              <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">
+                Who's running this instance?
+              </h2>
               <p className="mt-2 text-sm text-neutral-500">
-                Contact details for whoever operates this Quillra install. Used in email footers, the
-                branded client login page, and the public <code className="rounded bg-neutral-100 px-1 font-mono text-[11px]">/impressum</code> page.
+                Contact details for whoever operates this Quillra install. Used in email footers,
+                the branded client login page, and the public{" "}
+                <code className="rounded bg-neutral-100 px-1 font-mono text-[11px]">
+                  /impressum
+                </code>{" "}
+                page.
               </p>
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[12px] leading-relaxed text-amber-800">
-                <strong className="font-semibold">Publicly visible.</strong> These values appear at the bottom of every email Quillra sends and on the
-                public <code className="rounded bg-amber-100 px-1 font-mono">/impressum</code> page of this instance. In Germany and Austria a commercial website operator is
-                required by law to provide these details, and modern spam filters (Gmail, Outlook) expect a real
-                sender identity to deliver email to the inbox.
+                <strong className="font-semibold">Publicly visible.</strong> These values appear at
+                the bottom of every email Quillra sends and on the public{" "}
+                <code className="rounded bg-amber-100 px-1 font-mono">/impressum</code> page of this
+                instance. In Germany and Austria a commercial website operator is required by law to
+                provide these details, and modern spam filters (Gmail, Outlook) expect a real sender
+                identity to deliver email to the inbox.
               </div>
 
               <div className="mt-5 space-y-4">
@@ -582,7 +682,8 @@ export function SetupPage() {
                     placeholder="Quillra"
                   />
                   <p className="mt-1 text-[11px] text-neutral-500">
-                    Shown under "Powered by" on the client login page and in email footers. Defaults to "Quillra".
+                    Shown under "Powered by" on the client login page and in email footers. Defaults
+                    to "Quillra".
                   </p>
                 </div>
 
@@ -675,14 +776,22 @@ export function SetupPage() {
           {step === "signin" && (
             <div className="p-8 text-center">
               <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-green-100 text-green-600">
-                <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <svg
+                  className="h-8 w-8"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2.5}
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <h2 className="text-[22px] font-semibold tracking-tight text-neutral-900">Create your owner account</h2>
+              <h2 className="text-[22px] font-semibold tracking-tight text-neutral-900">
+                Create your owner account
+              </h2>
               <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-neutral-500">
-                Sign in with GitHub now to become the instance owner. Everyone you invite
-                later can sign in with just their email.
+                Sign in with GitHub now to become the instance owner. Everyone you invite later can
+                sign in with just their email.
               </p>
               {/* GitHub brand-compliant sign-in button — follows GitHub's
                   published guidance: solid #24292F bg, white text, official
@@ -708,8 +817,8 @@ export function SetupPage() {
                 Sign in with GitHub
               </button>
               <p className="mt-5 text-[11px] leading-snug text-neutral-400">
-                GitHub is only required for you, the owner. You'll be able to push to your
-                repos from Quillra right after this.
+                GitHub is only required for you, the owner. You'll be able to push to your repos
+                from Quillra right after this.
               </p>
             </div>
           )}

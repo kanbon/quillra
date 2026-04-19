@@ -1,14 +1,10 @@
-import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { PreviewDebugModal } from "@/components/organisms/PreviewDebugModal";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
-import {
-  isPreviewErrored,
-  usePreviewStatus,
-  type PreviewStatus,
-} from "@/lib/use-preview-status";
+import { type PreviewStatus, isPreviewErrored, usePreviewStatus } from "@/lib/use-preview-status";
+import { useCallback, useRef, useState } from "react";
 
 type Props = {
   projectId: string;
@@ -57,7 +53,9 @@ export function PreviewPane({
     setBannerDismissed(true);
     try {
       window.localStorage.setItem("quillra:preview-banner-dismissed", "1");
-    } catch { /* private mode etc. */ }
+    } catch {
+      /* private mode etc. */
+    }
   }, []);
   const ready = hasFrame; // The iframe handles its own loading state via the proxy boot page
   const basePreviewPath = src?.split("?")[0] ?? "";
@@ -70,11 +68,18 @@ export function PreviewPane({
       if (currentSrc && !currentSrc.includes("/__preview/")) {
         frame.src = src!;
       }
-    } catch { /* cross-origin */ }
+    } catch {
+      /* cross-origin */
+    }
   }, [src, basePreviewPath]);
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col bg-neutral-50", !compact && "border-l border-neutral-200")}>
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-col bg-neutral-50",
+        !compact && "border-l border-neutral-200",
+      )}
+    >
       {!compact && (
         <div className="flex items-center justify-between border-b border-neutral-200 bg-white px-4 py-3">
           <div>
@@ -103,10 +108,22 @@ export function PreviewPane({
                 )}
                 title={t("preview.openInNewTab")}
                 aria-label={t("preview.openInNewTab")}
-                onClick={(e) => { if (!ready) e.preventDefault(); }}
+                onClick={(e) => {
+                  if (!ready) e.preventDefault();
+                }}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                  />
                 </svg>
               </a>
               <div className="h-5 w-px bg-neutral-200" />
@@ -118,8 +135,18 @@ export function PreviewPane({
                 title={t("preview.refresh")}
                 aria-label={t("preview.refresh")}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5"
+                  />
                 </svg>
               </button>
               <div className="h-5 w-px bg-neutral-200" />
@@ -130,8 +157,18 @@ export function PreviewPane({
                 title="Debug live preview"
                 aria-label="Debug live preview"
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 4l-2 3M16 4l2 3" />
                 </svg>
               </button>
@@ -140,7 +177,11 @@ export function PreviewPane({
         </div>
       )}
 
-      <PreviewDebugModal open={debugOpen} onClose={() => setDebugOpen(false)} projectId={projectId} />
+      <PreviewDebugModal
+        open={debugOpen}
+        onClose={() => setDebugOpen(false)}
+        projectId={projectId}
+      />
 
       <div className="relative min-h-0 flex-1 bg-neutral-100/80">
         {hasFrame ? (
@@ -192,7 +233,10 @@ export function PreviewPane({
                 />
               </svg>
             </div>
-            <Heading as="h3" className="mb-2 text-center text-lg font-semibold tracking-tight text-neutral-900">
+            <Heading
+              as="h3"
+              className="mb-2 text-center text-lg font-semibold tracking-tight text-neutral-900"
+            >
               {t("preview.noPreview")}
             </Heading>
             <p className="mb-8 max-w-sm text-center text-sm leading-relaxed text-neutral-500">
@@ -232,8 +276,18 @@ function PreviewErrorOverlay({
       <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-500">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.8}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+              />
             </svg>
           </span>
           <div className="min-w-0 flex-1">

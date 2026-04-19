@@ -1,3 +1,7 @@
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 /**
  * Spend-controls panel rendered beneath the Usage tables. Edits three
  * scopes of usage_limits rows (global, role, user) plus the alert
@@ -5,10 +9,6 @@
  * a simple form — no per-row save buttons, no optimistic merges.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
 
 type LimitRow = {
   scope: "global" | "role" | "user";
@@ -142,13 +142,12 @@ export function UsageLimitsPanel({ users }: { users: UserOption[] }) {
     () =>
       ROLES.map((role) => ({
         role,
-        draft:
-          drafts.find((d) => d.scope === "role" && d.target === role.id) ?? {
-            scope: "role" as const,
-            target: role.id,
-            warnStr: "",
-            hardStr: "",
-          },
+        draft: drafts.find((d) => d.scope === "role" && d.target === role.id) ?? {
+          scope: "role" as const,
+          target: role.id,
+          warnStr: "",
+          hardStr: "",
+        },
       })),
     [drafts],
   );

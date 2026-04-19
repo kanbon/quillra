@@ -1,3 +1,9 @@
+import { Spinner } from "@/components/atoms/Spinner";
+import { UsageLimitsPanel } from "@/components/organisms/instance-settings/UsageLimitsPanel";
+import { UserUsageDetail } from "@/components/organisms/instance-settings/UserUsageDetail";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 /**
  * Organization-level token usage + cost breakdown. Reads
  * `/api/admin/usage` and renders three tables: per-project, per-user,
@@ -9,12 +15,6 @@
  * in the way of scanning the table". Finance-style.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
-import { Spinner } from "@/components/atoms/Spinner";
-import { UsageLimitsPanel } from "@/components/organisms/instance-settings/UsageLimitsPanel";
-import { UserUsageDetail } from "@/components/organisms/instance-settings/UserUsageDetail";
 
 type Totals = {
   runs: number;
@@ -98,7 +98,11 @@ export function UsageTab() {
   });
   const dismissOnboard = () => {
     setOnboardDismissed(true);
-    try { window.localStorage.setItem(ONBOARD_KEY, "1"); } catch { /* private mode */ }
+    try {
+      window.localStorage.setItem(ONBOARD_KEY, "1");
+    } catch {
+      /* private mode */
+    }
   };
 
   const refetch = useCallback(async () => {
@@ -210,7 +214,10 @@ export function UsageTab() {
               value={formatTokens(totals.input_tokens)}
               subValue={`${formatTokens(totals.cache_read_tokens)} ${t("usage.cachedSuffix")}`}
             />
-            <StatCard label={t("usage.statOutputTokens")} value={formatTokens(totals.output_tokens)} />
+            <StatCard
+              label={t("usage.statOutputTokens")}
+              value={formatTokens(totals.output_tokens)}
+            />
           </div>
 
           {/* Per-project table */}
@@ -296,13 +303,17 @@ export function UsageTab() {
                         >
                           <td className="px-3 py-2 align-top text-neutral-800">
                             <div className="min-w-0">
-                              <p className="truncate font-medium text-neutral-900">{u.display_name}</p>
+                              <p className="truncate font-medium text-neutral-900">
+                                {u.display_name}
+                              </p>
                               {u.email && u.email !== u.display_name && (
                                 <p className="truncate text-[11px] text-neutral-500">{u.email}</p>
                               )}
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-neutral-800">{u.runs}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-neutral-800">
+                            {u.runs}
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums text-neutral-800">
                             {formatTokens(u.total_tokens)}
                           </td>
@@ -325,7 +336,9 @@ export function UsageTab() {
                                     ? "border-emerald-600 bg-emerald-500"
                                     : "border-neutral-300 bg-neutral-200",
                                 )}
-                                title={reportsOn ? t("usage.reportsEnabled") : t("usage.reportsDisabled")}
+                                title={
+                                  reportsOn ? t("usage.reportsEnabled") : t("usage.reportsDisabled")
+                                }
                               >
                                 <span
                                   className={cn(
@@ -380,9 +393,7 @@ export function UsageTab() {
             />
           </Section>
 
-          <p className="text-[11px] leading-snug text-neutral-400">
-            {t("usage.footnote")}
-          </p>
+          <p className="text-[11px] leading-snug text-neutral-400">{t("usage.footnote")}</p>
 
           <UsageLimitsPanel
             users={data.perUser
@@ -438,12 +449,7 @@ function StatCard({
         {value}
       </p>
       {subValue && (
-        <p
-          className={cn(
-            "mt-0.5 text-[11px]",
-            emphasis ? "text-white/70" : "text-neutral-500",
-          )}
-        >
+        <p className={cn("mt-0.5 text-[11px]", emphasis ? "text-white/70" : "text-neutral-500")}>
           {subValue}
         </p>
       )}
@@ -486,10 +492,7 @@ function Table({
             {headers.map((h, i) => (
               <th
                 key={h}
-                className={cn(
-                  "px-3 py-2 text-left",
-                  i === headers.length - 1 && "text-right",
-                )}
+                className={cn("px-3 py-2 text-left", i === headers.length - 1 && "text-right")}
               >
                 {h}
               </th>

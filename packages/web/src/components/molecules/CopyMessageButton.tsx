@@ -1,3 +1,5 @@
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 /**
  * Hover-revealed copy button for chat messages. Minimal styling by
  * design: no background, no border — just a subtle light-grey icon
@@ -31,8 +33,6 @@
  *   already moved the cursor away.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 
 type Props = {
   text: string;
@@ -107,9 +107,7 @@ export function CopyMessageButton({ text, className }: Props) {
       <span
         className={cn(
           "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
-          copied
-            ? "text-green-600"
-            : "text-neutral-400 hover:text-neutral-800 active:scale-95",
+          copied ? "text-green-600" : "text-neutral-400 hover:text-neutral-800 active:scale-95",
         )}
       >
         {copied ? (

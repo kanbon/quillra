@@ -1,15 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { Textarea } from "@/components/atoms/Textarea";
 import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchFields";
+import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
-import { useT } from "@/i18n/i18n";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
 
 const schema = z.object({
   name: z.string().min(1, "Name required"),
@@ -40,7 +40,12 @@ export function ConnectProjectForm({ onCreated }: Props) {
     formState: { errors, isSubmitting },
   } = useForm<Form>({
     resolver: zodResolver(schema),
-    defaultValues: { name: "", githubRepoFullName: "", defaultBranch: "main", previewDevCommand: "" },
+    defaultValues: {
+      name: "",
+      githubRepoFullName: "",
+      defaultBranch: "main",
+      previewDevCommand: "",
+    },
   });
 
   const repoFull = watch("githubRepoFullName");
@@ -49,7 +54,8 @@ export function ConnectProjectForm({ onCreated }: Props) {
 
   const reposQ = useQuery({
     queryKey: ["github-repos"],
-    queryFn: () => apiJson<{ repos: { fullName: string; defaultBranch: string }[] }>("/api/github/repos"),
+    queryFn: () =>
+      apiJson<{ repos: { fullName: string; defaultBranch: string }[] }>("/api/github/repos"),
     retry: false,
   });
 
@@ -114,7 +120,9 @@ export function ConnectProjectForm({ onCreated }: Props) {
       </div>
 
       <div className="sm:col-span-1">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">{t("connectForm.displayName")}</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">
+          {t("connectForm.displayName")}
+        </label>
         <select
           className={selectLikeInputClassName()}
           value={displayNameMode}

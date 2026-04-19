@@ -17,20 +17,20 @@
  * only the instance owner can change settings.
  */
 
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
+import { user } from "../db/auth-schema.js";
+import { db } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
+import { exchangeManifestCode } from "../services/github-app.js";
 import {
-  getSetupStatus,
-  setInstanceSetting,
   SETTABLE_KEYS,
   type SettableKey,
+  getSetupStatus,
+  setInstanceSetting,
 } from "../services/instance-settings.js";
-import { exchangeManifestCode } from "../services/github-app.js";
 import { resetMailer } from "../services/mailer.js";
-import { db } from "../db/index.js";
-import { eq } from "drizzle-orm";
-import { user } from "../db/auth-schema.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -38,7 +38,9 @@ const saveSchema = z.object({
   values: z.record(z.string().min(1).max(64), z.string().nullable()),
 });
 
-function originFromRequest(c: { req: { url: string; header: (k: string) => string | undefined } }): string {
+function originFromRequest(c: {
+  req: { url: string; header: (k: string) => string | undefined };
+}): string {
   const envBase = process.env.BETTER_AUTH_URL?.replace(/\/$/, "");
   if (envBase) return envBase;
   // Fallback: compute from request. Honor X-Forwarded-Proto if present
@@ -213,10 +215,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       return c.redirect(`${data.html_url}/installations/new`, 302);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "unknown error";
-      return c.text(
-        `GitHub App creation failed: ${msg}\n\nGo back and try again.`,
-        500,
-      );
+      return c.text(`GitHub App creation failed: ${msg}\n\nGo back and try again.`, 500);
     }
   })
   /**

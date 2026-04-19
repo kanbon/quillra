@@ -1,3 +1,7 @@
+import { Button } from "@/components/atoms/Button";
+import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 /**
  * Runtime credentials Quillra itself uses: Anthropic API key for the
  * chat editor. GitHub credentials live under Integrations as a GitHub
@@ -5,11 +9,7 @@
  * for repo operations.
  */
 import { useState } from "react";
-import { Button } from "@/components/atoms/Button";
-import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { getStatus, type StatusResponse } from "./types";
+import { type StatusResponse, getStatus } from "./types";
 
 type Props = {
   status: StatusResponse | null;

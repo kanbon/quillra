@@ -4,13 +4,7 @@
  * of a generic "Bad gateway" or vague spinner.
  */
 
-export type PreviewStage =
-  | "idle"
-  | "cloning"
-  | "installing"
-  | "starting"
-  | "ready"
-  | "error";
+export type PreviewStage = "idle" | "cloning" | "installing" | "starting" | "ready" | "error";
 
 export type PreviewStatus = {
   stage: PreviewStage;
@@ -43,7 +37,10 @@ export function describeStage(stage: PreviewStage): { label: string; detail: str
     case "cloning":
       return { label: "Fetching your site", detail: "Cloning the repository from GitHub…" };
     case "installing":
-      return { label: "Installing packages", detail: "This is a one-time setup. It can take a couple of minutes." };
+      return {
+        label: "Installing packages",
+        detail: "This is a one-time setup. It can take a couple of minutes.",
+      };
     case "starting":
       return { label: "Starting the preview", detail: "Waking up the dev server…" };
     case "ready":

@@ -26,12 +26,7 @@
  *      (it lulls operators into a false sense of security).
  */
 
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  hkdfSync,
-} from "node:crypto";
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
 const ALGO = "aes-256-gcm";
 const IV_BYTES = 12;

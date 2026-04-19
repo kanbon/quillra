@@ -1,25 +1,25 @@
+import { createHash, randomBytes } from "node:crypto";
 import { eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { db, rawSqlite } from "../db/index.js";
-import { user } from "../db/auth-schema.js";
 import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
+import { user } from "../db/auth-schema.js";
+import { db, rawSqlite } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
-import { sendEmail, isMailerEnabled } from "../services/mailer.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
-import { getOrganizationInfo, getInstanceSetting, setInstanceSetting } from "../services/instance-settings.js";
 import {
-  listInstallations as listGithubAppInstallations,
   clearGithubAppCredentials,
+  listInstallations as listGithubAppInstallations,
 } from "../services/github-app.js";
 import {
-  getOwnerEmail,
-  listUsageLimitRows,
-  upsertUsageLimit,
-} from "../services/usage-limits.js";
+  getInstanceSetting,
+  getOrganizationInfo,
+  setInstanceSetting,
+} from "../services/instance-settings.js";
+import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 import { reconcileMonthlyReports } from "../services/report-scheduler.js";
+import { getOwnerEmail, listUsageLimitRows, upsertUsageLimit } from "../services/usage-limits.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -106,7 +106,8 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     if (isMailerEnabled()) {
       try {
         const org = getOrganizationInfo();
-        const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "") || "https://cms.kanbon.at";
+        const base =
+          (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "") || "https://cms.kanbon.at";
         const loginUrl = `${base}/login?email=${encodeURIComponent(parsed.data.email)}`;
         const html = inviteEmailHtml({
           projectName: org.instanceName,
@@ -126,7 +127,9 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
           },
         });
         emailed = result.sent;
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
 
     return c.json({ ok: true, email: parsed.data.email, emailed });
@@ -182,7 +185,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       text: "If you received this, your Quillra email configuration is working correctly.",
       html:
         "<p>If you received this, your Quillra email configuration is working correctly.</p>" +
-        "<p style=\"color:#888;font-size:12px;\">Sent from the Organization Settings → Email tab.</p>",
+        '<p style="color:#888;font-size:12px;">Sent from the Organization Settings → Email tab.</p>',
     });
     if (result.sent) {
       return c.json({ ok: true, backend: result.backend });
@@ -203,10 +206,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       const result = await listGithubAppInstallations();
       return c.json(result);
     } catch (e) {
-      return c.json(
-        { installations: [], error: e instanceof Error ? e.message : "Failed" },
-        500,
-      );
+      return c.json({ installations: [], error: e instanceof Error ? e.message : "Failed" }, 500);
     }
   })
   /**
@@ -343,7 +343,9 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     if ("error" in r) return r.error;
     const userId = c.req.param("userId");
     const monthsRaw = Number(c.req.query("months") ?? 12);
-    const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(36, Math.floor(monthsRaw))) : 12;
+    const months = Number.isFinite(monthsRaw)
+      ? Math.max(1, Math.min(36, Math.floor(monthsRaw)))
+      : 12;
     const now = new Date();
     const from = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1).getTime();
 

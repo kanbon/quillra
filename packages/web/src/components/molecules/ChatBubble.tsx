@@ -1,7 +1,7 @@
+import { cn } from "@/lib/cn";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { cn } from "@/lib/cn";
 
 type Props = {
   role: "user" | "assistant";
@@ -18,14 +18,18 @@ export function ChatBubble({ role, children, streaming }: Props) {
     <div
       className={cn(
         "max-w-[min(100%,42rem)] rounded-2xl px-4 py-3 text-sm",
-        isUser ? "ml-auto bg-neutral-100 text-neutral-900" : "mr-auto border border-neutral-200 bg-white text-neutral-800",
+        isUser
+          ? "ml-auto bg-neutral-100 text-neutral-900"
+          : "mr-auto border border-neutral-200 bg-white text-neutral-800",
       )}
     >
       {isUser ? (
         <p className="whitespace-pre-wrap">{children}</p>
       ) : (
         <div className={cn(mdClass, streaming && "opacity-90")}>
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{children || (streaming ? "…" : "")}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+            {children || (streaming ? "…" : "")}
+          </ReactMarkdown>
         </div>
       )}
     </div>

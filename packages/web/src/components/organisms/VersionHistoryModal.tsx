@@ -1,14 +1,14 @@
+import { Modal } from "@/components/atoms/Modal";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
+import { useQuery } from "@tanstack/react-query";
 /**
  * Version history modal — sources from the git commit log in the cloned
  * workspace. Shows a vertical timeline with author, message, relative
  * time, short SHA, and whether the commit has been pushed to origin yet.
  */
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Modal } from "@/components/atoms/Modal";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 
 type Commit = {
   sha: string;
@@ -95,7 +95,13 @@ export function VersionHistoryModal({ open, onClose, projectId }: Props) {
           className="-mr-2 -mt-1 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
           aria-label={t("common.close")}
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -133,7 +139,12 @@ export function VersionHistoryModal({ open, onClose, projectId }: Props) {
                 {/* Content */}
                 <div className="min-w-0 flex-1 pt-0.5">
                   <div className="flex items-start justify-between gap-2">
-                    <p className={cn("min-w-0 flex-1 text-[13px] leading-snug text-neutral-900", c.isHead && "font-semibold")}>
+                    <p
+                      className={cn(
+                        "min-w-0 flex-1 text-[13px] leading-snug text-neutral-900",
+                        c.isHead && "font-semibold",
+                      )}
+                    >
                       {c.subject}
                     </p>
                     {c.isHead && (

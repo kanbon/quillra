@@ -1,3 +1,9 @@
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 /**
  * Email delivery configuration — provider radio (none / Resend / SMTP)
  * plus either a Resend API key or a full SMTP form, depending on the
@@ -18,13 +24,7 @@
  * supplied address, so it can't be used as a spam relay.
  */
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
-import { getStatus, type StatusResponse } from "./types";
+import { type StatusResponse, getStatus } from "./types";
 
 type Provider = "none" | "resend" | "smtp";
 
@@ -90,7 +90,7 @@ export function EmailTab({ status, onSaved }: Props) {
   const isDirty =
     provider !== previous.provider ||
     emailFrom !== previous.emailFrom ||
-    (provider === "resend" && (resendEditing && resendDraft.length > 0)) ||
+    (provider === "resend" && resendEditing && resendDraft.length > 0) ||
     (provider === "smtp" &&
       (smtpHost !== previous.smtpHost ||
         smtpPort !== previous.smtpPort ||
@@ -332,7 +332,9 @@ export function EmailTab({ status, onSaved }: Props) {
               disabled={testing || isDirty}
               title={isDirty ? t("instanceSettings.saveBeforeTest") : undefined}
             >
-              {testing ? t("instanceSettings.sendingTestEmail") : t("instanceSettings.sendTestEmail")}
+              {testing
+                ? t("instanceSettings.sendingTestEmail")
+                : t("instanceSettings.sendTestEmail")}
             </Button>
           )}
         </div>

@@ -8,7 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { detectFromManifest, type FrameworkDef } from "./framework-registry.js";
+import { type FrameworkDef, detectFromManifest } from "./framework-registry.js";
 
 export type FrameworkInfo = {
   id: string;
@@ -44,7 +44,9 @@ function defToInfo(def: FrameworkDef): FrameworkInfo {
 type CacheEntry = { mtimeMs: number; info: FrameworkInfo };
 const cache = new Map<string, CacheEntry>();
 
-function readJson(file: string): { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null {
+function readJson(
+  file: string,
+): { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
@@ -58,7 +60,9 @@ function detect(repoPath: string): FrameworkInfo {
   let rootFiles: string[] = [];
   try {
     rootFiles = fs.readdirSync(repoPath);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   const def = detectFromManifest({ packageJson, rootFiles });
   return def ? defToInfo(def) : UNKNOWN;
 }

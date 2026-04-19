@@ -1,3 +1,15 @@
+import { Heading } from "@/components/atoms/Heading";
+import { LogoMark } from "@/components/atoms/LogoMark";
+import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
+import { AvatarDropdown } from "@/components/organisms/AvatarDropdown";
+import { ChangesModal } from "@/components/organisms/ChangesModal";
+import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useProjectPresence } from "@/hooks/useProjectPresence";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
+import { useQuery } from "@tanstack/react-query";
 /**
  * Single source of truth for the top bar when the user is inside a specific
  * project. Used by BOTH the Editor and Project Settings routes so the tab
@@ -9,19 +21,7 @@
  * rendering on the editor route) without moving the tabs.
  */
 import { useState } from "react";
-import { NavLink, Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { Heading } from "@/components/atoms/Heading";
-import { LogoMark } from "@/components/atoms/LogoMark";
-import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
-import { AvatarDropdown } from "@/components/organisms/AvatarDropdown";
-import { ChangesModal } from "@/components/organisms/ChangesModal";
-import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useProjectPresence } from "@/hooks/useProjectPresence";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
+import { Link, NavLink } from "react-router-dom";
 
 type PublishStatusLite = {
   dirty: string[];
@@ -92,9 +92,7 @@ export function ProjectHeader({
     refetchIntervalInBackground: false,
     staleTime: 10_000,
   });
-  const pendingCount = publishStatus
-    ? publishStatus.dirty.length + publishStatus.unpushed
-    : 0;
+  const pendingCount = publishStatus ? publishStatus.dirty.length + publishStatus.unpushed : 0;
   const hasChanges = Boolean(publishStatus?.hasChanges);
 
   return (
@@ -125,13 +123,16 @@ export function ProjectHeader({
               </Link>
             )}
             <div className="flex items-center gap-2">
-              <Heading as="h2" className="truncate text-base font-semibold tracking-tight text-neutral-900">
+              <Heading
+                as="h2"
+                className="truncate text-base font-semibold tracking-tight text-neutral-900"
+              >
                 {projectName}
               </Heading>
               {framework && framework.id !== "unknown" && (
                 <span
                   className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white py-1 pl-1 pr-2.5 text-[11px] font-semibold tracking-tight text-neutral-700 shadow-sm ring-1 ring-neutral-200"
-                  title={`${framework.label}${framework.optimizes ? " · " + t("toolbar.autoOptimisesImages") : ""}`}
+                  title={`${framework.label}${framework.optimizes ? ` · ${t("toolbar.autoOptimisesImages")}` : ""}`}
                 >
                   <span
                     className="flex h-5 w-5 items-center justify-center rounded-full"
@@ -182,8 +183,18 @@ export function ProjectHeader({
               title={t("versionHistory.open")}
               aria-label={t("versionHistory.open")}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.8}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
               </svg>
             </button>
           )}
@@ -205,9 +216,7 @@ export function ProjectHeader({
               onClick={onPublish}
               className={cn(
                 "inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-4 text-[13px] font-semibold text-white shadow-sm transition-all",
-                publishing
-                  ? "cursor-wait opacity-70"
-                  : "hover:bg-brand/90 hover:shadow",
+                publishing ? "cursor-wait opacity-70" : "hover:bg-brand/90 hover:shadow",
               )}
             >
               {publishing ? (
@@ -217,7 +226,13 @@ export function ProjectHeader({
                 </>
               ) : (
                 <>
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2.2}
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                   {t("toolbar.publish")}
@@ -232,8 +247,16 @@ export function ProjectHeader({
           <AvatarDropdown />
         </div>
       </div>
-      <VersionHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projectId={projectId} />
-      <ChangesModal open={changesOpen} onClose={() => setChangesOpen(false)} projectId={projectId} />
+      <VersionHistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        projectId={projectId}
+      />
+      <ChangesModal
+        open={changesOpen}
+        onClose={() => setChangesOpen(false)}
+        projectId={projectId}
+      />
     </header>
   );
 }

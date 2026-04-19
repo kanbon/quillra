@@ -1,7 +1,7 @@
-import { Link } from "react-router-dom";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { AvatarDropdown } from "@/components/organisms/AvatarDropdown";
 import { useT } from "@/i18n/i18n";
+import { Link } from "react-router-dom";
 
 /**
  * Global header used on dashboard + instance-settings routes. Inside a

@@ -1,13 +1,7 @@
-import { useEffect, useState } from "react";
 import { apiJson } from "@/lib/api";
+import { useEffect, useState } from "react";
 
-export type PreviewStage =
-  | "idle"
-  | "starting"
-  | "installing"
-  | "ready"
-  | "error"
-  | string;
+export type PreviewStage = "idle" | "starting" | "installing" | "ready" | "error" | string;
 
 type ChildProcess = {
   running: boolean;
@@ -51,7 +45,10 @@ type RawResponse = {
  * 2s with a richer shape; this hook is the always-on background pulse
  * that drives the error overlay in `PreviewPane`.
  */
-export function usePreviewStatus(projectId: string | undefined, enabled = true): PreviewStatus | null {
+export function usePreviewStatus(
+  projectId: string | undefined,
+  enabled = true,
+): PreviewStatus | null {
   const [status, setStatus] = useState<PreviewStatus | null>(null);
 
   useEffect(() => {

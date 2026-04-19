@@ -1,15 +1,15 @@
-import { and, eq } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
+import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
+import type { ProjectRole } from "../db/app-schema.js";
+import { type InstanceRole, user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import { projectInvites, projectMembers, projects } from "../db/schema.js";
-import { user, type InstanceRole } from "../db/auth-schema.js";
 import type { SessionUser } from "../lib/auth.js";
-import type { ProjectRole } from "../db/app-schema.js";
-import { sendEmail, isMailerEnabled } from "../services/mailer.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
+import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
 type Variables = { user: SessionUser | null };
 
@@ -17,7 +17,10 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-async function requireUser(c: { get: (k: "user") => SessionUser | null; json: (b: unknown, s: number) => Response }) {
+async function requireUser(c: {
+  get: (k: "user") => SessionUser | null;
+  json: (b: unknown, s: number) => Response;
+}) {
   const user = c.get("user");
   if (!user) return { error: c.json({ error: "Unauthorized" }, 401) };
   return { user };
@@ -116,14 +119,19 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     } else if (role !== "client" && !existingUser.instanceRole) {
       // Existing user but no instanceRole — upgrade them so they can
       // sign into the dashboard (not just one project).
-      await db.update(user).set({ instanceRole: "member" as InstanceRole }).where(eq(user.id, existingUser.id));
+      await db
+        .update(user)
+        .set({ instanceRole: "member" as InstanceRole })
+        .where(eq(user.id, existingUser.id));
     }
 
     if (existingUser) {
       const [memberRow] = await db
         .select()
         .from(projectMembers)
-        .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, existingUser.id)))
+        .where(
+          and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, existingUser.id)),
+        )
         .limit(1);
       if (!memberRow) {
         await db.insert(projectMembers).values({
@@ -136,7 +144,10 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
         });
       } else if (memberRow.role !== role) {
         // Refuse to silently change an existing non-matching role
-        return c.json({ error: `User already has a different role (${memberRow.role}) on this project` }, 409);
+        return c.json(
+          { error: `User already has a different role (${memberRow.role}) on this project` },
+          409,
+        );
       }
     }
 

@@ -1,14 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { simpleGit } from "simple-git";
-import { setPreviewStatus, registerPreviewPort } from "./preview-status.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
   getGithubAppCredentials,
   getInstallationTokenForRepo,
   isGithubAppConfigured,
 } from "./github-app.js";
+import { registerPreviewPort, setPreviewStatus } from "./preview-status.js";
 
 /**
  * Resolve a short-lived GitHub App installation token for a specific
@@ -37,12 +37,16 @@ const previewChildren = new Map<string, ChildProcess>();
  * Wiped whenever the dev server restarts.
  */
 const MAX_LOG_LINES = 200;
-const previewLogs = new Map<string, Array<{ t: number; stream: "stdout" | "stderr"; line: string }>>();
+const previewLogs = new Map<
+  string,
+  Array<{ t: number; stream: "stdout" | "stderr"; line: string }>
+>();
 
 function appendLog(projectId: string, stream: "stdout" | "stderr", chunk: string) {
   const buf = previewLogs.get(projectId) ?? [];
   for (const raw of chunk.split(/\r?\n/)) {
-    const line = raw.replace(/\u001b\[[0-9;]*m/g, ""); // strip ANSI colours
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI escape codes from preview process output
+    const line = raw.replace(/\u001b\[[0-9;]*m/g, "");
     if (!line) continue;
     buf.push({ t: Date.now(), stream, line });
   }
@@ -151,7 +155,10 @@ function getPackageManager(repoPath: string): "yarn" | "pnpm" | "npm" {
   return "npm";
 }
 
-export async function installDependenciesIfNeeded(repoPath: string, projectId?: string): Promise<void> {
+export async function installDependenciesIfNeeded(
+  repoPath: string,
+  projectId?: string,
+): Promise<void> {
   const pkg = path.join(repoPath, "package.json");
   if (!fs.existsSync(pkg)) return;
   if (fs.existsSync(path.join(repoPath, "node_modules"))) return;
@@ -216,7 +223,9 @@ export function resolveDevCommand(
   let rootFiles: string[] = [];
   try {
     rootFiles = fs.readdirSync(repoPath);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   const def = detectFromManifest({ packageJson: pkg, rootFiles });
   if (def) {
     return {
@@ -309,7 +318,9 @@ function sweepStaleGitLocks(repoPath: string): void {
       fs.unlinkSync(lockPath);
       console.warn(`[workspace] removed stale .git/index.lock in ${repoPath}`);
     }
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 /**
@@ -371,7 +382,10 @@ export async function ensureRepoCloned(
     } catch (e) {
       if (opts.onInstallFailed) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.warn(`[workspace] install failed for ${projectId}; continuing so the chat can debug:`, msg.slice(0, 200));
+        console.warn(
+          `[workspace] install failed for ${projectId}; continuing so the chat can debug:`,
+          msg.slice(0, 200),
+        );
         opts.onInstallFailed(msg);
         return;
       }
@@ -477,7 +491,10 @@ export function getPreviewUrl(projectId: string, port: number): string {
     // Subdomain mode: {id}.cms.kanbon.at
     let id = projectSubdomainIds.get(projectId);
     if (!id) {
-      id = projectId.slice(0, 12).toLowerCase().replace(/[^a-z0-9]/g, "");
+      id = projectId
+        .slice(0, 12)
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
       projectSubdomainIds.set(projectId, id);
     }
     previewSubdomains.set(id, port);
@@ -547,10 +564,16 @@ export async function pushToGitHub(
     // pushToGitHub, so this branch is rarely hit in practice.
     let message = commitMessage?.trim();
     if (!message) {
-      const changed = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
-      const list = changed.length <= 3
-        ? changed.join(", ")
-        : `${changed.slice(0, 3).join(", ")} and ${changed.length - 3} more`;
+      const changed = [
+        ...status.modified,
+        ...status.created,
+        ...status.not_added,
+        ...status.deleted,
+      ];
+      const list =
+        changed.length <= 3
+          ? changed.join(", ")
+          : `${changed.slice(0, 3).join(", ")} and ${changed.length - 3} more`;
       message = `Update ${list}`;
     }
     const commitArgs: string[] = [];

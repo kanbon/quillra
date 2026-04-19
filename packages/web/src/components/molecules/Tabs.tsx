@@ -1,3 +1,4 @@
+import { cn } from "@/lib/cn";
 /**
  * Reusable tab list. On desktop (≥ md) it renders vertically as a
  * sidebar-style list with icon + label + description. On mobile it
@@ -7,8 +8,7 @@
  * don't couple this to the router, so tab switches don't push history
  * entries and the rest of the page can hold form state across switches.
  */
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
-import { cn } from "@/lib/cn";
+import { type KeyboardEvent, type ReactNode, useRef } from "react";
 
 export type TabItem = {
   id: string;

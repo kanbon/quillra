@@ -14,15 +14,15 @@
  * updates the in-memory language so all subscribed components re-render.
  */
 import {
+  type ReactNode,
   createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
 } from "react";
-import { dictionaries, en, type Language } from "./dictionaries";
+import { type Language, dictionaries, en } from "./dictionaries";
 
 const LS_KEY = "quillra:language";
 
@@ -79,16 +79,28 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         const lang = data.user?.language;
         if (!cancelled && (lang === "en" || lang === "de")) {
           setLanguageState(lang);
-          try { window.localStorage.setItem(LS_KEY, lang); } catch { /* ignore */ }
+          try {
+            window.localStorage.setItem(LS_KEY, lang);
+          } catch {
+            /* ignore */
+          }
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const setLanguage = useCallback(async (lang: Language) => {
     setLanguageState(lang);
-    try { window.localStorage.setItem(LS_KEY, lang); } catch { /* ignore */ }
+    try {
+      window.localStorage.setItem(LS_KEY, lang);
+    } catch {
+      /* ignore */
+    }
     // Persist on the server (best-effort — UI already updated)
     try {
       await fetch("/api/session/language", {
@@ -97,7 +109,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ language: lang }),
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const t = useCallback(

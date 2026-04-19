@@ -1,3 +1,10 @@
+import { Button } from "@/components/atoms/Button";
+import { Heading } from "@/components/atoms/Heading";
+import { Input } from "@/components/atoms/Input";
+import { LogoMark } from "@/components/atoms/LogoMark";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 /**
  * Single-path sign-in page: passwordless 6-digit email code.
  *
@@ -18,13 +25,6 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Button } from "@/components/atoms/Button";
-import { Heading } from "@/components/atoms/Heading";
-import { Input } from "@/components/atoms/Input";
-import { LogoMark } from "@/components/atoms/LogoMark";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 
 type Stage = "email" | "code";
 
@@ -49,7 +49,9 @@ export function LoginPage() {
       try {
         const r = await apiJson<{ user: unknown }>("/api/session");
         if (!cancelled && r.user) nav("/dashboard", { replace: true });
-      } catch { /* not logged in */ }
+      } catch {
+        /* not logged in */
+      }
     })();
     return () => {
       cancelled = true;
@@ -62,10 +64,10 @@ export function LoginPage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await apiJson<{ ok: boolean; devCode?: string }>(
-        "/api/team-login/request-code",
-        { method: "POST", body: JSON.stringify({ email: email.trim() }) },
-      );
+      const r = await apiJson<{ ok: boolean; devCode?: string }>("/api/team-login/request-code", {
+        method: "POST",
+        body: JSON.stringify({ email: email.trim() }),
+      });
       setStage("code");
       if (r.devCode) {
         setInfo(`${t("login.devCodePrefix")} ${r.devCode}`);
@@ -129,11 +131,7 @@ export function LoginPage() {
                 disabled={working}
                 className="mb-3"
               />
-              <Button
-                className="w-full"
-                type="submit"
-                disabled={working || !email.trim()}
-              >
+              <Button className="w-full" type="submit" disabled={working || !email.trim()}>
                 {working ? t("login.sendingCode") : t("login.sendCode")}
               </Button>
             </form>
@@ -164,11 +162,7 @@ export function LoginPage() {
                 disabled={working}
                 className={cn("mb-3 text-center text-lg font-mono tracking-[0.3em]")}
               />
-              <Button
-                className="w-full"
-                type="submit"
-                disabled={working || code.length !== 6}
-              >
+              <Button className="w-full" type="submit" disabled={working || code.length !== 6}>
                 {working ? t("login.verifying") : t("login.verifyCode")}
               </Button>
             </form>

@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Navigate } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
 import { AppHeader } from "@/components/organisms/AppHeader";
 import { ConnectProjectModal } from "@/components/organisms/ConnectProjectModal";
 import { ProjectCard } from "@/components/organisms/ProjectCard";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { Navigate } from "react-router-dom";
 
 type ProjectRow = {
   id: string;
@@ -57,9 +57,7 @@ export function DashboardPage() {
     const q = search.trim().toLowerCase();
     if (!q) return projects;
     return projects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.githubRepoFullName.toLowerCase().includes(q),
+      (p) => p.name.toLowerCase().includes(q) || p.githubRepoFullName.toLowerCase().includes(q),
     );
   }, [projects, search]);
 
@@ -89,7 +87,11 @@ export function DashboardPage() {
                 stroke="currentColor"
                 strokeWidth={1.8}
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"
+                />
               </svg>
               <input
                 type="text"
@@ -104,7 +106,13 @@ export function DashboardPage() {
               onClick={() => setConnectOpen(true)}
               className="inline-flex h-10 items-center gap-1.5 self-start rounded-xl bg-brand px-4 text-[13px] font-semibold text-white shadow-sm transition-all hover:bg-brand/90 hover:shadow sm:self-auto"
             >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <svg
+                className="h-3.5 w-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.5}
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
               New site
@@ -125,8 +133,18 @@ export function DashboardPage() {
         {empty && (
           <div className="mx-auto mt-4 max-w-xl rounded-3xl border border-neutral-200/80 bg-white p-10 text-center shadow-sm">
             <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand/10 text-brand">
-              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              <svg
+                className="h-6 w-6"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.8}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                />
               </svg>
             </div>
             <Heading as="h2" className="mb-2 text-xl font-semibold tracking-tight">
@@ -140,7 +158,13 @@ export function DashboardPage() {
               onClick={() => setConnectOpen(true)}
               className="inline-flex h-11 items-center gap-1.5 rounded-xl bg-brand px-6 text-[14px] font-semibold text-white shadow-sm transition-all hover:bg-brand/90 hover:shadow"
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.5}
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
               {t("connectForm.connect")}
@@ -149,29 +173,26 @@ export function DashboardPage() {
         )}
 
         {/* Projects grid */}
-        {!isLoading && !empty && (
-          <>
-            {filtered.length === 0 ? (
-              <div className="mt-2 rounded-2xl border border-dashed border-neutral-200 bg-white px-6 py-10 text-center text-sm text-neutral-400">
-                No sites match "<span className="font-medium text-neutral-600">{search}</span>"
-              </div>
-            ) : (
-              <div className={cn("grid gap-4 sm:grid-cols-2 lg:grid-cols-3")}>
-                {filtered.map((p) => (
-                  <ProjectCard
-                    key={p.id}
-                    id={p.id}
-                    name={p.name}
-                    repo={p.githubRepoFullName}
-                    role={p.role}
-                    updatedAt={p.updatedAt}
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        )}
-
+        {!isLoading &&
+          !empty &&
+          (filtered.length === 0 ? (
+            <div className="mt-2 rounded-2xl border border-dashed border-neutral-200 bg-white px-6 py-10 text-center text-sm text-neutral-400">
+              No sites match "<span className="font-medium text-neutral-600">{search}</span>"
+            </div>
+          ) : (
+            <div className={cn("grid gap-4 sm:grid-cols-2 lg:grid-cols-3")}>
+              {filtered.map((p) => (
+                <ProjectCard
+                  key={p.id}
+                  id={p.id}
+                  name={p.name}
+                  repo={p.githubRepoFullName}
+                  role={p.role}
+                  updatedAt={p.updatedAt}
+                />
+              ))}
+            </div>
+          ))}
       </main>
 
       <ConnectProjectModal

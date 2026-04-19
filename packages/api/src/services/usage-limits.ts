@@ -17,10 +17,10 @@
  * They can never lock themselves out of their own instance.
  */
 import { and, eq } from "drizzle-orm";
-import { db, rawSqlite } from "../db/index.js";
-import { user } from "../db/auth-schema.js";
 import type { ProjectRole } from "../db/app-schema.js";
 import { usageAlertsSent, usageLimits } from "../db/app-schema.js";
+import { user } from "../db/auth-schema.js";
+import { db, rawSqlite } from "../db/index.js";
 import { getInstanceSetting } from "./instance-settings.js";
 
 export type EffectiveLimits = {
@@ -39,7 +39,7 @@ type LimitRow = { scope: string; target: string; warn_usd: number | null; hard_u
 function readLimitRow(scope: "user" | "role" | "global", target: string): LimitRow | null {
   const row = rawSqlite
     .prepare(
-      `SELECT scope, target, warn_usd, hard_usd FROM usage_limits WHERE scope = ? AND target = ?`,
+      "SELECT scope, target, warn_usd, hard_usd FROM usage_limits WHERE scope = ? AND target = ?",
     )
     .get(scope, target) as LimitRow | undefined;
   return row ?? null;
@@ -169,7 +169,7 @@ export async function markAlertSent(
 
 export function getAlertRecipientEmail(fallback: string | null): string | null {
   const explicit = getInstanceSetting("USAGE_ALERT_EMAIL");
-  if (explicit && explicit.trim()) return explicit.trim();
+  if (explicit?.trim()) return explicit.trim();
   return fallback;
 }
 

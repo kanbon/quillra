@@ -12,7 +12,6 @@
 import { Hono } from "hono";
 import { getOrganizationInfo } from "../services/instance-settings.js";
 
-export const instanceRouter = new Hono()
-  .get("/organization", async (c) => {
-    return c.json(getOrganizationInfo());
-  });
+export const instanceRouter = new Hono().get("/organization", async (c) => {
+  return c.json(getOrganizationInfo());
+});

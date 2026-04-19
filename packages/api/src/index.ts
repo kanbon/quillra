@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 // take every other signed-in user with it. Just log so the operator
 // still notices in docker logs.
 process.on("unhandledRejection", (reason) => {
-  console.error("[unhandledRejection]", reason instanceof Error ? reason.stack ?? reason.message : reason);
+  console.error(
+    "[unhandledRejection]",
+    reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+  );
 });
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException]", err.stack ?? err.message);
@@ -20,20 +23,20 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { db } from "./db/index.js";
 import { user } from "./db/auth-schema.js";
-import { auth, type Session, type SessionUser } from "./lib/auth.js";
+import { db } from "./db/index.js";
+import { type Session, type SessionUser, auth } from "./lib/auth.js";
 import { adminRouter } from "./routes/admin.js";
-import { githubRouter } from "./routes/github.js";
-import { projectsRouter } from "./routes/projects.js";
-import { teamRouter } from "./routes/team.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
-import { teamLoginRouter, getTeamSessionFromCookie } from "./routes/team-login.js";
-import { setupRouter } from "./routes/setup.js";
+import { githubRouter } from "./routes/github.js";
 import { instanceRouter } from "./routes/instance.js";
-import { getPreviewSubdomainPort } from "./services/workspace.js";
-import { getProjectByPort, getPreviewStatus, describeStage } from "./services/preview-status.js";
+import { projectsRouter } from "./routes/projects.js";
+import { setupRouter } from "./routes/setup.js";
+import { getTeamSessionFromCookie, teamLoginRouter } from "./routes/team-login.js";
+import { teamRouter } from "./routes/team.js";
+import { describeStage, getPreviewStatus, getProjectByPort } from "./services/preview-status.js";
 import { startReportScheduler } from "./services/report-scheduler.js";
+import { getPreviewSubdomainPort } from "./services/workspace.js";
 import { chatWsHandler } from "./ws/chat-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -295,7 +298,7 @@ app.use(
     origin: (origin) => {
       const list = trustedOriginsList();
       if (!origin) return list[0] ?? "";
-      return list.includes(origin) ? origin : list[0] ?? "";
+      return list.includes(origin) ? origin : (list[0] ?? "");
     },
     allowHeaders: ["Content-Type", "Cookie"],
     exposeHeaders: ["Content-Length"],
@@ -373,11 +376,17 @@ app.get("/api/preview-status", async (c) => {
     if (probe.status > 0) {
       return c.json({ stage: "ready", label: "Ready", detail: "Loading your site…" });
     }
-  } catch { /* not reachable yet — fall through to status reporting */ }
+  } catch {
+    /* not reachable yet — fall through to status reporting */
+  }
 
   const projectId = getProjectByPort(port);
   if (!projectId) {
-    return c.json({ stage: "starting", label: "Starting the preview", detail: "Waking up the dev server…" });
+    return c.json({
+      stage: "starting",
+      label: "Starting the preview",
+      detail: "Waking up the dev server…",
+    });
   }
   const status = getPreviewStatus(projectId);
   const desc = describeStage(status.stage);
@@ -415,7 +424,7 @@ app.get("/api/session", async (c) => {
 app.patch("/api/session/language", async (c) => {
   const sessionUser = c.get("user");
   if (!sessionUser) return c.json({ error: "Unauthorized" }, 401);
-  const body = await c.req.json().catch(() => null) as { language?: string } | null;
+  const body = (await c.req.json().catch(() => null)) as { language?: string } | null;
   const lang = body?.language;
   if (lang !== "en" && lang !== "de") return c.json({ error: "Invalid language" }, 400);
   await db.update(user).set({ language: lang }).where(eq(user.id, sessionUser.id));
@@ -520,9 +529,7 @@ app.get("*", async (c) => {
 });
 
 const port = Number(process.env.PORT ?? 3000);
-const server = serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`Quillra API listening on http://localhost:${info.port}`);
-});
+const server = serve({ fetch: app.fetch, port }, (_info) => {});
 injectWebSocket(server);
 
 // Kick off the monthly-report cron + boot-time catch-up. Runs in the

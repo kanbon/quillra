@@ -1,3 +1,5 @@
+import { apiJson } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 /**
  * Unified session hook recognizing every way a user can be signed in:
  *
@@ -15,14 +17,24 @@
  * The helper `isTeamSide(me)` bundles github+team for that exact check.
  */
 import { useEffect, useState } from "react";
-import { authClient } from "@/lib/auth-client";
-import { apiJson } from "@/lib/api";
 
 export type CurrentUser =
   | { kind: "loading" }
   | { kind: "none" }
-  | { kind: "github"; user: { id: string; email?: string | null; name?: string | null; image?: string | null } }
-  | { kind: "team"; user: { id: string; email: string; name?: string | null; image?: string | null; instanceRole?: string | null } }
+  | {
+      kind: "github";
+      user: { id: string; email?: string | null; name?: string | null; image?: string | null };
+    }
+  | {
+      kind: "team";
+      user: {
+        id: string;
+        email: string;
+        name?: string | null;
+        image?: string | null;
+        instanceRole?: string | null;
+      };
+    }
   | { kind: "client"; user: { id: string; email: string }; projectId: string };
 
 type SessionResponse = {
@@ -65,7 +77,9 @@ export function useCurrentUser(): CurrentUser {
           setClient("none");
           return;
         }
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
       if (cancelled) return;
       setTeam("none");
       // Still nothing? Try client session.
@@ -77,14 +91,21 @@ export function useCurrentUser(): CurrentUser {
         if (!cancelled) setClient("none");
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [isPending, data?.user]);
 
   if (isPending || team === "pending" || client === "pending") return { kind: "loading" };
   if (data?.user) {
     return {
       kind: "github",
-      user: data.user as { id: string; email?: string | null; name?: string | null; image?: string | null },
+      user: data.user as {
+        id: string;
+        email?: string | null;
+        name?: string | null;
+        image?: string | null;
+      },
     };
   }
   if (team !== "none" && team) {
@@ -105,15 +126,21 @@ export async function signOutUnified(kind: "github" | "team" | "client") {
   if (kind === "client") {
     try {
       await fetch("/api/clients/logout", { method: "POST", credentials: "include" });
-    } catch { /* best effort */ }
+    } catch {
+      /* best effort */
+    }
   } else if (kind === "team") {
     try {
       await fetch("/api/team-login/logout", { method: "POST", credentials: "include" });
-    } catch { /* best effort */ }
+    } catch {
+      /* best effort */
+    }
   } else {
     try {
       await authClient.signOut({ fetchOptions: { credentials: "include" } });
-    } catch { /* best effort */ }
+    } catch {
+      /* best effort */
+    }
   }
   window.location.href = "/login";
 }

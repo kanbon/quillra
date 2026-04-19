@@ -1,3 +1,5 @@
+import { Spinner } from "@/components/atoms/Spinner";
+import { apiJson } from "@/lib/api";
 /**
  * First-run setup gate. Checks /api/setup/status on mount and, if the
  * instance isn't fully configured, redirects the user to the /setup
@@ -7,10 +9,8 @@
  * navigation — the status only changes after a successful save, and the
  * wizard handles that via its own navigate().
  */
-import { useEffect, useState, type ReactNode } from "react";
-import { useLocation, Navigate } from "react-router-dom";
-import { apiJson } from "@/lib/api";
-import { Spinner } from "@/components/atoms/Spinner";
+import { type ReactNode, useEffect, useState } from "react";
+import { Navigate, useLocation } from "react-router-dom";
 
 type Status = { needsSetup: boolean };
 

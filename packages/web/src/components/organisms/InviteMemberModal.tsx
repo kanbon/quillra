@@ -1,3 +1,8 @@
+import { Input } from "@/components/atoms/Input";
+import { Modal } from "@/components/atoms/Modal";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 /**
  * Project invite modal. Replaces the inline invite form that used to
  * live on the Project Settings page. Two steps:
@@ -9,12 +14,7 @@
  * On success shows a "Sent!" state with a copy-link fallback if the
  * mailer isn't configured.
  */
-import { useEffect, useState, useMemo } from "react";
-import { Modal } from "@/components/atoms/Modal";
-import { Input } from "@/components/atoms/Input";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
+import { useEffect, useMemo, useState } from "react";
 
 type Role = "client" | "editor" | "admin";
 
@@ -83,7 +83,11 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
         `/api/team/projects/${projectId}/invites`,
         {
           method: "POST",
-          body: JSON.stringify({ email: email.trim().toLowerCase(), role, name: name.trim() || undefined }),
+          body: JSON.stringify({
+            email: email.trim().toLowerCase(),
+            role,
+            name: name.trim() || undefined,
+          }),
         },
       );
       setResult({ inviteLink: res.inviteLink, emailSent: res.emailSent });
@@ -115,7 +119,13 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
           className="-mr-2 -mt-1 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
           aria-label={t("invite.close")}
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -139,15 +149,33 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
                 className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white"
                 style={{ backgroundColor: r.color }}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
                   {r.value === "client" && (
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                    />
                   )}
                   {r.value === "editor" && (
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                    />
                   )}
                   {r.value === "admin" && (
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+                    />
                   )}
                 </svg>
               </div>
@@ -155,7 +183,13 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[14px] font-semibold text-neutral-900">{r.title}</p>
                   {role === r.value && (
-                    <svg className="h-4 w-4 text-neutral-900" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <svg
+                      className="h-4 w-4 text-neutral-900"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2.5}
+                    >
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   )}
@@ -194,7 +228,8 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="rounded-lg bg-neutral-50 px-3 py-2 text-[12px] text-neutral-600"
+          <div
+            className="rounded-lg bg-neutral-50 px-3 py-2 text-[12px] text-neutral-600"
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{
               __html: t("invite.addAs", {
@@ -210,7 +245,13 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
         <div className="space-y-4">
           <div className="flex items-start gap-3 rounded-2xl border border-green-200 bg-green-50/50 p-4">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-green-100 text-green-700">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.2}
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
@@ -223,7 +264,9 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
                   ? t("invite.deliveredDescription", {
                       email,
                       linkType:
-                        role === "client" ? t("invite.brandedSignInLink") : t("invite.githubSignInLink"),
+                        role === "client"
+                          ? t("invite.brandedSignInLink")
+                          : t("invite.githubSignInLink"),
                     })
                   : t("invite.copyFallback")}
               </p>
@@ -256,7 +299,11 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
           disabled={submitting}
           className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-50"
         >
-          {step === "details" ? t("invite.back") : step === "sent" ? t("invite.close") : t("invite.cancel")}
+          {step === "details"
+            ? t("invite.back")
+            : step === "sent"
+              ? t("invite.close")
+              : t("invite.cancel")}
         </button>
 
         {step === "role" && (
@@ -266,7 +313,13 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
             className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-neutral-900 px-5 text-[13px] font-semibold text-white shadow-sm hover:bg-neutral-800"
           >
             {t("invite.continueBtn")}
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </button>

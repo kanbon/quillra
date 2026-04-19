@@ -1,21 +1,21 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { Input } from "@/components/atoms/Input";
 import { Modal } from "@/components/atoms/Modal";
 import { Textarea } from "@/components/atoms/Textarea";
-import { ProjectHeader } from "@/components/organisms/ProjectHeader";
 import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchFields";
 import { InviteMemberModal } from "@/components/organisms/InviteMemberModal";
-import { apiJson } from "@/lib/api";
-import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
+import { ProjectHeader } from "@/components/organisms/ProjectHeader";
 import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { parseRepoFullName, repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useForm } from "react-hook-form";
+import { useNavigate, useParams } from "react-router-dom";
+import { z } from "zod";
 
 type DetectStatus =
   | "idle"
@@ -69,14 +69,25 @@ function initialsOf(name: string): string {
   );
 }
 
-function roleBadgeColor(role: string, t: (k: string) => string): { bg: string; text: string; label: string } {
+function roleBadgeColor(
+  role: string,
+  t: (k: string) => string,
+): { bg: string; text: string; label: string } {
   switch (role) {
     case "admin":
       return { bg: "bg-red-100", text: "text-red-700", label: t("projectSettings.roleAdmin") };
     case "editor":
-      return { bg: "bg-blue-100", text: "text-blue-700", label: t("projectSettings.roleCollaborator") };
+      return {
+        bg: "bg-blue-100",
+        text: "text-blue-700",
+        label: t("projectSettings.roleCollaborator"),
+      };
     case "client":
-      return { bg: "bg-purple-100", text: "text-purple-700", label: t("projectSettings.roleClient") };
+      return {
+        bg: "bg-purple-100",
+        text: "text-purple-700",
+        label: t("projectSettings.roleClient"),
+      };
     default:
       return { bg: "bg-neutral-100", text: "text-neutral-700", label: role };
   }
@@ -136,15 +147,13 @@ export function ProjectSettingsPage() {
   const membersQ = useQuery({
     queryKey: ["members", id],
     enabled: !!id,
-    queryFn: () =>
-      apiJson<{ members: Member[] }>(`/api/team/projects/${id}/members`),
+    queryFn: () => apiJson<{ members: Member[] }>(`/api/team/projects/${id}/members`),
   });
 
   const pendingInvitesQ = useQuery({
     queryKey: ["pending-invites", id],
     enabled: !!id && projectQ.data?.role === "admin",
-    queryFn: () =>
-      apiJson<{ invites: PendingInvite[] }>(`/api/team/projects/${id}/invites`),
+    queryFn: () => apiJson<{ invites: PendingInvite[] }>(`/api/team/projects/${id}/invites`),
   });
 
   const {
@@ -292,7 +301,11 @@ export function ProjectSettingsPage() {
                 <div className="flex flex-col items-center gap-2">
                   <div className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
                     {logoUrlDraft ? (
-                      <img src={logoUrlDraft} alt="Project logo" className="h-full w-full object-cover" />
+                      <img
+                        src={logoUrlDraft}
+                        alt="Project logo"
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
                       <span className="text-2xl font-semibold text-neutral-400">
                         {initialsOf(projectQ.data?.name ?? "")}
@@ -335,7 +348,11 @@ export function ProjectSettingsPage() {
                       e.target.value = "";
                     }}
                   />
-                  {logoError && <p className="max-w-[140px] text-center text-[11px] text-red-600">{logoError}</p>}
+                  {logoError && (
+                    <p className="max-w-[140px] text-center text-[11px] text-red-600">
+                      {logoError}
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex-1 space-y-4">
@@ -359,17 +376,23 @@ export function ProjectSettingsPage() {
                         className={selectLikeInputClassName()}
                         value={displayNameMode}
                         disabled={projectSubmitting || patchProject.isPending}
-                        onChange={(e) => setDisplayNameMode(e.target.value as "repo" | "full" | "custom")}
+                        onChange={(e) =>
+                          setDisplayNameMode(e.target.value as "repo" | "full" | "custom")
+                        }
                       >
                         <option value="repo">{t("connectForm.useRepoName", { slug })}</option>
-                        <option value="full">{t("connectForm.useOwnerRepo", { fullPretty })}</option>
+                        <option value="full">
+                          {t("connectForm.useOwnerRepo", { fullPretty })}
+                        </option>
                         <option value="custom">{t("connectForm.custom")}</option>
                       </select>
                       {displayNameMode === "custom" ? (
                         <div className="mt-2">
                           <Input {...registerProject("name")} placeholder="Client homepage" />
                           {projectErrors.name && (
-                            <p className="mt-1 text-xs text-red-600">{projectErrors.name.message}</p>
+                            <p className="mt-1 text-xs text-red-600">
+                              {projectErrors.name.message}
+                            </p>
                           )}
                         </div>
                       ) : (
@@ -390,7 +413,7 @@ export function ProjectSettingsPage() {
               title={t("projectSettings.gitConnection")}
               description={t("projectSettings.gitConnectionDescription")}
             >
-              <div className="space-y-5" >
+              <div className="space-y-5">
                 <GitHubRepoBranchFields
                   repoFullName={repoFull}
                   branch={branch}
@@ -405,7 +428,8 @@ export function ProjectSettingsPage() {
                 />
                 {(projectErrors.githubRepoFullName || projectErrors.defaultBranch) && (
                   <p className="text-xs text-red-600">
-                    {projectErrors.githubRepoFullName?.message ?? projectErrors.defaultBranch?.message}
+                    {projectErrors.githubRepoFullName?.message ??
+                      projectErrors.defaultBranch?.message}
                   </p>
                 )}
 
@@ -440,7 +464,11 @@ export function ProjectSettingsPage() {
                         stroke="currentColor"
                         strokeWidth={2}
                       >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5"
+                        />
                       </svg>
                       Re-detect
                     </button>
@@ -452,15 +480,29 @@ export function ProjectSettingsPage() {
                     {...registerProject("previewDevCommand")}
                   />
                   {detectStatus !== "idle" && detectStatus !== "loading" && (
-                    <p className={cn(
-                      "mt-2 text-xs",
-                      typeof detectStatus === "object" && detectStatus.kind === "ok" && "text-green-600",
-                      typeof detectStatus === "object" && detectStatus.kind === "none" && "text-amber-600",
-                      typeof detectStatus === "object" && detectStatus.kind === "error" && "text-red-600",
-                    )}>
-                      {typeof detectStatus === "object" && detectStatus.kind === "ok" && `Detected ${detectStatus.label}. Leave the command empty to use the default.`}
-                      {typeof detectStatus === "object" && detectStatus.kind === "none" && "No known framework detected. Set a custom command above."}
-                      {typeof detectStatus === "object" && detectStatus.kind === "error" && "Couldn't re-detect. Try again."}
+                    <p
+                      className={cn(
+                        "mt-2 text-xs",
+                        typeof detectStatus === "object" &&
+                          detectStatus.kind === "ok" &&
+                          "text-green-600",
+                        typeof detectStatus === "object" &&
+                          detectStatus.kind === "none" &&
+                          "text-amber-600",
+                        typeof detectStatus === "object" &&
+                          detectStatus.kind === "error" &&
+                          "text-red-600",
+                      )}
+                    >
+                      {typeof detectStatus === "object" &&
+                        detectStatus.kind === "ok" &&
+                        `Detected ${detectStatus.label}. Leave the command empty to use the default.`}
+                      {typeof detectStatus === "object" &&
+                        detectStatus.kind === "none" &&
+                        "No known framework detected. Set a custom command above."}
+                      {typeof detectStatus === "object" &&
+                        detectStatus.kind === "error" &&
+                        "Couldn't re-detect. Try again."}
                     </p>
                   )}
                 </div>
@@ -471,7 +513,9 @@ export function ProjectSettingsPage() {
                     form="project-form"
                     disabled={projectSubmitting || patchProject.isPending}
                   >
-                    {patchProject.isPending ? t("projectSettings.saving") : t("projectSettings.saveChanges")}
+                    {patchProject.isPending
+                      ? t("projectSettings.saving")
+                      : t("projectSettings.saveChanges")}
                   </Button>
                 </div>
               </div>
@@ -492,9 +536,15 @@ export function ProjectSettingsPage() {
               <p className="text-[12px] font-medium text-neutral-500">
                 {(membersQ.data?.members ?? []).length === 1
                   ? t("projectSettings.memberCount")
-                  : t("projectSettings.membersCount", { count: (membersQ.data?.members ?? []).length })}
+                  : t("projectSettings.membersCount", {
+                      count: (membersQ.data?.members ?? []).length,
+                    })}
                 {pendingInvitesQ.data && pendingInvitesQ.data.invites.length > 0 && (
-                  <> · {pendingInvitesQ.data.invites.length} {t("projectSettings.pendingInvites").toLowerCase()}</>
+                  <>
+                    {" "}
+                    · {pendingInvitesQ.data.invites.length}{" "}
+                    {t("projectSettings.pendingInvites").toLowerCase()}
+                  </>
                 )}
               </p>
               {isAdmin && (
@@ -503,7 +553,13 @@ export function ProjectSettingsPage() {
                   onClick={() => setInviteOpen(true)}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-neutral-900 px-3.5 text-[12px] font-semibold text-white shadow-sm hover:bg-neutral-800"
                 >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2.5}
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
                   {t("projectSettings.inviteButton")}
@@ -514,24 +570,38 @@ export function ProjectSettingsPage() {
             {/* Members table */}
             <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 bg-white">
               {(membersQ.data?.members ?? []).length === 0 ? (
-                <p className="px-4 py-6 text-center text-[12px] text-neutral-400">{t("projectSettings.noMembers")}</p>
+                <p className="px-4 py-6 text-center text-[12px] text-neutral-400">
+                  {t("projectSettings.noMembers")}
+                </p>
               ) : (
                 (membersQ.data?.members ?? []).map((m) => {
                   const badge = roleBadgeColor(m.role, t);
                   return (
                     <div key={m.id} className="flex items-center gap-3 px-4 py-3">
                       {m.image ? (
-                        <img src={m.image} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                        <img
+                          src={m.image}
+                          alt=""
+                          className="h-9 w-9 shrink-0 rounded-full object-cover"
+                        />
                       ) : (
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-neutral-100 to-neutral-200 text-[11px] font-semibold text-neutral-500">
                           {initialsOf(m.name)}
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] font-semibold text-neutral-900">{m.name || m.email}</p>
+                        <p className="truncate text-[13px] font-semibold text-neutral-900">
+                          {m.name || m.email}
+                        </p>
                         <p className="truncate text-[11px] text-neutral-500">{m.email}</p>
                       </div>
-                      <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", badge.bg, badge.text)}>
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                          badge.bg,
+                          badge.text,
+                        )}
+                      >
                         {badge.label}
                       </span>
                       {isAdmin && m.userId !== currentUserId && (
@@ -547,8 +617,18 @@ export function ProjectSettingsPage() {
                           title={t("projectSettings.removeMember")}
                           aria-label={t("projectSettings.removeMember")}
                         >
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.8}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                            />
                           </svg>
                         </button>
                       )}
@@ -570,17 +650,37 @@ export function ProjectSettingsPage() {
                     return (
                       <div key={inv.id} className="flex items-center gap-3 px-4 py-3">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-dashed border-neutral-300 text-neutral-400">
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.8}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                            />
                           </svg>
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] font-medium text-neutral-800">{inv.email}</p>
+                          <p className="truncate text-[13px] font-medium text-neutral-800">
+                            {inv.email}
+                          </p>
                           <p className="text-[11px] text-neutral-400">
-                            {t("projectSettings.expires", { date: new Date(inv.expiresAt).toLocaleDateString() })}
+                            {t("projectSettings.expires", {
+                              date: new Date(inv.expiresAt).toLocaleDateString(),
+                            })}
                           </p>
                         </div>
-                        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", badge.bg, badge.text)}>
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                            badge.bg,
+                            badge.text,
+                          )}
+                        >
                           {badge.label}
                         </span>
                         <button
@@ -603,7 +703,9 @@ export function ProjectSettingsPage() {
           {isAdmin && projectQ.data && (
             <div className="overflow-hidden rounded-2xl border border-red-200 bg-red-50/40 shadow-sm">
               <header className="border-b border-red-200 bg-red-50/60 px-6 py-4">
-                <h2 className="text-[15px] font-semibold tracking-tight text-red-900">{t("projectSettings.dangerZone")}</h2>
+                <h2 className="text-[15px] font-semibold tracking-tight text-red-900">
+                  {t("projectSettings.dangerZone")}
+                </h2>
                 <p className="mt-0.5 text-[13px] text-red-800/80">
                   {t("projectSettings.dangerZoneDescription")}
                 </p>
@@ -611,7 +713,9 @@ export function ProjectSettingsPage() {
               <div className="p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[14px] font-medium text-red-900">{t("projectSettings.deleteProject")}</p>
+                    <p className="text-[14px] font-medium text-red-900">
+                      {t("projectSettings.deleteProject")}
+                    </p>
                     <p className="mt-1 text-[13px] text-red-800/80">
                       {t("projectSettings.deleteProjectDescription")}
                     </p>
@@ -651,12 +755,24 @@ export function ProjectSettingsPage() {
       >
         <div className="mb-4 flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
           </div>
           <div>
-            <h3 className="text-[17px] font-semibold tracking-tight text-neutral-900">{t("projectSettings.deleteModalTitle")}</h3>
+            <h3 className="text-[17px] font-semibold tracking-tight text-neutral-900">
+              {t("projectSettings.deleteModalTitle")}
+            </h3>
             <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">
               {t("projectSettings.deleteModalBody")}
             </p>
@@ -696,12 +812,14 @@ export function ProjectSettingsPage() {
             onClick={() => deleteProject.mutate()}
             disabled={
               deleteProject.isPending ||
-              deleteConfirm.trim().toLowerCase() !== (projectQ.data?.name ?? "").trim().toLowerCase()
+              deleteConfirm.trim().toLowerCase() !==
+                (projectQ.data?.name ?? "").trim().toLowerCase()
             }
             className={cn(
               "inline-flex h-10 items-center gap-1.5 rounded-lg bg-red-600 px-4 text-[13px] font-semibold text-white shadow-sm transition-all",
               deleteProject.isPending ||
-                deleteConfirm.trim().toLowerCase() !== (projectQ.data?.name ?? "").trim().toLowerCase()
+                deleteConfirm.trim().toLowerCase() !==
+                  (projectQ.data?.name ?? "").trim().toLowerCase()
                 ? "cursor-not-allowed opacity-50"
                 : "hover:bg-red-700 hover:shadow",
             )}

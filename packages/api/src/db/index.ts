@@ -29,19 +29,29 @@ function ensureColumn(table: string, column: string, definition: string) {
 }
 try {
   ensureColumn("messages", "attachments", "TEXT");
-} catch { /* table may not exist yet on a fresh init */ }
+} catch {
+  /* table may not exist yet on a fresh init */
+}
 try {
   ensureColumn("user", "language", "TEXT");
-} catch { /* table may not exist yet on a fresh init */ }
+} catch {
+  /* table may not exist yet on a fresh init */
+}
 try {
   ensureColumn("projects", "logo_url", "TEXT");
-} catch { /* table may not exist yet on a fresh init */ }
+} catch {
+  /* table may not exist yet on a fresh init */
+}
 try {
   ensureColumn("conversations", "created_by_user_id", "TEXT");
-} catch { /* table may not exist yet on a fresh init */ }
+} catch {
+  /* table may not exist yet on a fresh init */
+}
 try {
   ensureColumn("projects", "migration_target", "TEXT");
-} catch { /* table may not exist yet on a fresh init */ }
+} catch {
+  /* table may not exist yet on a fresh init */
+}
 
 // Usage accounting — one row per agent run. Written by the chat WS
 // handler when the SDK emits its terminal `result` event; read by the
@@ -62,10 +72,12 @@ try {
     model_usage_json TEXT,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON agent_runs(project_id)`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id)`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS agent_runs_created_idx ON agent_runs(created_at)`);
-} catch { /* ignore */ }
+  sqlite.exec("CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON agent_runs(project_id)");
+  sqlite.exec("CREATE INDEX IF NOT EXISTS agent_runs_user_idx ON agent_runs(user_id)");
+  sqlite.exec("CREATE INDEX IF NOT EXISTS agent_runs_created_idx ON agent_runs(created_at)");
+} catch {
+  /* ignore */
+}
 
 // Bootstrap new tables (drizzle-kit isn't run at boot, so create-if-missing)
 try {
@@ -77,8 +89,10 @@ try {
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS client_sessions_token_idx ON client_sessions(token)`);
-} catch { /* ignore */ }
+  sqlite.exec("CREATE INDEX IF NOT EXISTS client_sessions_token_idx ON client_sessions(token)");
+} catch {
+  /* ignore */
+}
 try {
   sqlite.exec(`CREATE TABLE IF NOT EXISTS client_login_codes (
     id TEXT PRIMARY KEY,
@@ -89,8 +103,12 @@ try {
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS client_login_codes_project_email_idx ON client_login_codes(project_id, email)`);
-} catch { /* ignore */ }
+  sqlite.exec(
+    "CREATE INDEX IF NOT EXISTS client_login_codes_project_email_idx ON client_login_codes(project_id, email)",
+  );
+} catch {
+  /* ignore */
+}
 
 // Team email-code login: admins/editors who don't use GitHub.
 try {
@@ -101,8 +119,10 @@ try {
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS team_sessions_token_idx ON team_sessions(token)`);
-} catch { /* ignore */ }
+  sqlite.exec("CREATE INDEX IF NOT EXISTS team_sessions_token_idx ON team_sessions(token)");
+} catch {
+  /* ignore */
+}
 try {
   sqlite.exec(`CREATE TABLE IF NOT EXISTS team_login_codes (
     id TEXT PRIMARY KEY,
@@ -112,8 +132,10 @@ try {
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS team_login_codes_email_idx ON team_login_codes(email)`);
-} catch { /* ignore */ }
+  sqlite.exec("CREATE INDEX IF NOT EXISTS team_login_codes_email_idx ON team_login_codes(email)");
+} catch {
+  /* ignore */
+}
 
 // Instance settings — key/value store used by the first-run setup wizard
 // and any config the admin can change at runtime without restarting the
@@ -124,7 +146,9 @@ try {
     value TEXT,
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 
 // Usage limits + alert bookkeeping. `usage_limits` stores warn/hard
 // thresholds at three scopes ("global" / "role" / "user"), each row's
@@ -142,7 +166,9 @@ try {
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
     PRIMARY KEY (scope, target)
   )`);
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 try {
   sqlite.exec(`CREATE TABLE IF NOT EXISTS usage_alerts_sent (
     scope TEXT NOT NULL,
@@ -152,7 +178,9 @@ try {
     sent_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
     PRIMARY KEY (scope, target, month_ymd, kind)
   )`);
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 
 // Monthly usage report per user. The per-user opt-in lives as a column
 // on `user` (see ensureColumn below). `usage_reports_sent` tracks which
@@ -165,10 +193,14 @@ try {
     sent_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
     PRIMARY KEY (user_id, month_ymd)
   )`);
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 try {
   ensureColumn("user", "monthly_usage_reports_enabled", "INTEGER NOT NULL DEFAULT 0");
-} catch { /* table may not exist yet on a fresh init */ }
+} catch {
+  /* table may not exist yet on a fresh init */
+}
 
 // One-shot sweep: the `translator` project role was dropped in favour
 // of narrowing member grants to admin/editor/client only. Any existing
@@ -176,10 +208,10 @@ try {
 // user back the closest equivalent permission set. Idempotent — after
 // the first boot there are no translator rows left to update.
 try {
-  sqlite
-    .prepare(`UPDATE project_members SET role = 'editor' WHERE role = 'translator'`)
-    .run();
-} catch { /* project_members may not exist yet on a fresh init */ }
+  sqlite.prepare(`UPDATE project_members SET role = 'editor' WHERE role = 'translator'`).run();
+} catch {
+  /* project_members may not exist yet on a fresh init */
+}
 
 export { sqlite as rawSqlite };
 

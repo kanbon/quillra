@@ -12,10 +12,10 @@
  * On success the user is redirected to /p/{projectId} with their session.
  */
 
-import { useEffect, useState } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 type Branding = {
   id: string;
@@ -72,7 +72,9 @@ export function ClientLoginPage() {
       try {
         const me = await apiJson<{ user: unknown; projectId: string }>("/api/clients/me");
         if (me.projectId === projectId) nav(`/p/${projectId}`, { replace: true });
-      } catch { /* not signed in — stay on this page */ }
+      } catch {
+        /* not signed in — stay on this page */
+      }
     })();
   }, [projectId, nav]);
 
@@ -193,7 +195,8 @@ export function ClientLoginPage() {
             {step === "code" && (
               <form className="flex flex-col gap-3" onSubmit={handleVerify}>
                 <p className="rounded-xl bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
-                  We sent a code to <strong className="font-medium text-neutral-900">{email}</strong>.
+                  We sent a code to{" "}
+                  <strong className="font-medium text-neutral-900">{email}</strong>.
                 </p>
                 <label className="text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
                   6-digit code
@@ -209,11 +212,11 @@ export function ClientLoginPage() {
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                   className="h-14 rounded-xl border border-neutral-200 bg-white px-4 text-center font-mono text-[24px] tracking-[0.4em] text-neutral-900 placeholder:text-neutral-300 transition-colors focus:border-neutral-900 focus:outline-none focus:ring-0"
                   disabled={submitting}
-                  autoFocus
                 />
                 {devCode && (
                   <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                    Email is not configured on this server. Dev code: <code className="font-mono font-semibold">{devCode}</code>
+                    Email is not configured on this server. Dev code:{" "}
+                    <code className="font-mono font-semibold">{devCode}</code>
                   </p>
                 )}
                 <button
@@ -237,7 +240,12 @@ export function ClientLoginPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setStep("email"); setCode(""); setError(null); setDevCode(null); }}
+                  onClick={() => {
+                    setStep("email");
+                    setCode("");
+                    setError(null);
+                    setDevCode(null);
+                  }}
                   className="mt-1 text-center text-[12px] text-neutral-500 underline-offset-2 hover:text-neutral-800 hover:underline"
                   disabled={submitting}
                 >

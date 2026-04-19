@@ -1,3 +1,5 @@
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 /**
  * Full-bleed panel that takes over the preview column (and the mobile
  * preview sheet) while the migration agent is rewriting the project
@@ -16,8 +18,6 @@
  * glows and a pulsing presence dot on the logo tile.
  */
 import { useState } from "react";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 
 type Props = {
   /** Called when the user clicks "Cancel migration". Handler is
@@ -63,12 +63,7 @@ export function MigrationBanner({ onCancel }: Props) {
           className="relative flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg"
           style={{ backgroundColor: "#FF5D01" }}
         >
-          <img
-            src="https://cdn.simpleicons.org/astro/ffffff"
-            alt="Astro"
-            width={32}
-            height={32}
-          />
+          <img src="https://cdn.simpleicons.org/astro/ffffff" alt="Astro" width={32} height={32} />
           <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center">
             <span className="absolute h-4 w-4 animate-ping rounded-full bg-[#FF5D01] opacity-50" />
             <span className="relative h-2.5 w-2.5 rounded-full bg-[#FF5D01] ring-2 ring-white" />

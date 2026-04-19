@@ -88,8 +88,7 @@ async function buildStatusSnapshot(params: Params): Promise<StatusSnapshot> {
   const child = getPreviewProcessInfo(params.projectId);
   const probe = await probeUpstream(port);
   const fw = detectFramework(params.repoPath);
-  const dev =
-    resolveDevCommand(params.repoPath, port, params.previewDevCommandOverride) ?? null;
+  const dev = resolveDevCommand(params.repoPath, port, params.previewDevCommandOverride) ?? null;
   const logs = getPreviewLogs(params.projectId);
   const recentErrors = logs
     .filter((l) => l.stream === "stderr")
@@ -174,9 +173,7 @@ export function buildAgentDiagnosticsMcpServer(params: Params) {
           const logs = getPreviewLogs(params.projectId);
           const tail = logs.slice(-n).map((l) => `[${l.stream}] ${l.line}`);
           return {
-            content: [
-              { type: "text", text: tail.length ? tail.join("\n") : "(no log lines)" },
-            ],
+            content: [{ type: "text", text: tail.length ? tail.join("\n") : "(no log lines)" }],
           };
         },
       ),

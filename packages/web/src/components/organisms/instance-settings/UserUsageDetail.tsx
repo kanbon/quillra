@@ -1,3 +1,8 @@
+import { Modal } from "@/components/atoms/Modal";
+import { Spinner } from "@/components/atoms/Spinner";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 /**
  * Per-user usage drill-down modal. Fetches a 12-month (or configurable)
  * breakdown for one user and renders it as a stacked bar chart plus
@@ -15,11 +20,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Modal } from "@/components/atoms/Modal";
-import { Spinner } from "@/components/atoms/Spinner";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 
 type Months = 3 | 6 | 12 | 24;
 
@@ -66,7 +66,7 @@ function formatTokens(n: number): string {
 }
 
 function formatMonth(ymd: string): string {
-  const [y, m] = ymd.split("-").map((s) => parseInt(s, 10));
+  const [y, m] = ymd.split("-").map((s) => Number.parseInt(s, 10));
   if (!y || !m) return ymd;
   const d = new Date(y, m - 1, 1);
   return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
@@ -180,7 +180,10 @@ export function UserUsageDetail({
                     <EmptyBox message={t("usage.drillEmpty")} />
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 4 }}>
+                      <BarChart
+                        data={chartData}
+                        margin={{ top: 12, right: 12, left: 0, bottom: 4 }}
+                      >
                         <CartesianGrid stroke="#f1f1f1" vertical={false} />
                         <XAxis
                           dataKey="month"
@@ -243,7 +246,11 @@ export function UserUsageDetail({
                 </h3>
                 <BreakdownTable
                   headers={[t("usage.colProject"), t("usage.colRuns"), t("usage.colCost")]}
-                  rows={data.perProject.map((p) => [p.project_name, String(p.runs), formatUsd(p.cost_usd)])}
+                  rows={data.perProject.map((p) => [
+                    p.project_name,
+                    String(p.runs),
+                    formatUsd(p.cost_usd),
+                  ])}
                   emptyMessage={t("usage.drillEmpty")}
                 />
               </section>
@@ -308,10 +315,7 @@ function BreakdownTable({
         <thead className="bg-neutral-50/60 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
           <tr>
             {headers.map((h, i) => (
-              <th
-                key={h}
-                className={cn("px-3 py-2 text-left", i !== 0 && "text-right")}
-              >
+              <th key={h} className={cn("px-3 py-2 text-left", i !== 0 && "text-right")}>
                 {h}
               </th>
             ))}

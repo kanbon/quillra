@@ -1,16 +1,20 @@
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
 import { Textarea } from "@/components/atoms/Textarea";
 import { useT } from "@/i18n/i18n";
 import type { Attachment } from "@/lib/chat-store";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
-const CONTENT_EXTS = new Set(["txt", "md", "markdown", "html", "htm", "csv", "json", "xml", "yaml", "yml"]);
+const CONTENT_EXTS = new Set([
+  "txt",
+  "md",
+  "markdown",
+  "html",
+  "htm",
+  "csv",
+  "json",
+  "xml",
+  "yaml",
+  "yml",
+]);
 
 function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
@@ -106,7 +110,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
         setStaged((prev) =>
           prev.map((s) =>
             s.id === id
-              ? { ...s, status: "done", serverPath: item.path, serverKind: item.kind ?? (s.imageThumbUrl ? "image" : "content") }
+              ? {
+                  ...s,
+                  status: "done",
+                  serverPath: item.path,
+                  serverKind: item.kind ?? (s.imageThumbUrl ? "image" : "content"),
+                }
               : s,
           ),
         );
@@ -131,7 +140,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ path: item.serverPath }),
           });
-        } catch { /* best-effort */ }
+        } catch {
+          /* best-effort */
+        }
       }
     },
     [projectId, staged],
@@ -175,7 +186,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   }, [text, staged, onSend]);
 
   const uploadingCount = staged.filter((s) => s.status === "uploading").length;
-  const canSend = !disabled && uploadingCount === 0 && (text.trim().length > 0 || staged.some((s) => s.status === "done"));
+  const canSend =
+    !disabled &&
+    uploadingCount === 0 &&
+    (text.trim().length > 0 || staged.some((s) => s.status === "done"));
 
   // Clicking anywhere on the composer card (except on buttons / the textarea
   // itself) should focus the textarea. Without this the bottom action row
@@ -201,7 +215,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
                   key={s.id}
                   className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50"
                 >
-                  <img src={s.imageThumbUrl!} alt={s.file.name} className="h-full w-full object-cover" />
+                  <img
+                    src={s.imageThumbUrl!}
+                    alt={s.file.name}
+                    className="h-full w-full object-cover"
+                  />
                   {s.status === "uploading" && (
                     <div className="absolute inset-0 flex items-center justify-center bg-white/70">
                       <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-brand" />
@@ -230,13 +248,25 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
                     {s.status === "uploading" ? (
                       <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-brand" />
                     ) : (
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      <svg
+                        className="h-4 w-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                        />
                       </svg>
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12px] font-medium text-neutral-800">{s.file.name}</p>
+                    <p className="truncate text-[12px] font-medium text-neutral-800">
+                      {s.file.name}
+                    </p>
                     <p className="text-[11px] uppercase tracking-wide text-neutral-400">
                       {s.status === "error"
                         ? t("composer.failed")
@@ -283,7 +313,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
               title={t("composer.attachImages")}
               aria-label={t("composer.attachImages")}
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.8}
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
             </button>
@@ -311,7 +347,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             {uploadingCount > 0 ? (
               <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
             ) : (
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.2}
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
               </svg>
             )}

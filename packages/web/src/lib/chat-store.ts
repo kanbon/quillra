@@ -26,7 +26,13 @@ export type ChatLine =
   // tool name or file path.
   | { id: string; kind: "tool_call"; label: string }
   // Shown once per completed turn — subtle full-width card with cost + wall-clock.
-  | { id: string; kind: "checkpoint"; costUsd: number; durationMs: number; cumulativeCostUsd: number }
+  | {
+      id: string;
+      kind: "checkpoint";
+      costUsd: number;
+      durationMs: number;
+      cumulativeCostUsd: number;
+    }
   // Rendered when the server auto-retried once and the turn *still* looks
   // truncated. Clicking the button sends "Please continue." as a normal
   // user message through the existing chat pipe.
@@ -67,7 +73,13 @@ const listeners = new Map<string, Set<Listener>>();
 // the user clicks "Other" — composer subscribes and pulls focus.
 const focusComposerListeners = new Map<string, Set<FocusComposerListener>>();
 
-const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null, cumulativeCostUsd: 0 };
+const EMPTY: ChatSnapshot = {
+  lines: [],
+  busy: false,
+  error: null,
+  conversationId: null,
+  cumulativeCostUsd: 0,
+};
 
 function key(projectId: string, conversationId?: string | null) {
   return conversationId ? `${projectId}:${conversationId}` : projectId;
@@ -99,7 +111,11 @@ function wsBaseUrl() {
   return `${proto}://${window.location.host}`;
 }
 
-export function subscribe(projectId: string, conversationId: string | null, listener: Listener): () => void {
+export function subscribe(
+  projectId: string,
+  conversationId: string | null,
+  listener: Listener,
+): () => void {
   const k = key(projectId, conversationId);
   let subs = listeners.get(k);
   if (!subs) {
@@ -158,7 +174,9 @@ export function clearNewChat(projectId: string) {
   const k = key(projectId, null);
   snapshots.delete(k);
   const i = internals.get(k);
-  if (i?.ws) { i.ws.close(); }
+  if (i?.ws) {
+    i.ws.close();
+  }
   internals.delete(k);
   // Notify listeners so useSyncExternalStore picks up the empty state
   const subs = listeners.get(k);
@@ -189,7 +207,10 @@ export async function loadHistory(projectId: string, conversationId: string | nu
           // If kind isn't stored, infer from extension
           const ext = a.path.split(".").pop()?.toLowerCase() ?? "";
           const inferredKind: "image" | "content" =
-            a.kind ?? (["jpg", "jpeg", "png", "webp", "gif", "svg", "avif"].includes(ext) ? "image" : "content");
+            a.kind ??
+            (["jpg", "jpeg", "png", "webp", "gif", "svg", "avif"].includes(ext)
+              ? "image"
+              : "content");
           return {
             path: a.path,
             originalName: a.originalName,
@@ -281,9 +302,7 @@ export function sendMessage(
   // answered the moment the user sends a new message (whether they
   // picked an option button, clicked Continue, or typed freeform).
   // Strip those cards so stale affordances don't pile up.
-  const prunedLines = snap.lines.filter(
-    (l) => l.kind !== "ask" && l.kind !== "continue_prompt",
-  );
+  const prunedLines = snap.lines.filter((l) => l.kind !== "ask" && l.kind !== "continue_prompt");
 
   update(k, {
     error: null,
@@ -298,16 +317,18 @@ export function sendMessage(
   internal.ws = ws;
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: "message",
-      content: text,
-      conversationId,
-      attachments: attachments?.map((a) => ({
-        path: a.path,
-        originalName: a.originalName,
-        kind: a.kind,
-      })),
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "message",
+        content: text,
+        conversationId,
+        attachments: attachments?.map((a) => ({
+          path: a.path,
+          originalName: a.originalName,
+          kind: a.kind,
+        })),
+      }),
+    );
   };
 
   ws.onmessage = (evt) => {
@@ -382,12 +403,15 @@ export function sendMessage(
         updated = [...updated];
         updated[updated.length - 1] = { ...current, text: current.text + (data.text as string) };
       } else {
-        updated = [...updated, {
-          id: crypto.randomUUID(),
-          kind: "assistant" as const,
-          text: data.text as string,
-          streaming: true,
-        }];
+        updated = [
+          ...updated,
+          {
+            id: crypto.randomUUID(),
+            kind: "assistant" as const,
+            text: data.text as string,
+            streaming: true,
+          },
+        ];
       }
       update(currentK, { lines: updated });
     }
@@ -432,10 +456,7 @@ export function sendMessage(
       // Surface a visible "Continue" button so the user can resume with
       // one click instead of typing.
       update(currentK, {
-        lines: [
-          ...snap.lines,
-          { id: crypto.randomUUID(), kind: "continue_prompt" },
-        ],
+        lines: [...snap.lines, { id: crypto.randomUUID(), kind: "continue_prompt" }],
       });
     }
 
@@ -466,8 +487,12 @@ export function sendMessage(
       // the task isn't "done", the agent is waiting for the user's
       // answer. Showing a "Done in 3s" card under an open question is
       // misleading.
-      const costUsd = typeof data.costUsd === "number" && Number.isFinite(data.costUsd) ? data.costUsd : 0;
-      const serverMs = typeof data.durationMs === "number" && Number.isFinite(data.durationMs) ? data.durationMs : 0;
+      const costUsd =
+        typeof data.costUsd === "number" && Number.isFinite(data.costUsd) ? data.costUsd : 0;
+      const serverMs =
+        typeof data.durationMs === "number" && Number.isFinite(data.durationMs)
+          ? data.durationMs
+          : 0;
       const localMs = internal.turnStartedAt > 0 ? Date.now() - internal.turnStartedAt : 0;
       const durationMs = serverMs > 0 ? serverMs : localMs;
       const nextCumulative = snap.cumulativeCostUsd + costUsd;
@@ -526,7 +551,9 @@ export function sendMessage(
 
   ws.onerror = () => {
     const currentK = (() => {
-      for (const [ik, iv] of internals) { if (iv === internal) return ik; }
+      for (const [ik, iv] of internals) {
+        if (iv === internal) return ik;
+      }
       return k;
     })();
     internal.ws = null;
@@ -537,7 +564,9 @@ export function sendMessage(
   ws.onclose = () => {
     if (internal.ws === ws) {
       const currentK = (() => {
-        for (const [ik, iv] of internals) { if (iv === internal) return ik; }
+        for (const [ik, iv] of internals) {
+          if (iv === internal) return ik;
+        }
         return k;
       })();
       const snap = getSnap(currentK);

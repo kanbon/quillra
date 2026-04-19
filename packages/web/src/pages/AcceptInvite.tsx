@@ -1,12 +1,12 @@
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { useNavigate, useSearchParams } from "react-router-dom";
 import { Heading } from "@/components/atoms/Heading";
 import { Input } from "@/components/atoms/Input";
-import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { z } from "zod";
 
 const schema = z.object({
   token: z.string().min(10),
@@ -35,9 +35,7 @@ export function AcceptInvitePage() {
         <Heading as="h1" className="mb-2 text-xl font-semibold tracking-tight">
           {t("acceptInvite.title")}
         </Heading>
-        <p className="mb-6 text-sm text-neutral-600">
-          {t("acceptInvite.help")}
-        </p>
+        <p className="mb-6 text-sm text-neutral-600">{t("acceptInvite.help")}</p>
         <form
           onSubmit={handleSubmit(async (v) => {
             const res = await apiJson<{ projectId: string }>("/api/team/invites/accept", {
@@ -54,9 +52,7 @@ export function AcceptInvitePage() {
             disabled={isSubmitting}
             className={cn(
               "mt-1 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-neutral-900 text-[15px] font-semibold text-white shadow-sm transition-all",
-              isSubmitting
-                ? "cursor-not-allowed opacity-50"
-                : "hover:bg-neutral-800 hover:shadow",
+              isSubmitting ? "cursor-not-allowed opacity-50" : "hover:bg-neutral-800 hover:shadow",
             )}
           >
             {isSubmitting ? (

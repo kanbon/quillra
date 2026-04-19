@@ -1,3 +1,5 @@
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 /**
  * Bottom-sheet style preview for mobile. Slides up from the bottom of
  * the viewport with a translucent backdrop — dismiss by tapping the
@@ -7,10 +9,8 @@
  * Renders the actual PreviewPane iframe inside so the same
  * loading/boot-page + framework badge behaviour works on mobile too.
  */
-import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { type PointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 
 type Props = {
   open: boolean;
@@ -65,7 +65,9 @@ export function MobilePreviewSheet({ open, onClose, children }: Props) {
       if (dragStartY.current === null) return;
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch { /* already released */ }
+      } catch {
+        /* already released */
+      }
       const shouldDismiss = dragY > DISMISS_THRESHOLD;
       dragStartY.current = null;
       if (shouldDismiss) {

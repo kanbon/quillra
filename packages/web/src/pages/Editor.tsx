@@ -1,25 +1,25 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/atoms/Button";
 import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
 import { ChatComposer, type ChatComposerHandle } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
 import { MigrationBanner } from "@/components/organisms/MigrationBanner";
-import { ProjectHeader } from "@/components/organisms/ProjectHeader";
+import { MobilePreviewSheet } from "@/components/organisms/MobilePreviewSheet";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
-import { apiJson } from "@/lib/api";
+import { ProjectHeader } from "@/components/organisms/ProjectHeader";
+import { signOutUnified, useCurrentUser } from "@/hooks/useCurrentUser";
 import { useProjectChat } from "@/hooks/useProjectChat";
-import { useCurrentUser, signOutUnified } from "@/hooks/useCurrentUser";
-import { clearNewChat, pickAskOther } from "@/lib/chat-store";
 import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { clearNewChat, pickAskOther } from "@/lib/chat-store";
 import { cn } from "@/lib/cn";
 import { ASTRO_MIGRATION_KICKOFF_PROMPT } from "@/lib/migration-prompts";
 import { buildPreviewDebugPrompt } from "@/lib/preview-debug-prompt";
 import type { PreviewStatus } from "@/lib/use-preview-status";
-import { MobilePreviewSheet } from "@/components/organisms/MobilePreviewSheet";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { Link, useParams } from "react-router-dom";
 
 type ProjectDetail = {
   id: string;
@@ -140,7 +140,9 @@ export function EditorPage() {
 
   const previewMut = useMutation({
     mutationFn: async () => {
-      return apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, { method: "POST" });
+      return apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, {
+        method: "POST",
+      });
     },
     onMutate: () => setPreviewError(null),
     onSuccess: (res) => {
@@ -171,10 +173,13 @@ export function EditorPage() {
     return () => window.removeEventListener("quillra:refresh-preview", handler);
   }, [refreshPreview]);
 
-  const handleConversationCreated = useCallback((newId: string) => {
-    setConversationId(newId);
-    void qc.invalidateQueries({ queryKey: ["conversations", id] });
-  }, [id, qc]);
+  const handleConversationCreated = useCallback(
+    (newId: string) => {
+      setConversationId(newId);
+      void qc.invalidateQueries({ queryKey: ["conversations", id] });
+    },
+    [id, qc],
+  );
 
   // When the server finishes a migration run, it clears the project's
   // migration_target and sends us a `migration_complete` WS frame.
@@ -240,7 +245,9 @@ export function EditorPage() {
         );
         setPreviewLabel(meta.previewLabel);
         setPreviewSrc(meta.url);
-      } catch { /* not critical */ }
+      } catch {
+        /* not critical */
+      }
       previewMut.mutate();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -290,7 +297,9 @@ export function EditorPage() {
         />
       </div>
       {error && (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{error}</div>
+        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">
+          {error}
+        </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section
@@ -339,7 +348,13 @@ export function EditorPage() {
                   title={t("toolbar.allSites")}
                   aria-label={t("toolbar.allSites")}
                 >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
                   </svg>
                 </Link>
@@ -351,8 +366,18 @@ export function EditorPage() {
                 title={t("chat.history")}
                 aria-label={t("chat.history")}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
                 </svg>
               </button>
               <p className="truncate text-xs font-medium text-neutral-700">{t("chat.assistant")}</p>
@@ -364,7 +389,13 @@ export function EditorPage() {
                 onClick={startNewChat}
                 title={t("chat.newChat")}
               >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                 </svg>
                 <span className="hidden sm:inline">{t("chat.new")}</span>
@@ -377,9 +408,23 @@ export function EditorPage() {
                 title={t("preview.mobileOpenAria")}
                 aria-label={t("preview.mobileOpenAria")}
               >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                  />
                 </svg>
                 {t("preview.mobileOpen")}
               </button>
@@ -395,8 +440,18 @@ export function EditorPage() {
                 title={t("toolbar.signOut")}
                 aria-label={t("toolbar.signOut")}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                  />
                 </svg>
               </button>
             </div>
@@ -408,8 +463,18 @@ export function EditorPage() {
               {/* Admin/editor/translator user filter — clients never see this */}
               {convList?.canSeeAll && (
                 <div className="flex items-center gap-2 border-b border-neutral-100 bg-neutral-50/50 px-3 py-2">
-                  <svg className="h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  <svg
+                    className="h-3 w-3 shrink-0 text-neutral-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                    />
                   </svg>
                   <select
                     value={convFilterUserId ?? ""}
@@ -451,13 +516,25 @@ export function EditorPage() {
                           </div>
                         )
                       ) : (
-                        <svg className="mt-1 h-3 w-3 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                        <svg
+                          className="mt-1 h-3 w-3 shrink-0 text-neutral-400"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                          />
                         </svg>
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate">{conv.title || t("chat.untitled")}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {conv.title || t("chat.untitled")}
+                          </span>
                           <span className="shrink-0 text-[10px] text-neutral-400">
                             {new Date(conv.updatedAt).toLocaleDateString()}
                           </span>
@@ -471,7 +548,9 @@ export function EditorPage() {
                     </button>
                   ))
                 ) : (
-                  <p className="px-3 py-4 text-center text-xs text-neutral-400">{t("chat.noConversations")}</p>
+                  <p className="px-3 py-4 text-center text-xs text-neutral-400">
+                    {t("chat.noConversations")}
+                  </p>
                 )}
               </div>
             </div>
@@ -512,7 +591,11 @@ export function EditorPage() {
               setSplit(next);
             };
             const onUp = (ev: PointerEvent) => {
-              try { target.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+              try {
+                target.releasePointerCapture(ev.pointerId);
+              } catch {
+                /* ignore */
+              }
               target.removeEventListener("pointermove", onMove);
               target.removeEventListener("pointerup", onUp);
               target.removeEventListener("pointercancel", onUp);
@@ -583,7 +666,10 @@ export function EditorPage() {
         )}
       </MobilePreviewSheet>
 
-      <Modal open={showPublishModal} onClose={() => !publishMut.isPending && setShowPublishModal(false)}>
+      <Modal
+        open={showPublishModal}
+        onClose={() => !publishMut.isPending && setShowPublishModal(false)}
+      >
         <h3 className="mb-1 text-lg font-semibold text-neutral-900">{t("publish.modalTitle")}</h3>
 
         {publishStatusLoading && (
@@ -593,44 +679,41 @@ export function EditorPage() {
           </div>
         )}
 
-        {publishMut.isIdle && publishStatus && !publishStatusLoading && (
-          <>
-            {publishStatus.hasChanges ? (
-              <>
-                {publishStatus.summary ? (
-                  <div className="mb-4 mt-2 text-sm leading-relaxed text-neutral-600 [&_ul]:list-disc [&_ul]:pl-4 [&_li]:mb-0.5 [&_p]:mb-1 [&_p:last-child]:mb-0">
-                    <ReactMarkdown>{publishStatus.summary}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <p className="mb-4 mt-1 text-sm text-neutral-500">
-                    {t("publish.readyDescription")}
-                  </p>
-                )}
-                <Button
-                  type="button"
-                  className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
-                  onClick={() => publishMut.mutate()}
-                >
-                  {t("publish.publishNow")}
-                </Button>
-              </>
-            ) : (
-              <>
-                <p className="mb-6 mt-2 text-sm text-neutral-500">
-                  {t("publish.upToDate")}
+        {publishMut.isIdle &&
+          publishStatus &&
+          !publishStatusLoading &&
+          (publishStatus.hasChanges ? (
+            <>
+              {publishStatus.summary ? (
+                <div className="mb-4 mt-2 text-sm leading-relaxed text-neutral-600 [&_ul]:list-disc [&_ul]:pl-4 [&_li]:mb-0.5 [&_p]:mb-1 [&_p:last-child]:mb-0">
+                  <ReactMarkdown>{publishStatus.summary}</ReactMarkdown>
+                </div>
+              ) : (
+                <p className="mb-4 mt-1 text-sm text-neutral-500">
+                  {t("publish.readyDescription")}
                 </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full rounded-xl py-3 text-[15px]"
-                  onClick={() => setShowPublishModal(false)}
-                >
-                  {t("common.close")}
-                </Button>
-              </>
-            )}
-          </>
-        )}
+              )}
+              <Button
+                type="button"
+                className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"
+                onClick={() => publishMut.mutate()}
+              >
+                {t("publish.publishNow")}
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="mb-6 mt-2 text-sm text-neutral-500">{t("publish.upToDate")}</p>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full rounded-xl py-3 text-[15px]"
+                onClick={() => setShowPublishModal(false)}
+              >
+                {t("common.close")}
+              </Button>
+            </>
+          ))}
 
         {publishMut.isPending && (
           <div className="flex flex-col items-center py-8">
@@ -658,9 +741,7 @@ export function EditorPage() {
 
         {publishMut.isError && (
           <>
-            <p className="mb-6 mt-2 text-sm text-red-600">
-              {t("publish.error")}
-            </p>
+            <p className="mb-6 mt-2 text-sm text-red-600">{t("publish.error")}</p>
             <Button
               type="button"
               className="w-full rounded-xl bg-brand py-3 text-[15px] font-semibold text-white hover:bg-brand/90"

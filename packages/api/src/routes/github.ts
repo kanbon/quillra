@@ -1,16 +1,19 @@
 import { Hono } from "hono";
 import type { SessionUser } from "../lib/auth.js";
+import { detectFromManifest, publicFrameworkList } from "../services/framework-registry.js";
 import {
   fetchRepoManifest,
   getRepoMeta,
   listAccessibleRepos,
   listBranches,
 } from "../services/github-rest.js";
-import { detectFromManifest, publicFrameworkList } from "../services/framework-registry.js";
 
 type Variables = { user: SessionUser | null };
 
-async function requireUser(c: { get: (k: "user") => SessionUser | null; json: (b: unknown, s: number) => Response }) {
+async function requireUser(c: {
+  get: (k: "user") => SessionUser | null;
+  json: (b: unknown, s: number) => Response;
+}) {
   const user = c.get("user");
   if (!user) return { error: c.json({ error: "Unauthorized" }, 401) };
   return { user };
@@ -45,10 +48,7 @@ export const githubRouter = new Hono<{ Variables: Variables }>()
       }
       return c.json({ branches, defaultBranch });
     } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Failed to list branches" },
-        400,
-      );
+      return c.json({ error: e instanceof Error ? e.message : "Failed to list branches" }, 400);
     }
   })
   /**

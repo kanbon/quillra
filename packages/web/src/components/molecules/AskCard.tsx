@@ -29,10 +29,7 @@ export function AskCard({ question, options, onPick, onPickOther }: Props) {
             )}
           >
             <span className="flex-1 truncate">{opt}</span>
-            <span
-              className="text-neutral-300 transition-colors group-hover:text-brand"
-              aria-hidden
-            >
+            <span className="text-neutral-300 transition-colors group-hover:text-brand" aria-hidden>
               →
             </span>
           </button>

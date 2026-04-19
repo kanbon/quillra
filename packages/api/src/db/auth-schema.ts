@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export type InstanceRole = "owner" | "member";
 
@@ -7,9 +7,7 @@ export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  emailVerified: integer("emailVerified", { mode: "boolean" })
-    .default(false)
-    .notNull(),
+  emailVerified: integer("emailVerified", { mode: "boolean" }).default(false).notNull(),
   image: text("image"),
   instanceRole: text("instance_role").$type<InstanceRole>(),
   /** UI language preference, e.g. "en" / "de" */

@@ -1,3 +1,5 @@
+import { LogoMark } from "@/components/atoms/LogoMark";
+import { apiJson } from "@/lib/api";
 /**
  * Public legal disclosure ("Impressum") page.
  *
@@ -8,8 +10,6 @@
  */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { LogoMark } from "@/components/atoms/LogoMark";
-import { apiJson } from "@/lib/api";
 
 type Organization = {
   instanceName: string;
@@ -58,7 +58,9 @@ export function ImpressumPage() {
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-6">
           <Link to="/" className="flex items-center gap-2 no-underline">
             <LogoMark size={22} />
-            <span className="font-brand text-lg font-bold text-neutral-900">{org.instanceName}</span>
+            <span className="font-brand text-lg font-bold text-neutral-900">
+              {org.instanceName}
+            </span>
           </Link>
         </div>
       </header>
@@ -103,7 +105,9 @@ export function ImpressumPage() {
                 <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
                   Address
                 </h2>
-                <p className="whitespace-pre-line text-[14px] leading-relaxed text-neutral-700">{org.address}</p>
+                <p className="whitespace-pre-line text-[14px] leading-relaxed text-neutral-700">
+                  {org.address}
+                </p>
               </section>
             )}
 
@@ -139,8 +143,11 @@ export function ImpressumPage() {
 
             <section className="border-t border-neutral-100 pt-4">
               <p className="text-[11px] text-neutral-400">
-                Hosted with <Link to="/" className="underline-offset-2 hover:underline">Quillra</Link> — a
-                GitHub-native CMS for client-ready websites.
+                Hosted with{" "}
+                <Link to="/" className="underline-offset-2 hover:underline">
+                  Quillra
+                </Link>{" "}
+                — a GitHub-native CMS for client-ready websites.
               </p>
             </section>
           </div>

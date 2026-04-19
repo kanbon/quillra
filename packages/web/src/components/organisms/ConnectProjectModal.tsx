@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Modal } from "@/components/atoms/Modal";
 import { Input } from "@/components/atoms/Input";
+import { Modal } from "@/components/atoms/Modal";
 import { Textarea } from "@/components/atoms/Textarea";
-import { apiJson } from "@/lib/api";
 import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 
 type GitHubRepo = { fullName: string; defaultBranch: string };
 
@@ -118,12 +118,13 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     return list.filter((r) => r.fullName.toLowerCase().includes(q));
   }, [reposQ.data, search]);
 
-  const repoApiUnavailable = reposQ.isError || (reposQ.isSuccess && (reposQ.data?.repos?.length ?? 0) === 0);
+  const repoApiUnavailable =
+    reposQ.isError || (reposQ.isSuccess && (reposQ.data?.repos?.length ?? 0) === 0);
   useEffect(() => {
     if (repoApiUnavailable) setManualMode(true);
   }, [repoApiUnavailable]);
 
-  const effectiveRepoFull = manualMode ? manualRepo.trim() : pickedRepo?.fullName ?? "";
+  const effectiveRepoFull = manualMode ? manualRepo.trim() : (pickedRepo?.fullName ?? "");
   const repoValid = /^[\w.-]+\/[\w.-]+$/.test(effectiveRepoFull);
   const canContinueRepo = repoValid && branch.trim().length > 0;
 
@@ -182,7 +183,13 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
           className="-mr-2 -mt-1 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
           aria-label={t("common.close")}
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -207,14 +214,25 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                 )}
               >
                 {isDone ? (
-                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <svg
+                    className="h-3 w-3"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={3}
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                 ) : (
                   i + 1
                 )}
               </div>
-              <span className={cn("text-[12px] font-medium", isActive ? "text-neutral-900" : "text-neutral-400")}>
+              <span
+                className={cn(
+                  "text-[12px] font-medium",
+                  isActive ? "text-neutral-900" : "text-neutral-400",
+                )}
+              >
                 {s === "repo" ? "Repository" : s === "framework" ? "Framework" : "Name"}
               </span>
               {i < 2 && <div className="h-px flex-1 bg-neutral-200" />}
@@ -255,8 +273,18 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
             ) : (
               <div className="rounded-xl border border-neutral-200 bg-neutral-50/50">
                 <div className="relative">
-                  <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z" />
+                  <svg
+                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.8}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"
+                    />
                   </svg>
                   <input
                     type="text"
@@ -275,7 +303,10 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                           <div className="h-3.5 w-3.5 shrink-0 rounded bg-neutral-200" />
                           <div
                             className="h-3 flex-1 rounded bg-neutral-200"
-                            style={{ animation: `pulse 1.4s ease-in-out ${i * 0.1}s infinite`, maxWidth: `${50 + (i % 3) * 15}%` }}
+                            style={{
+                              animation: `pulse 1.4s ease-in-out ${i * 0.1}s infinite`,
+                              maxWidth: `${50 + (i % 3) * 15}%`,
+                            }}
                           />
                         </li>
                       ))}
@@ -300,13 +331,33 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                                   : "text-neutral-700 hover:bg-neutral-100",
                               )}
                             >
-                              <svg className="h-3.5 w-3.5 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                              <svg
+                                className="h-3.5 w-3.5 shrink-0 text-neutral-400"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={1.8}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                                />
                               </svg>
                               <span className="min-w-0 truncate">{r.fullName}</span>
                               {active && (
-                                <svg className="ml-auto h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                <svg
+                                  className="ml-auto h-4 w-4 shrink-0"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={2.5}
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M5 13l4 4L19 7"
+                                  />
                                 </svg>
                               )}
                             </button>
@@ -375,21 +426,38 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                 <div className="absolute inset-0 rounded-full border-2 border-neutral-200" />
                 <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-neutral-900" />
               </div>
-              <p className="text-sm text-neutral-500">Inspecting <span className="font-mono text-neutral-700">{effectiveRepoFull}</span>…</p>
-              <p className="text-xs text-neutral-400">Reading <code className="rounded bg-neutral-100 px-1 font-mono">package.json</code> on <strong>{branch}</strong></p>
+              <p className="text-sm text-neutral-500">
+                Inspecting <span className="font-mono text-neutral-700">{effectiveRepoFull}</span>…
+              </p>
+              <p className="text-xs text-neutral-400">
+                Reading <code className="rounded bg-neutral-100 px-1 font-mono">package.json</code>{" "}
+                on <strong>{branch}</strong>
+              </p>
             </div>
           )}
           {fwQ.isError && (
             <div className="rounded-2xl border border-red-200 bg-red-50/60 p-5 text-sm text-red-700">
               <p className="font-medium">Couldn't inspect this repository.</p>
-              <p className="mt-1 text-red-600/80">{(fwQ.error as Error)?.message ?? "Unknown error"}</p>
+              <p className="mt-1 text-red-600/80">
+                {(fwQ.error as Error)?.message ?? "Unknown error"}
+              </p>
               <button
                 type="button"
                 onClick={() => void fwQ.refetch()}
                 className="mt-3 inline-flex items-center gap-1 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-50"
               >
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                <svg
+                  className="h-3 w-3"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5"
+                  />
                 </svg>
                 Retry
               </button>
@@ -420,7 +488,9 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                           Supported
                         </span>
                       </div>
-                      <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">{fwQ.data.framework.blurb}</p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">
+                        {fwQ.data.framework.blurb}
+                      </p>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
                           Live preview
@@ -441,17 +511,32 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                 <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-6">
                   <div className="flex items-start gap-3">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <svg
+                        className="h-5 w-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
                       </svg>
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-[15px] font-semibold text-amber-900">Framework not supported</h3>
-                      <p className="mt-1 text-[13px] leading-relaxed text-amber-800/80">{fwQ.data.reason}</p>
+                      <h3 className="text-[15px] font-semibold text-amber-900">
+                        Framework not supported
+                      </h3>
+                      <p className="mt-1 text-[13px] leading-relaxed text-amber-800/80">
+                        {fwQ.data.reason}
+                      </p>
                       <p className="mt-2 text-[11px] text-amber-700/80">
-                        Quillra currently supports Astro, Next.js, Nuxt, Gatsby, SvelteKit, Remix, Eleventy, Vite,
-                        React (CRA), Docusaurus, VitePress, Qwik, SolidStart, Hugo, and Jekyll. You can still
-                        connect the project by passing a custom dev command under Advanced on the next step.
+                        Quillra currently supports Astro, Next.js, Nuxt, Gatsby, SvelteKit, Remix,
+                        Eleventy, Vite, React (CRA), Docusaurus, VitePress, Qwik, SolidStart, Hugo,
+                        and Jekyll. You can still connect the project by passing a custom dev
+                        command under Advanced on the next step.
                       </p>
                     </div>
                   </div>
@@ -471,7 +556,11 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                     stroke="currentColor"
                     strokeWidth={2}
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5" />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M4 4v6h6M20 20v-6h-6M5.5 9A8 8 0 0118 8.5M18.5 15A8 8 0 016 15.5"
+                    />
                   </svg>
                   Re-check
                 </button>
@@ -511,67 +600,67 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
           {fwQ.data?.supported &&
             fwQ.data.framework.id !== "astro" &&
             fwQ.data.framework.id !== "next" && (
-            <label
-              className={cn(
-                "relative block cursor-pointer overflow-hidden rounded-xl border p-4 transition-colors",
-                convertToAstro
-                  ? "border-[#FF5D01] bg-gradient-to-br from-[#FF5D01]/10 via-[#FF5D01]/5 to-transparent"
-                  : "border-neutral-200 bg-white hover:border-neutral-300",
-              )}
-            >
-              {/* Subtle Astro-branded background accent when toggled on */}
-              {convertToAstro && (
-                <div
-                  className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-[#FF5D01] opacity-[0.06] blur-3xl"
-                  aria-hidden
-                />
-              )}
-              <div className="relative flex items-start gap-3">
-                <div
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                  style={{ backgroundColor: "#FF5D01" }}
-                >
-                  <img
-                    src="https://cdn.simpleicons.org/astro/ffffff"
-                    alt="Astro"
-                    width={20}
-                    height={20}
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[14px] font-semibold text-neutral-900">
-                    {t("astroMigration.toggleTitle")}
-                  </p>
-                  <p className="mt-0.5 text-[12px] leading-snug text-neutral-500">
-                    {t("astroMigration.toggleHelp")}
-                  </p>
-                </div>
-                <div className="shrink-0 pt-0.5">
-                  <input
-                    type="checkbox"
-                    checked={convertToAstro}
-                    onChange={(e) => setConvertToAstro(e.target.checked)}
-                    disabled={submitting}
-                    className="sr-only"
-                  />
-                  <span
+              <label
+                className={cn(
+                  "relative block cursor-pointer overflow-hidden rounded-xl border p-4 transition-colors",
+                  convertToAstro
+                    ? "border-[#FF5D01] bg-gradient-to-br from-[#FF5D01]/10 via-[#FF5D01]/5 to-transparent"
+                    : "border-neutral-200 bg-white hover:border-neutral-300",
+                )}
+              >
+                {/* Subtle Astro-branded background accent when toggled on */}
+                {convertToAstro && (
+                  <div
+                    className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-[#FF5D01] opacity-[0.06] blur-3xl"
                     aria-hidden
-                    className={cn(
-                      "block h-6 w-10 rounded-full transition-colors",
-                      convertToAstro ? "bg-[#FF5D01]" : "bg-neutral-300",
-                    )}
+                  />
+                )}
+                <div className="relative flex items-start gap-3">
+                  <div
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                    style={{ backgroundColor: "#FF5D01" }}
                   >
-                    <span
-                      className={cn(
-                        "block h-5 w-5 translate-y-0.5 rounded-full bg-white shadow-sm transition-transform",
-                        convertToAstro ? "translate-x-[22px]" : "translate-x-0.5",
-                      )}
+                    <img
+                      src="https://cdn.simpleicons.org/astro/ffffff"
+                      alt="Astro"
+                      width={20}
+                      height={20}
                     />
-                  </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[14px] font-semibold text-neutral-900">
+                      {t("astroMigration.toggleTitle")}
+                    </p>
+                    <p className="mt-0.5 text-[12px] leading-snug text-neutral-500">
+                      {t("astroMigration.toggleHelp")}
+                    </p>
+                  </div>
+                  <div className="shrink-0 pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={convertToAstro}
+                      onChange={(e) => setConvertToAstro(e.target.checked)}
+                      disabled={submitting}
+                      className="sr-only"
+                    />
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "block h-6 w-10 rounded-full transition-colors",
+                        convertToAstro ? "bg-[#FF5D01]" : "bg-neutral-300",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "block h-5 w-5 translate-y-0.5 rounded-full bg-white shadow-sm transition-transform",
+                          convertToAstro ? "translate-x-[22px]" : "translate-x-0.5",
+                        )}
+                      />
+                    </span>
+                  </div>
                 </div>
-              </div>
-            </label>
-          )}
+              </label>
+            )}
           <div>
             <button
               type="button"
@@ -639,7 +728,13 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
             )}
           >
             Continue
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </button>
@@ -655,7 +750,13 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
             )}
           >
             Continue
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </button>
@@ -667,7 +768,9 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
             disabled={submitting || name.trim().length === 0}
             className={cn(
               "inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm transition-all",
-              !submitting && name.trim().length > 0 ? "hover:bg-brand/90 hover:shadow" : "cursor-not-allowed opacity-50",
+              !submitting && name.trim().length > 0
+                ? "hover:bg-brand/90 hover:shadow"
+                : "cursor-not-allowed opacity-50",
             )}
           >
             {submitting ? (

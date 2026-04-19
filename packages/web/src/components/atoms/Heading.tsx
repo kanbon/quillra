@@ -1,5 +1,5 @@
-import type { HTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
+import type { HTMLAttributes } from "react";
 
 export function Heading({
   as: Tag = "h1",

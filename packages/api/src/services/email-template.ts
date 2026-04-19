@@ -66,7 +66,9 @@ function esc(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function renderHtml(opts: RenderOptions & { brandName: string; brandLogoUrl: string | null }): string {
+function renderHtml(
+  opts: RenderOptions & { brandName: string; brandLogoUrl: string | null },
+): string {
   const { title, preheader, body, brandName, brandLogoUrl } = opts;
   const logoBlock = brandLogoUrl
     ? `<img src="${esc(brandLogoUrl)}" alt="${esc(brandName)}" width="56" height="56" style="display:block;border-radius:14px;object-fit:cover;border:0" />`
@@ -129,10 +131,14 @@ function renderHtml(opts: RenderOptions & { brandName: string; brandLogoUrl: str
 function renderBodyHtml(body: EmailBody): string {
   const parts: string[] = [];
   if (body.greeting) {
-    parts.push(`<p style="margin:0 0 14px 0;font-size:15px;color:#1f1f1f">${esc(body.greeting)}</p>`);
+    parts.push(
+      `<p style="margin:0 0 14px 0;font-size:15px;color:#1f1f1f">${esc(body.greeting)}</p>`,
+    );
   }
   for (const p of body.paragraphs) {
-    parts.push(`<p style="margin:0 0 14px 0;font-size:15px;color:#1f1f1f;line-height:1.6">${esc(p)}</p>`);
+    parts.push(
+      `<p style="margin:0 0 14px 0;font-size:15px;color:#1f1f1f;line-height:1.6">${esc(p)}</p>`,
+    );
   }
   if (body.table) {
     parts.push(renderTableHtml(body.table));
@@ -141,7 +147,9 @@ function renderBodyHtml(body: EmailBody): string {
     parts.push(renderCtaHtml(body.cta));
   }
   if (body.signature) {
-    parts.push(`<p style="margin:24px 0 0 0;font-size:14px;color:#525252">${esc(body.signature)}</p>`);
+    parts.push(
+      `<p style="margin:24px 0 0 0;font-size:14px;color:#525252">${esc(body.signature)}</p>`,
+    );
   }
   return parts.join("\n");
 }
@@ -206,8 +214,14 @@ function renderFooterHtml(): string {
       ? esc(org.operatorName)
       : null;
   const contactParts: string[] = [];
-  if (org.email) contactParts.push(`<a href="mailto:${esc(org.email)}" style="color:#737373;text-decoration:underline">${esc(org.email)}</a>`);
-  if (org.website) contactParts.push(`<a href="${esc(org.website)}" style="color:#737373;text-decoration:underline">${esc(org.website.replace(/^https?:\/\//, ""))}</a>`);
+  if (org.email)
+    contactParts.push(
+      `<a href="mailto:${esc(org.email)}" style="color:#737373;text-decoration:underline">${esc(org.email)}</a>`,
+    );
+  if (org.website)
+    contactParts.push(
+      `<a href="${esc(org.website)}" style="color:#737373;text-decoration:underline">${esc(org.website.replace(/^https?:\/\//, ""))}</a>`,
+    );
   const contactLine = contactParts.length > 0 ? contactParts.join(" · ") : "";
 
   if (!nameLine && !org.address && !contactLine) {
@@ -274,7 +288,7 @@ function renderFooterText(): string {
   const parts: string[] = [];
   const nameLine = org.company
     ? `${org.company}${org.operatorName ? ` · ${org.operatorName}` : ""}`
-    : org.operatorName ?? null;
+    : (org.operatorName ?? null);
   if (nameLine) parts.push(nameLine);
   if (org.address) parts.push(org.address);
   const contacts: string[] = [];

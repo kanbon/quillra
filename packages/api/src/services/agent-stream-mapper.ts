@@ -34,8 +34,10 @@ function extractFromStreamEvent(event: unknown): StreamExtract {
 
   if (e.type === "content_block_delta" && e.delta && typeof e.delta === "object") {
     const d = e.delta as Record<string, unknown>;
-    if (d.type === "text_delta" && typeof d.text === "string") return { kind: "text", text: d.text };
-    if (d.type === "thinking_delta" && typeof d.thinking === "string") return { kind: "thinking", text: d.thinking };
+    if (d.type === "text_delta" && typeof d.text === "string")
+      return { kind: "text", text: d.text };
+    if (d.type === "thinking_delta" && typeof d.thinking === "string")
+      return { kind: "thinking", text: d.thinking };
   }
   return null;
 }
@@ -51,20 +53,14 @@ function tooCallEventsFromAssistantMessage(
   if (!Array.isArray(content)) return [];
   const events: Array<Record<string, unknown>> = [];
   for (const block of content) {
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: string }).type === "tool_use"
-    ) {
+    if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
       const name =
         typeof (block as { name?: unknown }).name === "string"
           ? (block as { name: string }).name
           : "";
       const rawInput = (block as { input?: unknown }).input;
       const input =
-        rawInput && typeof rawInput === "object"
-          ? (rawInput as Record<string, unknown>)
-          : {};
+        rawInput && typeof rawInput === "object" ? (rawInput as Record<string, unknown>) : {};
       const id =
         typeof (block as { id?: unknown }).id === "string"
           ? (block as { id: string }).id

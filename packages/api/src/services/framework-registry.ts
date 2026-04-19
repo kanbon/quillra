@@ -90,7 +90,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: true,
     blurb: "React-based static site generator with rich data layer.",
     packageDeps: ["gatsby"],
-    devCommand: { binary: "npx", args: ["gatsby", "develop", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "npx",
+      args: ["gatsby", "develop", "--host", "0.0.0.0", "--port", "{port}"],
+    },
   },
   {
     id: "sveltekit",
@@ -160,7 +163,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "React documentation sites with built-in versioning and i18n.",
     packageDeps: ["@docusaurus/core", "@docusaurus/preset-classic"],
-    devCommand: { binary: "npx", args: ["docusaurus", "start", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "npx",
+      args: ["docusaurus", "start", "--host", "0.0.0.0", "--port", "{port}"],
+    },
   },
   {
     id: "vitepress",
@@ -171,7 +177,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Vite-powered static documentation site generator.",
     packageDeps: ["vitepress"],
-    devCommand: { binary: "npx", args: ["vitepress", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "npx",
+      args: ["vitepress", "dev", "--host", "0.0.0.0", "--port", "{port}"],
+    },
   },
   {
     id: "qwik",
@@ -215,7 +224,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Ruby-based static site generator. The original GitHub Pages engine.",
     configFiles: ["_config.yml", "_config.yaml"],
-    devCommand: { binary: "bundle", args: ["exec", "jekyll", "serve", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "bundle",
+      args: ["exec", "jekyll", "serve", "--host", "0.0.0.0", "--port", "{port}"],
+    },
   },
 ];
 
@@ -227,7 +239,10 @@ export function getFrameworkById(id: string): FrameworkDef | null {
 
 /** Detect a framework from a parsed package.json + the list of files at the repo root */
 export function detectFromManifest(opts: {
-  packageJson?: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null;
+  packageJson?: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  } | null;
   rootFiles?: string[];
 }): FrameworkDef | null {
   const pkg = opts.packageJson;

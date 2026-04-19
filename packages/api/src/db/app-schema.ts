@@ -252,7 +252,9 @@ export const usageAlertsSent = sqliteTable(
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),
   },
-  (table) => [index("usage_alerts_sent_target_month_idx").on(table.scope, table.target, table.monthYmd)],
+  (table) => [
+    index("usage_alerts_sent_target_month_idx").on(table.scope, table.target, table.monthYmd),
+  ],
 );
 
 /**
@@ -279,8 +281,9 @@ export const messages = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    conversationId: text("conversation_id")
-      .references(() => conversations.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id").references(() => conversations.id, {
+      onDelete: "cascade",
+    }),
     userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
     role: text("role").notNull(),
     content: text("content").notNull(),

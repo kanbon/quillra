@@ -1,17 +1,23 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
-  subscribe,
+  type Attachment,
+  type ChatLine,
+  type ChatSnapshot,
   getSnapshot,
   loadHistory,
   sendMessage,
-  type ChatLine,
-  type ChatSnapshot,
-  type Attachment,
+  subscribe,
 } from "@/lib/chat-store";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 export type { ChatLine, Attachment };
 
-const EMPTY: ChatSnapshot = { lines: [], busy: false, error: null, conversationId: null, cumulativeCostUsd: 0 };
+const EMPTY: ChatSnapshot = {
+  lines: [],
+  busy: false,
+  error: null,
+  conversationId: null,
+  cumulativeCostUsd: 0,
+};
 
 export function useProjectChat(
   projectId: string | undefined,

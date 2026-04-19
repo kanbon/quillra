@@ -1,3 +1,4 @@
+import { apiJson } from "@/lib/api";
 /**
  * Hook that reports which other users are currently viewing {projectId}.
  *
@@ -10,7 +11,6 @@
  * to hammer the API for a tab nobody is looking at.
  */
 import { useQuery } from "@tanstack/react-query";
-import { apiJson } from "@/lib/api";
 
 export type PresenceUser = {
   userId: string;

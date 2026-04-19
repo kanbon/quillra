@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { Spinner } from "@/components/atoms/Spinner";
 import { AskCard } from "@/components/molecules/AskCard";
 import { ChatBubble } from "@/components/molecules/ChatBubble";
 import { CheckpointCard } from "@/components/molecules/CheckpointCard";
 import { CopyMessageButton } from "@/components/molecules/CopyMessageButton";
 import { ToolEventRow } from "@/components/molecules/ToolEventRow";
-import { Spinner } from "@/components/atoms/Spinner";
-import { useT } from "@/i18n/i18n";
 import type { ChatLine } from "@/hooks/useProjectChat";
+import { useT } from "@/i18n/i18n";
+import { useEffect, useRef, useState } from "react";
 
 type Props = {
   lines: ChatLine[];
@@ -30,7 +30,11 @@ type Props = {
  */
 const THINKING_AUTO_COLLAPSE_MS = 2500;
 
-function ThinkingCard({ text, durationMs, streaming }: { text: string; durationMs?: number; streaming?: boolean }) {
+function ThinkingCard({
+  text,
+  durationMs,
+  streaming,
+}: { text: string; durationMs?: number; streaming?: boolean }) {
   const { t } = useT();
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
@@ -175,10 +179,15 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
         }
         if (entry.kind === "tool_active") {
           return (
-            <div key={entry.id} className="flex animate-[fadeIn_0.15s_ease-out] items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs text-blue-600">
+            <div
+              key={entry.id}
+              className="flex animate-[fadeIn_0.15s_ease-out] items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs text-blue-600"
+            >
               <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-400" />
               <span className="font-medium">{entry.toolName}</span>
-              {entry.elapsed > 0 && <span className="text-blue-400">{Math.round(entry.elapsed)}s</span>}
+              {entry.elapsed > 0 && (
+                <span className="text-blue-400">{Math.round(entry.elapsed)}s</span>
+              )}
             </div>
           );
         }
@@ -217,7 +226,10 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
         }
         if (entry.kind === "user") {
           return (
-            <div key={entry.id} className="flex animate-[fadeIn_0.2s_ease-out] flex-col items-end gap-1.5">
+            <div
+              key={entry.id}
+              className="flex animate-[fadeIn_0.2s_ease-out] flex-col items-end gap-1.5"
+            >
               {entry.attachments && entry.attachments.length > 0 && (
                 <div className="flex max-w-[min(100%,42rem)] flex-wrap justify-end gap-1.5">
                   {entry.attachments.map((a, idx) => {
@@ -229,7 +241,11 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
                         title={a.originalName}
                       >
                         {a.previewUrl ? (
-                          <img src={a.previewUrl} alt={a.originalName} className="h-full w-full object-cover" />
+                          <img
+                            src={a.previewUrl}
+                            alt={a.originalName}
+                            className="h-full w-full object-cover"
+                          />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-400">
                             {a.originalName.split(".").pop()?.toUpperCase() ?? "IMG"}
@@ -243,12 +259,24 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
                         title={a.originalName}
                       >
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-neutral-50 text-neutral-500 ring-1 ring-neutral-200">
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          <svg
+                            className="h-3.5 w-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.8}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
                           </svg>
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[12px] font-medium text-neutral-800">{a.originalName}</p>
+                          <p className="truncate text-[12px] font-medium text-neutral-800">
+                            {a.originalName}
+                          </p>
                           <p className="text-[10px] uppercase tracking-wide text-neutral-400">
                             {a.originalName.split(".").pop()?.toUpperCase() ?? "FILE"}
                           </p>
@@ -276,7 +304,9 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
         if (entry.kind === "assistant") {
           return (
             <div key={entry.id} className="animate-[fadeIn_0.2s_ease-out]">
-              <ChatBubble role="assistant" streaming={entry.streaming}>{entry.text}</ChatBubble>
+              <ChatBubble role="assistant" streaming={entry.streaming}>
+                {entry.text}
+              </ChatBubble>
             </div>
           );
         }
@@ -321,12 +351,14 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
         }
         return null;
       })}
-      {busy && !lines.some((l) => l.kind === "thinking" && "streaming" in l && l.streaming) && !lines.some((l) => l.kind === "tool_active") && (
-        <div className="flex animate-[fadeIn_0.2s_ease-out] items-center gap-2 text-xs text-neutral-500">
-          <Spinner />
-          {t("chat.working")}
-        </div>
-      )}
+      {busy &&
+        !lines.some((l) => l.kind === "thinking" && "streaming" in l && l.streaming) &&
+        !lines.some((l) => l.kind === "tool_active") && (
+          <div className="flex animate-[fadeIn_0.2s_ease-out] items-center gap-2 text-xs text-neutral-500">
+            <Spinner />
+            {t("chat.working")}
+          </div>
+        )}
       <div ref={bottomRef} />
     </div>
   );

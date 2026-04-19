@@ -1,3 +1,8 @@
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 /**
  * Integrations tab — two separate GitHub configurations stacked in one view:
  *
@@ -11,12 +16,7 @@
  *      it's the one thing the wizard can't self-bootstrap.
  */
 import { useEffect, useState } from "react";
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
-import { apiJson } from "@/lib/api";
-import { useT } from "@/i18n/i18n";
-import { getStatus, type StatusResponse } from "./types";
+import { type StatusResponse, getStatus } from "./types";
 
 type Props = {
   status: StatusResponse | null;
@@ -104,8 +104,7 @@ export function IntegrationsTab({ status, onSaved }: Props) {
       : "/api/auth/callback/github";
 
   const canSave =
-    clientId.trim() !== prevClientId ||
-    (secretEditing && secretDraft.trim().length > 0);
+    clientId.trim() !== prevClientId || (secretEditing && secretDraft.trim().length > 0);
 
   async function save() {
     setSaving(true);
@@ -199,11 +198,10 @@ export function IntegrationsTab({ status, onSaved }: Props) {
               <span className="text-neutral-900">
                 {installations === null && !installationsError && "…"}
                 {installationsError && <span className="text-red-600">{installationsError}</span>}
-                {installations && (
-                  installations.length === 0
+                {installations &&
+                  (installations.length === 0
                     ? t("instanceSettings.ghAppNoInstalls")
-                    : installations.map((i) => i.account.login).join(", ")
-                )}
+                    : installations.map((i) => i.account.login).join(", "))}
               </span>
             </div>
 
@@ -291,7 +289,9 @@ export function IntegrationsTab({ status, onSaved }: Props) {
                 {copied ? t("instanceSettings.copied") : t("instanceSettings.copyCallback")}
               </button>
             </div>
-            <p className="mt-1 text-[11px] text-neutral-500">{t("instanceSettings.ghOauthCallbackHelp")}</p>
+            <p className="mt-1 text-[11px] text-neutral-500">
+              {t("instanceSettings.ghOauthCallbackHelp")}
+            </p>
           </div>
 
           <div>

@@ -27,17 +27,17 @@
  *    first user ever (the true owner) is created via GitHub OAuth.
  */
 
-import { Hono } from "hono";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { eq, and, isNull } from "drizzle-orm";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { and, eq, isNull } from "drizzle-orm";
+import { Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
-import { db } from "../db/index.js";
-import { teamSessions, teamLoginCodes, instanceInvites } from "../db/app-schema.js";
+import { instanceInvites, teamLoginCodes, teamSessions } from "../db/app-schema.js";
 import { user } from "../db/auth-schema.js";
-import { sendEmail, isMailerEnabled } from "../services/mailer.js";
+import { db } from "../db/index.js";
 import { loginCodeEmailHtml } from "../services/email-templates.js";
 import { getOrganizationInfo } from "../services/instance-settings.js";
+import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
 const TEAM_COOKIE = "quillra_team_session";
 const CODE_TTL_MINUTES = 15;
@@ -66,7 +66,7 @@ export const teamLoginRouter = new Hono()
    * is unknown — don't leak membership to attackers.
    */
   .post("/request-code", async (c) => {
-    const body = await c.req.json().catch(() => null) as { email?: string } | null;
+    const body = (await c.req.json().catch(() => null)) as { email?: string } | null;
     const email = body?.email?.trim().toLowerCase();
     if (!email) return c.json({ error: "email required" }, 400);
 
@@ -132,9 +132,7 @@ export const teamLoginRouter = new Hono()
    * accept any pending invite, mint a team_session cookie.
    */
   .post("/verify-code", async (c) => {
-    const body = await c.req.json().catch(() => null) as
-      | { email?: string; code?: string }
-      | null;
+    const body = (await c.req.json().catch(() => null)) as { email?: string; code?: string } | null;
     const email = body?.email?.trim().toLowerCase();
     const code = body?.code?.trim();
     if (!email || !code) return c.json({ error: "email and code required" }, 400);

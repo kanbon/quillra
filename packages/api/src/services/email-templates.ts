@@ -30,8 +30,14 @@ function renderOperatorFooter(): string {
       ? escapeHtml(org.operatorName)
       : null;
   const contactParts: string[] = [];
-  if (org.email) contactParts.push(`<a href="mailto:${escapeHtml(org.email)}" style="color:#737373;text-decoration:underline">${escapeHtml(org.email)}</a>`);
-  if (org.website) contactParts.push(`<a href="${escapeHtml(org.website)}" style="color:#737373;text-decoration:underline">${escapeHtml(org.website.replace(/^https?:\/\//, ""))}</a>`);
+  if (org.email)
+    contactParts.push(
+      `<a href="mailto:${escapeHtml(org.email)}" style="color:#737373;text-decoration:underline">${escapeHtml(org.email)}</a>`,
+    );
+  if (org.website)
+    contactParts.push(
+      `<a href="${escapeHtml(org.website)}" style="color:#737373;text-decoration:underline">${escapeHtml(org.website.replace(/^https?:\/\//, ""))}</a>`,
+    );
   const contactLine = contactParts.length > 0 ? contactParts.join(" · ") : "";
 
   if (!nameLine && !org.address && !contactLine) {
@@ -110,7 +116,7 @@ export function inviteEmailHtml(opts: {
     <h1 style="margin:0 0 8px 0;font-size:22px;font-weight:600;letter-spacing:-0.01em;color:#171717">You're invited</h1>
     <p style="margin:0 0 18px 0;font-size:15px;color:#525252">${inviterLine}</p>
     <p style="margin:0 0 6px 0;font-size:14px;color:#525252">Open the link below to ${escapeHtml(friendlyRole)}.</p>
-    ${ctaButton(acceptUrl, "Open " + projectName)}
+    ${ctaButton(acceptUrl, `Open ${projectName}`)}
     <p style="margin:18px 0 0 0;font-size:12px;color:#a3a3a3;word-break:break-all">Or paste this link into your browser:<br><span style="color:#737373">${escapeHtml(acceptUrl)}</span></p>
   `;
 

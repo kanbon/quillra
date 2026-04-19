@@ -1,6 +1,6 @@
-import { useEffect, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
+import { type ReactNode, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 type Props = {
   open: boolean;
@@ -28,7 +28,11 @@ export function Modal({ open, onClose, children, className }: Props) {
   if (!open || typeof document === "undefined") return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
       <div
         className={cn(
