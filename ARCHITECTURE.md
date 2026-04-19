@@ -315,5 +315,20 @@ a text fallback so it survives Outlook and Gmail rendering.
 - **A multi-tenant cloud service from this codebase.** The managed SaaS at
   quillra.com runs this same code plus deployment glue we don't open-source.
   Single-tenant self-host is the primary shape.
-- **Tests.** Not yet, but we're adding them. See Phase 5 in the recent
-  commits and [CONTRIBUTING.md](CONTRIBUTING.md#tests) for the plan.
+## Tests
+
+Vitest runs unit tests from `packages/api`. Test files live next to the
+module they cover as `*.test.ts`:
+
+```
+services/crypto.test.ts              AES-GCM wrapper, key resolution, tampering
+services/framework-registry.test.ts  manifest and config-file detection
+services/agent-humanizer.test.ts     tool-call to plain-language translation
+```
+
+`yarn test` runs them across the workspace via Turbo. The suites are pure
+(no database, no filesystem, no network) so they run in under a second and
+execute on every PR via the CI workflow.
+
+Frontend tests are not set up yet; the first one will likely be a
+Playwright smoke run of the setup wizard.

@@ -102,10 +102,17 @@ are also available: `yarn typecheck`, `yarn lint`, `yarn lint:fix`,
 <a id="tests"></a>
 **Running tests**
 
-We don't have a formal test suite yet. If you're touching something with
-non-trivial logic (agent permissions, usage limits, workspace git ops,
-anything in `services/`), please add tests alongside your change. Vitest is
-the intended runner.
+```bash
+yarn test           # run once
+yarn workspace @quillra/api test:watch   # watch mode for the API package
+```
+
+Tests run with Vitest. The seed suites cover the secret-encryption wrapper
+(`services/crypto.ts`), the framework detector (`services/framework-registry.ts`),
+and the chat-transcript humanizer (`services/agent-humanizer.ts`). If you
+touch anything with non-trivial logic, especially in `services/` or
+`routes/`, please add tests alongside your change. Test files sit next to
+the module they cover, as `*.test.ts`.
 
 ## Code style & conventions
 

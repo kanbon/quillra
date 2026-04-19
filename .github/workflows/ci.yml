@@ -30,3 +30,6 @@ jobs:
 
       - name: Check for em-dashes in prose
         run: yarn check:em-dashes
+
+      - name: Unit tests
+        run: yarn test

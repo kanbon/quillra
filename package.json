@@ -8,16 +8,19 @@
     "build": "turbo run build",
     "db:push": "yarn workspace @quillra/api db:push",
     "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "check:em-dashes": "node scripts/check-em-dashes.mjs",
-    "check": "yarn typecheck && yarn lint && yarn check:em-dashes"
+    "check": "yarn typecheck && yarn lint && yarn check:em-dashes && yarn test"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@vitest/ui": "1.6.0",
     "turbo": "^2.8.20",
-    "typescript": "~5.7.3"
+    "typescript": "~5.7.3",
+    "vitest": "1.6.0"
   },
   "packageManager": "yarn@1.22.22"
 }
