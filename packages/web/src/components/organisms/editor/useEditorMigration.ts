@@ -19,14 +19,18 @@ import { ASTRO_MIGRATION_KICKOFF_PROMPT } from "@/lib/migration-prompts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
-type ProjectLike = {
-  migrationTarget: "astro" | null;
-} | null
+type ProjectLike =
+  | {
+      migrationTarget: "astro" | null;
+    }
+  | null
   | undefined;
 
-type ConvListLike = {
-  conversations: { id: string }[];
-} | undefined;
+type ConvListLike =
+  | {
+      conversations: { id: string }[];
+    }
+  | undefined;
 
 export function useEditorMigration(params: {
   projectId: string;

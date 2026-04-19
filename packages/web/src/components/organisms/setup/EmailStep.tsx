@@ -47,9 +47,7 @@ export function EmailStep({
 }) {
   return (
     <div className="p-8">
-      <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">
-        Email delivery
-      </h2>
+      <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">Email delivery</h2>
       <p className="mt-2 text-sm text-neutral-500">
         Real emails for invites and client logins. You can change this later in settings.
       </p>

@@ -60,9 +60,7 @@ export function EditorPublishModal({
                 <ReactMarkdown>{publishStatus.summary}</ReactMarkdown>
               </div>
             ) : (
-              <p className="mb-4 mt-1 text-sm text-neutral-500">
-                {t("publish.readyDescription")}
-              </p>
+              <p className="mb-4 mt-1 text-sm text-neutral-500">{t("publish.readyDescription")}</p>
             )}
             <Button
               type="button"

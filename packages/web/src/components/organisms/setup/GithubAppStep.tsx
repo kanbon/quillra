@@ -29,13 +29,11 @@ export function GithubAppStep({
 
   return (
     <div className="p-8">
-      <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">
-        GitHub App
-      </h2>
+      <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">GitHub App</h2>
       <p className="mt-2 text-sm leading-relaxed text-neutral-500">
-        Quillra pushes commits through its own GitHub App. No personal access tokens.
-        Installation tokens rotate automatically every hour, and you can revoke
-        everything in one click from github.com.
+        Quillra pushes commits through its own GitHub App. No personal access tokens. Installation
+        tokens rotate automatically every hour, and you can revoke everything in one click from
+        github.com.
       </p>
 
       {!appConfigured ? (
@@ -53,24 +51,16 @@ export function GithubAppStep({
             href="/api/setup/github-app/start"
             className="mt-5 flex h-11 w-full items-center justify-center gap-2.5 rounded-md bg-[#24292F] px-4 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-[#32383F]"
           >
-            <svg
-              className="h-4 w-4"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              aria-hidden="true"
-            >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.575.105.785-.25.785-.555 0-.275-.01-1-.015-1.965-3.2.695-3.875-1.54-3.875-1.54-.525-1.33-1.28-1.685-1.28-1.685-1.045-.715.08-.7.08-.7 1.155.08 1.765 1.185 1.765 1.185 1.03 1.765 2.7 1.255 3.36.96.105-.745.4-1.255.73-1.545-2.555-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.185-3.095-.12-.29-.515-1.465.11-3.055 0 0 .965-.31 3.165 1.18a10.98 10.98 0 0 1 2.88-.385c.98.005 1.97.13 2.88.385 2.195-1.49 3.16-1.18 3.16-1.18.625 1.59.23 2.765.115 3.055.735.805 1.18 1.835 1.18 3.095 0 4.43-2.69 5.405-5.255 5.69.41.355.78 1.055.78 2.125 0 1.535-.015 2.77-.015 3.15 0 .31.205.665.79.555A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" />
             </svg>
             Create &amp; install GitHub App
           </a>
           <p className="mt-4 text-[11px] leading-snug text-neutral-400">
             Already have an App? Set{" "}
-            <code className="rounded bg-neutral-100 px-1 font-mono">GITHUB_APP_ID</code>{" "}
-            and{" "}
-            <code className="rounded bg-neutral-100 px-1 font-mono">
-              GITHUB_APP_PRIVATE_KEY
-            </code>{" "}
-            as environment variables and skip this step.
+            <code className="rounded bg-neutral-100 px-1 font-mono">GITHUB_APP_ID</code> and{" "}
+            <code className="rounded bg-neutral-100 px-1 font-mono">GITHUB_APP_PRIVATE_KEY</code> as
+            environment variables and skip this step.
           </p>
           <div className="mt-6">
             <button
@@ -107,8 +97,7 @@ export function GithubAppStep({
                   ) : null}
                   {installationId ? (
                     <>
-                      Installation <span className="font-mono">#{installationId}</span>{" "}
-                      is active.
+                      Installation <span className="font-mono">#{installationId}</span> is active.
                     </>
                   ) : (
                     "Ready to push to the repos you selected."

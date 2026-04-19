@@ -17,9 +17,7 @@ export function StepIndicator({ step }: { step: Step }) {
           Step <span className="text-neutral-900">{stepIndex + 1}</span>
           <span className="text-neutral-400"> / {STEPS.length}</span>
         </span>
-        <span className="uppercase tracking-wider text-neutral-400">
-          {STEPS[stepIndex]?.label}
-        </span>
+        <span className="uppercase tracking-wider text-neutral-400">{STEPS[stepIndex]?.label}</span>
       </div>
       <div className="flex items-center gap-1.5">
         {STEPS.map((s, i) => (

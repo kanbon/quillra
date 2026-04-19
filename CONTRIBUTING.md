@@ -86,30 +86,45 @@ packages/api/       Hono + Better Auth + Drizzle (SQLite) + Claude Agent SDK
 packages/web/       React 19 + Vite + Tailwind + React Query
 ```
 
-**Running tests**
+**Before pushing**
 
-We don't have a formal test suite yet, please add one if you're touching anything with non-trivial logic. Until then: typecheck both packages before submitting:
+Run the full check from the repo root:
 
 ```bash
-cd packages/api && yarn typecheck
-cd packages/web && yarn typecheck
+yarn check
 ```
+
+This runs typecheck, Biome (format + lint), and the em-dash guard in one
+shot. All three must pass or CI will fail on your PR. Individual scripts
+are also available: `yarn typecheck`, `yarn lint`, `yarn lint:fix`,
+`yarn format`, `yarn check:em-dashes`.
+
+<a id="tests"></a>
+**Running tests**
+
+We don't have a formal test suite yet. If you're touching something with
+non-trivial logic (agent permissions, usage limits, workspace git ops,
+anything in `services/`), please add tests alongside your change. Vitest is
+the intended runner.
 
 ## Code style & conventions
 
 - **TypeScript strict mode** is on everywhere. Don't widen types with `any` to silence errors, fix the root cause.
-- **React components** follow atomic-ish structure: `atoms/`, `molecules/`, `organisms/`, `templates/`. New primitives go in `atoms/` or `molecules/`, complex stateful blocks go in `organisms/`.
+- **Biome** formats and lints everything. Run `yarn lint:fix` before you push. The config is at `biome.json` at the repo root and covers both packages.
+- **No em-dashes.** The project style is ASCII punctuation only: `. , : ( )`. A pre-commit CI check rejects the U+2014 character in source files and prose. Long dashes belong in typography, not in source.
+- **React components** follow atomic design: `atoms/`, `molecules/`, `organisms/`, `templates/`. Primitives go in `atoms/` or `molecules/`, feature-sized blocks go in `organisms/`. Pages stay thin.
 - **Tailwind** for all styling. No CSS-in-JS. `cn()` from `@/lib/cn` for conditional classes.
-- **Small files, small functions.** If you find yourself needing a comment block to explain what a function does, it probably wants to be split up.
-- **No premature abstractions.** Three similar lines of code is better than a speculative helper. See other contributors' PRs for the vibe.
+- **Small files, small functions.** If you find yourself needing a comment block to explain what a function does, it probably wants to be split up. The 200-line heuristic in [ARCHITECTURE.md](./ARCHITECTURE.md) is a good pressure gauge.
+- **Comments explain why, not what.** Well-named code tells you what. A comment should document a non-obvious invariant, a workaround for a specific bug, or a hidden constraint.
+- **No premature abstractions.** Three similar lines of code is better than a speculative helper.
 - **No emoji in code or comments** unless the user-facing feature literally shows them.
-- **i18n everything.** New user-facing strings go into `packages/web/src/i18n/dictionaries.ts` under a sensible key, with both `en` and `de` entries. See existing keys for naming conventions.
+- **i18n everything.** New user-facing strings go into `packages/web/src/i18n/dictionaries.ts` under a sensible key, with both `en` and `de` entries.
 
 ## Submitting a pull request
 
 1. Fork the repo, branch from `main`, name your branch something descriptive (`fix/preview-flicker`, `feat/smtp-backend`).
 2. Make your change. Keep it focused, if you find unrelated cleanup that's tempting, do it in a separate PR.
-3. Run typechecks in both packages.
+3. Run `yarn check` (typecheck + lint + em-dash guard). Everything must pass.
 4. **If you touched anything that reads secrets or env files**, scan your diff:
    ```bash
    git diff --staged | grep -E 'sk-|ghp_|github_pat_|re_[a-z0-9]|API_KEY=[^$]|TOKEN=[^$]|PASSWORD=[^$]'

@@ -24,8 +24,8 @@ export function SigninStep() {
         Create your owner account
       </h2>
       <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-neutral-500">
-        Sign in with GitHub now to become the instance owner. Everyone you invite later can
-        sign in with just their email.
+        Sign in with GitHub now to become the instance owner. Everyone you invite later can sign in
+        with just their email.
       </p>
       {/* GitHub brand-compliant sign-in button, follows GitHub's
           published guidance: solid #24292F bg, white text, official
@@ -51,8 +51,8 @@ export function SigninStep() {
         Sign in with GitHub
       </button>
       <p className="mt-5 text-[11px] leading-snug text-neutral-400">
-        GitHub is only required for you, the owner. You'll be able to push to your repos
-        from Quillra right after this.
+        GitHub is only required for you, the owner. You'll be able to push to your repos from
+        Quillra right after this.
       </p>
     </div>
   );

@@ -38,20 +38,17 @@ export function OrganizationStep({
         Who's running this instance?
       </h2>
       <p className="mt-2 text-sm text-neutral-500">
-        Contact details for whoever operates this Quillra install. Used in email footers,
-        the branded client login page, and the public{" "}
-        <code className="rounded bg-neutral-100 px-1 font-mono text-[11px]">
-          /impressum
-        </code>{" "}
-        page.
+        Contact details for whoever operates this Quillra install. Used in email footers, the
+        branded client login page, and the public{" "}
+        <code className="rounded bg-neutral-100 px-1 font-mono text-[11px]">/impressum</code> page.
       </p>
       <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[12px] leading-relaxed text-amber-800">
-        <strong className="font-semibold">Publicly visible.</strong> These values appear at
-        the bottom of every email Quillra sends and on the public{" "}
+        <strong className="font-semibold">Publicly visible.</strong> These values appear at the
+        bottom of every email Quillra sends and on the public{" "}
         <code className="rounded bg-amber-100 px-1 font-mono">/impressum</code> page of this
-        instance. In Germany and Austria a commercial website operator is required by law to
-        provide these details, and modern spam filters (Gmail, Outlook) expect a real sender
-        identity to deliver email to the inbox.
+        instance. In Germany and Austria a commercial website operator is required by law to provide
+        these details, and modern spam filters (Gmail, Outlook) expect a real sender identity to
+        deliver email to the inbox.
       </div>
 
       <div className="mt-5 space-y-4">
@@ -65,8 +62,8 @@ export function OrganizationStep({
             placeholder="Quillra"
           />
           <p className="mt-1 text-[11px] text-neutral-500">
-            Shown under "Powered by" on the client login page and in email footers. Defaults
-            to "Quillra".
+            Shown under "Powered by" on the client login page and in email footers. Defaults to
+            "Quillra".
           </p>
         </div>
 

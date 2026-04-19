@@ -139,11 +139,7 @@ export function GeneralSection({
           <div className="flex flex-col items-center gap-2">
             <div className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
               {logoUrlDraft ? (
-                <img
-                  src={logoUrlDraft}
-                  alt="Project logo"
-                  className="h-full w-full object-cover"
-                />
+                <img src={logoUrlDraft} alt="Project logo" className="h-full w-full object-cover" />
               ) : (
                 <span className="text-2xl font-semibold text-neutral-400">
                   {initialsOf(projectName)}
@@ -212,9 +208,7 @@ export function GeneralSection({
                   className={selectLikeInputClassName()}
                   value={displayNameMode}
                   disabled={projectSubmitting || patchProject.isPending}
-                  onChange={(e) =>
-                    setDisplayNameMode(e.target.value as "repo" | "full" | "custom")
-                  }
+                  onChange={(e) => setDisplayNameMode(e.target.value as "repo" | "full" | "custom")}
                 >
                   <option value="repo">{t("connectForm.useRepoName", { slug })}</option>
                   <option value="full">{t("connectForm.useOwnerRepo", { fullPretty })}</option>
@@ -258,8 +252,7 @@ export function GeneralSection({
           />
           {(projectErrors.githubRepoFullName || projectErrors.defaultBranch) && (
             <p className="text-xs text-red-600">
-              {projectErrors.githubRepoFullName?.message ??
-                projectErrors.defaultBranch?.message}
+              {projectErrors.githubRepoFullName?.message ?? projectErrors.defaultBranch?.message}
             </p>
           )}
 

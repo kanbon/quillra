@@ -19,7 +19,9 @@
 <p align="center">
   <a href="#run-your-own-self-hosted"><strong>Self-host</strong></a> ·
   <a href="#how-it-works-in-practice"><strong>How it works</strong></a> ·
-  <a href="#for-developers"><strong>For developers</strong></a>
+  <a href="#for-developers"><strong>For developers</strong></a> ·
+  <a href="ARCHITECTURE.md"><strong>Architecture</strong></a> ·
+  <a href="CONTRIBUTING.md"><strong>Contributing</strong></a>
 </p>
 
 ---
@@ -152,7 +154,11 @@ Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` f
 
 **UI:** Light, minimal chrome; accent `#C1121F` used sparingly.
 
-Frontend layout: `packages/web/src/components/`, atoms, molecules, organisms, templates (`RequireAuth`).
+**Components** follow atomic design under `packages/web/src/components/`: atoms, molecules, organisms, templates. Pages stay thin (routing and top-level state) and compose organisms.
+
+**Architecture:** the full map of how the pieces fit together is in [ARCHITECTURE.md](./ARCHITECTURE.md). That's the document to read before your first non-trivial change.
+
+**Code quality:** Biome formats and lints (`yarn lint`, `yarn format`). TypeScript is strict. A tiny guard script fails the build if any em-dash (U+2014) lands in source or prose: keep punctuation ASCII.
 
 ---
 
