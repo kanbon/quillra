@@ -30,7 +30,7 @@ import { adminRouter } from "./routes/admin.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
 import { githubRouter } from "./routes/github.js";
 import { instanceRouter } from "./routes/instance.js";
-import { projectsRouter } from "./routes/projects.js";
+import { projectsRouter } from "./routes/projects/index.js";
 import { setupRouter } from "./routes/setup.js";
 import { getTeamSessionFromCookie, teamLoginRouter } from "./routes/team-login.js";
 import { teamRouter } from "./routes/team.js";
