@@ -1,19 +1,20 @@
+/**
+ * Project invite modal. Replaces the inline invite form that used to
+ * live on the Project Settings page. Two steps:
+ *
+ *   1. Pick a role, card-style picker with a clear description of
+ *      what each role can do.
+ *   2. Enter email + name, send, get feedback inline.
+ *
+ * On success shows a "Sent!" state with a copy-link fallback if the
+ * mailer isn't configured.
+ */
+
 import { Input } from "@/components/atoms/Input";
 import { Modal } from "@/components/atoms/Modal";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
-/**
- * Project invite modal. Replaces the inline invite form that used to
- * live on the Project Settings page. Two steps:
- *
- *   1. Pick a role — card-style picker with a clear description of
- *      what each role can do.
- *   2. Enter email + name — send, get feedback inline.
- *
- * On success shows a "Sent!" state with a copy-link fallback if the
- * mailer isn't configured.
- */
 import { useEffect, useMemo, useState } from "react";
 
 type Role = "client" | "editor" | "admin";

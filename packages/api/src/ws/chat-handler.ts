@@ -1,6 +1,5 @@
-import { and, eq } from "drizzle-orm";
 /**
- * WebSocket handler for `/ws/chat/:projectId` — the single big piece of
+ * WebSocket handler for `/ws/chat/:projectId`, the single big piece of
  * Quillra's runtime behaviour. Every chat message the user sends lands
  * here and triggers:
  *
@@ -18,13 +17,15 @@ import { and, eq } from "drizzle-orm";
  * Lives in its own module because inlining this into index.ts made
  * the app entrypoint 1200 lines of mostly-unrelated concerns and made
  * every new chat feature a diff on top of the WS handler. Extracting
- * here lets the entrypoint be an entrypoint and keeps this — the real
- * product surface — reviewable on its own.
+ * here lets the entrypoint be an entrypoint and keeps this, the real
+ * product surface, reviewable on its own.
  *
  * Helpers that are ONLY used by the chat turn (the threshold-crossing
  * notifier) live in this file too, rather than being re-exported from
  * a third place.
  */
+
+import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { nanoid } from "nanoid";
 import type { ProjectRole } from "../db/app-schema.js";
@@ -145,7 +146,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
       },
     };
   }
-  // Use the user populated by the global middleware — this covers BOTH
+  // Use the user populated by the global middleware, this covers BOTH
   // Better Auth sessions (team members / owner) AND the custom client
   // session cookie. Clients are auth'd this way and failed to chat
   // because the old code only checked better-auth.
@@ -181,7 +182,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
 
         // Project access check: either (a) a projectMembers row (team
         // members) or (b) a client session pinned to this project.
-        // Clients don't get a projectMembers row — their access is
+        // Clients don't get a projectMembers row, their access is
         // represented by the session cookie alone.
         let m = await db
           .select()
@@ -191,7 +192,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           .then((rows) => rows[0]);
         if (!m && wsClientSession && wsClientSession.projectId === projectId) {
           // Synthesize a client "member" row so the rest of the handler
-          // can run unchanged. Not persisted — just a local value.
+          // can run unchanged. Not persisted, just a local value.
           m = {
             id: `client-${wsUser.id}-${projectId}`,
             projectId,
@@ -217,7 +218,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         // Rather than blocking the chat turn on a broken package.json
         // (the old behaviour, which surfaced raw npm ETARGET text as
         // if it were the assistant's reply) we let the agent see the
-        // error as prompt context and fix it — file ops don't need
+        // error as prompt context and fix it, file ops don't need
         // node_modules.
         let installFailureContext: string | null = null;
         try {
@@ -225,7 +226,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           // flagged for an Astro migration. The old framework's
           // package.json is about to be wholesale replaced by the
           // agent, so installing its (often ancient, often massive)
-          // dep tree is wasted work — and historically has been
+          // dep tree is wasted work, and historically has been
           // OOM-killing the container before the agent ever runs.
           // The agent will run `npm install` itself once it's
           // written the new Astro package.json.
@@ -243,7 +244,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
               message:
                 e instanceof Error
                   ? e.message
-                  : "Clone failed — install the Quillra GitHub App on this repository.",
+                  : "Clone failed, install the Quillra GitHub App on this repository.",
             }),
           );
           return;
@@ -282,34 +283,34 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           createdAt: new Date(),
         });
 
-        // Build the prompt — if attachments are present, prepend a clear
+        // Build the prompt, if attachments are present, prepend a clear
         // note for the agent. The key contract: every attachment lives
         // in `.quillra-temp/` which is locally gitignored. The agent
         // has to explicitly decide whether each file is a real asset
         // for the site (move it into public/, src/assets/, etc.) or
         // just reference material for the conversation (leave it in
-        // place — it's invisible to git and won't be pushed).
+        // place, it's invisible to git and won't be pushed).
         let promptText = parsed.content;
         if (attachments.length > 0) {
           const images = attachments.filter((a) => a.kind !== "content");
           const contents = attachments.filter((a) => a.kind === "content");
           const lines: string[] = [];
           lines.push(
-            "The user attached files to this message. They are parked inside `.quillra-temp/` in the repo, which is locally gitignored — nothing in that folder is ever committed or pushed to GitHub.",
+            "The user attached files to this message. They are parked inside `.quillra-temp/` in the repo, which is locally gitignored, nothing in that folder is ever committed or pushed to GitHub.",
           );
           lines.push("");
           lines.push("You must decide, per file, which of these two paths to take:");
           lines.push("");
           lines.push(
-            "  A) REAL ASSET — the file is supposed to end up on the live site (hero image, product photo, downloadable PDF, translated content, etc.). In that case you must MOVE it out of `.quillra-temp/` into the appropriate asset path for this framework (e.g. `public/`, `src/assets/`, `src/content/`, etc.) AND update the relevant source files to reference the new path. Use Bash `mv` or the Write/Read tools to move the file, then delete the original from `.quillra-temp/` so it's not duplicated.",
+            "  A) REAL ASSET, the file is supposed to end up on the live site (hero image, product photo, downloadable PDF, translated content, etc.). In that case you must MOVE it out of `.quillra-temp/` into the appropriate asset path for this framework (e.g. `public/`, `src/assets/`, `src/content/`, etc.) AND update the relevant source files to reference the new path. Use Bash `mv` or the Write/Read tools to move the file, then delete the original from `.quillra-temp/` so it's not duplicated.",
           );
           lines.push("");
           lines.push(
-            "  B) REFERENCE-ONLY — the file is just context for the conversation (a screenshot of a design mockup, a reference site, a screenshot of the user's current page, a mood board). In that case LEAVE it in `.quillra-temp/` untouched. It stays on disk for the rest of this turn but is never committed. You should still look at it (you can see images directly, and read text files via Read) to understand what the user wants.",
+            "  B) REFERENCE-ONLY, the file is just context for the conversation (a screenshot of a design mockup, a reference site, a screenshot of the user's current page, a mood board). In that case LEAVE it in `.quillra-temp/` untouched. It stays on disk for the rest of this turn but is never committed. You should still look at it (you can see images directly, and read text files via Read) to understand what the user wants.",
           );
           lines.push("");
           lines.push(
-            "When unsure, default to REFERENCE-ONLY — it's reversible, whereas accidentally committing a private screenshot to a public repo is not.",
+            "When unsure, default to REFERENCE-ONLY, it's reversible, whereas accidentally committing a private screenshot to a public repo is not.",
           );
           lines.push("");
           if (images.length > 0) {
@@ -337,8 +338,8 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           const tailExcerpt = String(installFailureContext).slice(-1200);
           const preface = [
             "SYSTEM NOTE (not visible to the user, do not quote npm / tooling names in your reply):",
-            "The automatic `npm install` for this project failed before this turn started. The repo files are still readable and editable — fix the cause (usually a bad version in package.json, a missing dependency, or a deprecated package name) and then call `mcp__quillra-diagnostics__restart_preview` to retry. You have `mcp__quillra-diagnostics__get_preview_status` and `mcp__quillra-diagnostics__tail_preview_logs` for details.",
-            "In your final reply, describe the fix in plain language (e.g. \"there was a small setup issue with your site's build config — I fixed it and it's running again\"). Never quote ETARGET, package names, file paths, or `npm` in the reply.",
+            "The automatic `npm install` for this project failed before this turn started. The repo files are still readable and editable, fix the cause (usually a bad version in package.json, a missing dependency, or a deprecated package name) and then call `mcp__quillra-diagnostics__restart_preview` to retry. You have `mcp__quillra-diagnostics__get_preview_status` and `mcp__quillra-diagnostics__tail_preview_logs` for details.",
+            "In your final reply, describe the fix in plain language (e.g. \"there was a small setup issue with your site's build config, I fixed it and it's running again\"). Never quote ETARGET, package names, file paths, or `npm` in the reply.",
             "",
             "Install error tail:",
             tailExcerpt,
@@ -365,7 +366,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
 
         // Pre-run spend cap check. If the user has already crossed their
         // effective hard cap this month, refuse the run with a friendly
-        // message BEFORE the agent starts doing anything — no partial
+        // message BEFORE the agent starts doing anything, no partial
         // work, no surprise charge, no race with the cap. Owner users
         // always bypass this (see shouldBlockRun).
         const block = await shouldBlockRun(wsUser.id, role);
@@ -432,7 +433,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
                 });
               }
             } catch {
-              /* malformed JSON — drop the block silently rather than
+              /* malformed JSON, drop the block silently rather than
                  bleeding raw marker text into the chat */
             }
             askPending = askPending.slice(match.index + match[0].length);
@@ -484,7 +485,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
                 .catch(() => {});
             },
             onResult: (usage) => {
-              // Persist the usage row first, then — once it's in — run
+              // Persist the usage row first, then, once it's in, run
               // the threshold-crossing check so it sees up-to-date MTD
               // spend. Both run as fire-and-forget from the agent's
               // perspective; the chat stream isn't blocked on email.
@@ -526,7 +527,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
               })();
             },
           })) {
-            // Swallow the mapper's `done` — we aggregate cost here and
+            // Swallow the mapper's `done`, we aggregate cost here and
             // emit our own done at the end with totals.
             if (ev.type === "done") {
               if (typeof ev.costUsd === "number") totalCostUsd += ev.costUsd;
@@ -565,7 +566,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           }
           // Flush any text the filter was holding back (e.g. an
           // unfinished `<asx` that never closed). Treat it as regular
-          // stream text — better to show garbled text than to lose it.
+          // stream text, better to show garbled text than to lose it.
           const tail = askFlushTail();
           if (tail) {
             ws.send(JSON.stringify({ type: "stream", text: tail }));
@@ -575,7 +576,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         };
 
         // A turn is "suspiciously short" when the agent used tools but
-        // ended up producing almost no summary text — the classic
+        // ended up producing almost no summary text, the classic
         // "tools ran, then Claude went quiet" failure mode that forced
         // the user to type "you finished?" to continue. Short text is
         // INTENTIONAL when the agent asked a question, so never retry
@@ -592,7 +593,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         assistantText += first.runText;
         let pausedForQuestion = first.runEmittedAsk;
 
-        // Skip the auto-nudge path during a migration run — migration
+        // Skip the auto-nudge path during a migration run, migration
         // owns the whole conversation and must not get a surprise
         // "please continue" injected mid-flight.
         let continueSuggested = false;
@@ -607,12 +608,12 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           ws.send(JSON.stringify({ type: "continue_suggested" }));
         }
 
-        // Single aggregated done event — carries cost for this whole
+        // Single aggregated done event, carries cost for this whole
         // turn (including any auto-retry) plus wall-clock duration.
         // `pausedForQuestion` tells the client this turn ended on an
         // <ask> block: the frontend uses it to suppress the "Done"
-        // checkpoint card, since the task isn't actually finished —
-        // the agent is waiting for the user's answer.
+        // checkpoint card, since the task isn't actually finished, the
+        // agent is waiting for the user's answer.
         ws.send(
           JSON.stringify({
             type: "done",
@@ -652,7 +653,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
 
         // If this was a migration run that finished cleanly, clear
         // the flag so the Editor unlocks (preview back, composer
-        // enabled). On error we leave it set — the user reloads,
+        // enabled). On error we leave it set, the user reloads,
         // sees the "still migrating" state, and can manually clear
         // (future work) or retry.
         if (migrationMode && !agentErrored) {

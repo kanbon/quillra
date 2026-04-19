@@ -29,7 +29,7 @@ export type FrameworkDef = {
   id: FrameworkId;
   /** Display name shown in the UI ("Astro", "Next.js", etc.) */
   label: string;
-  /** simple-icons.org slug — used for the CDN logo at https://cdn.simpleicons.org/{slug} */
+  /** simple-icons.org slug, used for the CDN logo at https://cdn.simpleicons.org/{slug} */
   iconSlug: string;
   /** Brand hex (matches the framework's primary brand color) */
   color: string;
@@ -39,7 +39,7 @@ export type FrameworkDef = {
   optimizes: boolean;
   /** A short blurb shown under the framework name on the connect modal */
   blurb: string;
-  /** How to detect this framework from a package.json — match if ANY listed dep is present */
+  /** How to detect this framework from a package.json, match if ANY listed dep is present */
   packageDeps?: string[];
   /** Or detect by config file at the repo root (for non-Node frameworks) */
   configFiles?: string[];
@@ -189,7 +189,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     color: "#AC7EF4",
     assetsDir: "public/images",
     optimizes: false,
-    blurb: "Resumable, instant-loading framework — zero hydration.",
+    blurb: "Resumable, instant-loading framework, zero hydration.",
     packageDeps: ["@builder.io/qwik", "@builder.io/qwik-city"],
     devCommand: { binary: "npx", args: ["qwik", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
   },
@@ -266,7 +266,7 @@ export function detectFromManifest(opts: {
   return null;
 }
 
-/** Public projection — what we expose to the web client via /api/frameworks */
+/** Public projection, what we expose to the web client via /api/frameworks */
 export function publicFrameworkList() {
   return FRAMEWORKS.map((f) => ({
     id: f.id,

@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
  *
  * Top-right settings surface: the user's avatar, which opens a dropdown
  * with language, organisation settings (owner-only), and sign-out. No
- * more modal, no more buried gear icon — same entry point pattern as
+ * more modal, no more buried gear icon, same entry point pattern as
  * Vercel / Linear / GitHub.
  */
 export function AppHeader() {

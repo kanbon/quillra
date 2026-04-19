@@ -12,7 +12,7 @@
  * TTL, max 5 attempts, rate-limit by wiping older codes per email) but is
  * NOT project-scoped. A successful verify yields a team_session cookie
  * that the global auth middleware treats exactly like a Better Auth
- * session — the user lands on the dashboard and sees every project
+ * session, the user lands on the dashboard and sees every project
  * they're a projectMembers row for.
  *
  * Security:
@@ -63,7 +63,7 @@ function generateCode(): string {
 export const teamLoginRouter = new Hono()
   /**
    * Send a 6-digit sign-in code. Always returns 200 OK even if the email
-   * is unknown — don't leak membership to attackers.
+   * is unknown, don't leak membership to attackers.
    */
   .post("/request-code", async (c) => {
     const body = (await c.req.json().catch(() => null)) as { email?: string } | null;
@@ -71,7 +71,7 @@ export const teamLoginRouter = new Hono()
     if (!email) return c.json({ error: "email required" }, 400);
 
     // Is this email eligible for a team code?
-    //   1. Existing user with instanceRole ("owner" or "member") — already accepted
+    //   1. Existing user with instanceRole ("owner" or "member"), already accepted
     //   2. Pending invite that hasn't been accepted yet
     const [existing] = await db.select().from(user).where(eq(user.email, email)).limit(1);
     const hasRole = Boolean(existing?.instanceRole);
@@ -161,7 +161,7 @@ export const teamLoginRouter = new Hono()
       return c.json({ error: "Invalid code" }, 400);
     }
 
-    // Code is good — ensure the user row exists and the invite (if any)
+    // Code is good, ensure the user row exists and the invite (if any)
     // is marked accepted. Always clean up the code.
     await db.delete(teamLoginCodes).where(eq(teamLoginCodes.id, row.id));
 

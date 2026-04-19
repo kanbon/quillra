@@ -1,15 +1,15 @@
 /**
  * Plain-language translator for the Claude Agent SDK's tool calls.
  *
- * Quillra shows the agent's every step in the chat transcript — Read,
- * Edit, Write, Bash, Glob, MCP diagnostics — but never in technical
+ * Quillra shows the agent's every step in the chat transcript, Read,
+ * Edit, Write, Bash, Glob, MCP diagnostics, but never in technical
  * terms. A Read of `src/pages/index.astro` becomes "Reading the
  * homepage"; an `npm install` becomes "Installing packages"; a call
  * to `mcp__quillra-diagnostics__get_preview_status` becomes "Checking
  * your site".
  *
  * The humanizer is the one place where tool names, file paths, and
- * commands can leak — everything downstream handles only the
+ * commands can leak, everything downstream handles only the
  * human-language label. Keep the fallbacks generic and non-technical.
  */
 
@@ -50,7 +50,7 @@ function humanFile(fp: string): string {
   return name.replace(/[-_]/g, " ");
 }
 
-/** Classify a Bash command line. Not exhaustive — the goal is to
+/** Classify a Bash command line. Not exhaustive, the goal is to
  *  recognise the handful the agent uses in normal flow (install,
  *  build, git) and fall back to "Running a setup command" for
  *  anything else, which is vague enough to be safe. */

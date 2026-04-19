@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/quillra-editor.webp" alt="Quillra editor — chat on the left, live preview on the right" width="100%" />
+  <img src="assets/quillra-editor.webp" alt="Quillra editor, chat on the left, live preview on the right" width="100%" />
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 ## Why Quillra exists
 
-You vibe-coded a beautiful site in Astro / Next / Vite / [whatever]. Now a real client needs to edit copy, swap photos, ship a new page — and you don't want to:
+You vibe-coded a beautiful site in Astro / Next / Vite / [whatever]. Now a real client needs to edit copy, swap photos, ship a new page, and you don't want to:
 
 - 🚫 Rebuild the project on top of WordPress / Typo3 / Strapi / Sanity
 - 🚫 Hand them a Git tutorial
@@ -43,33 +43,33 @@ Quillra is the missing layer. Your repo stays the source of truth. Your client o
 
 The editing loop is chat on the left, live preview on the right. The client types what they want in plain language; the agent edits the real files in your repo; the preview reloads; they hit **Publish** and your existing CI deploys it.
 
-- **Chat-first editing** — describe changes in plain language, no Markdown, no file paths
-- **Live preview** — per-project dev server with hot reload. When it errors out, one click hands the error straight to the assistant
-- **Real Git history** — every change is a real commit, attributed and reviewable
-- **Your existing pipeline** — Pages, Vercel, Netlify, Cloudflare, your VPS; Quillra never touches hosting
+- **Chat-first editing**: describe changes in plain language, no Markdown, no file paths
+- **Live preview**: per-project dev server with hot reload. When it errors out, one click hands the error straight to the assistant
+- **Real Git history**: every change is a real commit, attributed and reviewable
+- **Your existing pipeline**: Pages, Vercel, Netlify, Cloudflare, your VPS; Quillra never touches hosting
 
 ### Run it for real customers
 
 Project-scoped membership with a branded portal designed for non-technical website owners.
 
-- **Branded client login** — per-project logo, email-code sign-in, no GitHub account required
-- **Role-aware permissions** — admin / editor / client scopes baked into the agent's tool permissions, so clients can edit content files but never touch config
-- **Email built in** — Resend or any SMTP provider. Invites, warnings, and reports all ride a shared HTML template that renders cleanly in Outlook and Gmail
+- **Branded client login**: per-project logo, email-code sign-in, no GitHub account required
+- **Role-aware permissions**: admin / editor / client scopes baked into the agent's tool permissions, so clients can edit content files but never touch config
+- **Email built in**: Resend or any SMTP provider. Invites, warnings, and reports all ride a shared HTML template that renders cleanly in Outlook and Gmail
 
 ### Know (and cap) what it costs
 
 Designed for agencies passing Anthropic costs on to the customer.
 
 - **Per-turn cost checkpoint** visible in chat the moment a task finishes
-- **Organisation usage dashboard** with a per-user drill-down — 12-month chart + monthly / per-project / per-model tables
+- **Organisation usage dashboard** with a per-user drill-down, 12-month chart + monthly / per-project / per-model tables
 - **Warn + hard-cap thresholds** at global, per-role, or per-user scope. Owners bypass caps; everyone else sees a friendly "please contact the site owner" message when they hit one, and the warning email reaches you first
-- **Monthly usage report** emailed to opted-in users — pass-through billing to clients, one click to enable per user
+- **Monthly usage report** emailed to opted-in users, pass-through billing to clients, one click to enable per user
 
 ### One-click migrate to Astro
 
-Built the site in **Lovable, Replit, Bolt, v0, or any other AI app builder**? You've got a React SPA that loads every page as a client bundle — fine to demo, rough to run for a real customer, and the builder's own UI is either too technical for them or exposes your credits and prompts.
+Built the site in **Lovable, Replit, Bolt, v0, or any other AI app builder**? You've got a React SPA that loads every page as a client bundle, fine to demo, rough to run for a real customer, and the builder's own UI is either too technical for them or exposes your credits and prompts.
 
-Flip one toggle and Quillra rewrites the project as Astro in place: every page becomes static by default, images optimise on the build, interactivity survives as islands, and the React code still sitting around gets swept out. **Design parity is a hard requirement** — the migration agent walks every page and fixes any visual drift before reporting done, so the site the client signs off on looks pixel-identical to the one you handed over.
+Flip one toggle and Quillra rewrites the project as Astro in place: every page becomes static by default, images optimise on the build, interactivity survives as islands, and the React code still sitting around gets swept out. **Design parity is a hard requirement**: the migration agent walks every page and fixes any visual drift before reporting done, so the site the client signs off on looks pixel-identical to the one you handed over.
 
 The end result: you hand the customer a clean, fast site and a chat-based editor they understand. The AI builder stays on your side of the fence.
 
@@ -79,9 +79,9 @@ The end result: you hand the customer a clean, fast site and a chat-based editor
 
 ### Also
 
-- **Smart file handling** — paste, drag, or click to upload. Images are routed to the framework's asset folder and optimised only when the framework doesn't already
-- **Full i18n** — English and German UI today; the agent replies in the user's chosen language
-- **Self-hosted** — one Docker container, your VPS, your data
+- **Smart file handling**: paste, drag, or click to upload. Images are routed to the framework's asset folder and optimised only when the framework doesn't already
+- **Full i18n**: English and German UI today; the agent replies in the user's chosen language
+- **Self-hosted**: one Docker container, your VPS, your data
 
 ## Frameworks we know
 
@@ -93,9 +93,9 @@ Your dev server command is auto-detected, or you can override it per project.
 
 ## How it works (in practice)
 
-1. Connect a **GitHub repository** and branch — Quillra clones it on your server
+1. Connect a **GitHub repository** and branch, Quillra clones it on your server
 2. Invite people by email; they sign in with **GitHub** and only see projects they belong to
-3. They **chat** with the assistant — it reads and edits files in the workspace under role-aware rules
+3. They **chat** with the assistant, it reads and edits files in the workspace under role-aware rules
 4. **Publish** runs `git push` so your existing pipeline deploys, exactly as if a developer pushed
 
 Dev previews are detected from `package.json`, or you can set a custom command per project.
@@ -104,7 +104,7 @@ Dev previews are detected from `package.json`, or you can set a custom command p
 
 ## Run your own (self-hosted)
 
-You deploy **one Quillra instance** (VPS, internal server, Docker). There are no org tiers — only **projects** (one repo each) and **per-project** members.
+You deploy **one Quillra instance** (VPS, internal server, Docker). There are no org tiers, only **projects** (one repo each) and **per-project** members.
 
 | Variable | Purpose |
 |----------|---------|
@@ -114,9 +114,9 @@ You deploy **one Quillra instance** (VPS, internal server, Docker). There are no
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for the owner's sign-in |
 | `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server |
 | `PREVIEW_DOMAIN` | Wildcard subdomain for per-project preview URLs |
-| `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp` — powers invites, warnings, and monthly reports |
+| `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`, powers invites, warnings, and monthly reports |
 
-All other settings — GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields — are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them.
+All other settings, GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields, are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them.
 
 Copy `packages/api/.env.example` → `.env`, fill the values above, and start the container. The SQLite schema bootstraps itself on first run. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
 
@@ -126,7 +126,7 @@ The **Sites** dashboard lists every project you can access; from the editor, use
 
 ### Don't want to self-host?
 
-We're rolling out a managed SaaS — same product, we run the box. **Join the waitlist at [quillra.com](https://www.quillra.com).**
+We're rolling out a managed SaaS, same product, we run the box. **Join the waitlist at [quillra.com](https://www.quillra.com).**
 
 ---
 
@@ -152,7 +152,7 @@ Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` f
 
 **UI:** Light, minimal chrome; accent `#C1121F` used sparingly.
 
-Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms, templates (`RequireAuth`).
+Frontend layout: `packages/web/src/components/`, atoms, molecules, organisms, templates (`RequireAuth`).
 
 ---
 
@@ -162,9 +162,9 @@ Frontend layout: `packages/web/src/components/` — atoms, molecules, organisms,
 
 ## Contributing
 
-Contributions are welcome — bug reports, feature proposals, PRs, docs, framework support.
+Contributions are welcome, bug reports, feature proposals, PRs, docs, framework support.
 
-Start with the **[contributing guide](./CONTRIBUTING.md)** — it covers local setup, code style, commit conventions, how to file a good bug report, and what the license means for contributors.
+Start with the **[contributing guide](./CONTRIBUTING.md)**: it covers local setup, code style, commit conventions, how to file a good bug report, and what the license means for contributors.
 
 We follow a [Code of Conduct](./CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
 
@@ -182,9 +182,9 @@ Quillra is released under the **[Functional Source License v1.1, MIT Future Lice
 
 In plain English:
 
-- ✅ Free to **use commercially** — for your company, your clients, your agency, your side projects. Charge whatever you want for the work you do with it.
+- ✅ Free to **use commercially**: for your company, your clients, your agency, your side projects. Charge whatever you want for the work you do with it.
 - ✅ Free to **fork, modify, and self-host** for your own use.
-- ✅ After **two years**, every version automatically becomes full MIT — no restrictions at all.
+- ✅ After **two years**, every version automatically becomes full MIT, no restrictions at all.
 - ❌ You may **not** use Quillra to build a **competing hosted/managed CMS service** (i.e. a "Quillra-as-a-service" competitor). That's the one thing we're protecting, because we run one ourselves.
 
 If in doubt: self-hosting it for your own clients, your employer, or your own projects is always fine. Selling hosted Quillra to other people is not.

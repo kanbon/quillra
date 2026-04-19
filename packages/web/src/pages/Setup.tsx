@@ -1,18 +1,19 @@
+/**
+ * First-run instance setup wizard.
+ *
+ * Walks a fresh install through the values Quillra needs to actually
+ * function: Anthropic key, GitHub App, and optional email delivery.
+ *
+ * Routes-level guard: any time /api/setup/status says needsSetup is
+ * true, the rest of the app bounces users here (see App.tsx).
+ */
+
 import { Input } from "@/components/atoms/Input";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { clearSetupGateCache } from "@/components/templates/SetupGate";
 import { apiJson } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/cn";
-/**
- * First-run instance setup wizard.
- *
- * Walks a fresh install through the values Quillra needs to actually
- * function: Anthropic key, GitHub token, and optional email delivery.
- *
- * Routes-level guard: any time /api/setup/status says needsSetup is
- * true, the rest of the app bounces users here (see App.tsx).
- */
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -80,7 +81,7 @@ export function SetupPage() {
         const s = await apiJson<StatusResponse>("/api/setup/status");
         setStatus(s);
         if (!s.needsSetup) {
-          // Already configured — nothing to do here
+          // Already configured, nothing to do here
           nav("/dashboard", { replace: true });
         }
       } catch {
@@ -117,7 +118,7 @@ export function SetupPage() {
     }
   }
 
-  // The GitHub App step has no "next" handler that saves fields — the
+  // The GitHub App step has no "next" handler that saves fields, the
   // creation flow hands off to GitHub and back, persisting credentials
   // server-side. This button just advances past the step.
   function handleGithubAppNext() {
@@ -260,7 +261,7 @@ export function SetupPage() {
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-semibold text-neutral-900">GitHub App</p>
                     <p className="text-[12px] text-neutral-500">
-                      Scoped access to the repos you pick — revoke anytime
+                      Scoped access to the repos you pick. Revoke anytime.
                     </p>
                   </div>
                 </li>
@@ -319,12 +320,12 @@ export function SetupPage() {
                 Anthropic API key
               </h2>
               <p className="mt-2 text-sm text-neutral-500">
-                Quillra uses Claude to edit your site. Paste your API key below —
+                Quillra uses Claude to edit your site. Paste your API key below, or{" "}
                 <a
                   href="https://console.anthropic.com/settings/keys"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="ml-1 text-brand underline-offset-2 hover:underline"
+                  className="text-brand underline-offset-2 hover:underline"
                 >
                   get one here
                 </a>
@@ -391,8 +392,8 @@ export function SetupPage() {
                     GitHub App
                   </h2>
                   <p className="mt-2 text-sm leading-relaxed text-neutral-500">
-                    Quillra pushes commits through its own GitHub App — no personal access tokens,
-                    installation tokens rotate automatically every hour, and you can revoke
+                    Quillra pushes commits through its own GitHub App. No personal access tokens.
+                    Installation tokens rotate automatically every hour, and you can revoke
                     everything in one click from github.com.
                   </p>
 
@@ -793,7 +794,7 @@ export function SetupPage() {
                 Sign in with GitHub now to become the instance owner. Everyone you invite later can
                 sign in with just their email.
               </p>
-              {/* GitHub brand-compliant sign-in button — follows GitHub's
+              {/* GitHub brand-compliant sign-in button, follows GitHub's
                   published guidance: solid #24292F bg, white text, official
                   octocat mark. Do not restyle or recolor the mark. */}
               <button

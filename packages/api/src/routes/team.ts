@@ -96,7 +96,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
 
     // Every invite (clients AND collaborators) pre-creates the user +
     // project membership now, so the recipient can log in with the
-    // passwordless email-code flow — no GitHub required. Clients land on
+    // passwordless email-code flow, no GitHub required. Clients land on
     // the branded project login page; team members land on /login.
     let acceptUrl: string;
     const base = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
@@ -117,7 +117,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
       });
       [existingUser] = await db.select().from(user).where(eq(user.id, newId)).limit(1);
     } else if (role !== "client" && !existingUser.instanceRole) {
-      // Existing user but no instanceRole — upgrade them so they can
+      // Existing user but no instanceRole, upgrade them so they can
       // sign into the dashboard (not just one project).
       await db
         .update(user)
@@ -183,7 +183,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
       // to the admin who invited them (Gmail treats threaded replies as
       // a strong engagement signal). List-Unsubscribe + List-Unsubscribe-Post
       // are required by Gmail/Yahoo's bulk-sender rules even for
-      // transactional mail — without them we're more likely to be
+      // transactional mail, without them we're more likely to be
       // spam-foldered on first contact with a cold recipient.
       const replyTo = r.user.email ?? undefined;
       const headers: Record<string, string> = {

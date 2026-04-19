@@ -16,7 +16,7 @@ export type StatusResponse = {
   values: Record<string, SettingStatus>;
 };
 
-/** Convenience getter — returns a zero-state entry if the key is missing. */
+/** Convenience getter, returns a zero-state entry if the key is missing. */
 export function getStatus(status: StatusResponse | null, key: string): SettingStatus {
   return (
     status?.values[key] ?? {

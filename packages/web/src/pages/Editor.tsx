@@ -112,7 +112,7 @@ export function EditorPage() {
     enabled: Boolean(id),
   });
 
-  // Project members list — only fetched when the current viewer can see
+  // Project members list, only fetched when the current viewer can see
   // other people's chats, so clients don't waste a request on a list
   // they can't use anyway.
   const membersQ = useQuery({
@@ -166,7 +166,7 @@ export function EditorPage() {
   // changes). The dev server's file watcher should pick up most file
   // edits automatically, but a hard reset can change a lot of files
   // at once and some frameworks batch-drop HMR updates under that
-  // load — reloading the iframe is the belt-and-suspenders fix.
+  // load, reloading the iframe is the belt-and-suspenders fix.
   useEffect(() => {
     const handler = () => refreshPreview();
     window.addEventListener("quillra:refresh-preview", handler);
@@ -200,12 +200,12 @@ export function EditorPage() {
   // Derived state: true while the project row still has migration_target
   // set. This is the source of truth for locking the UI (disabling the
   // composer, hiding the preview in favour of the MigrationBanner).
-  // Survives page reloads because it comes from the DB — not local state.
+  // Survives page reloads because it comes from the DB, not local state.
   const isMigratingToAstro = project?.migrationTarget === "astro";
 
-  // Auto-send the migration kickoff prompt exactly once per project —
-  // when we land on a project flagged for migration and there are no
-  // conversations yet. A ref guard prevents double-sends if the effect
+  // Auto-send the migration kickoff prompt exactly once per project, when we
+  // land on a project flagged for migration and there are no conversations
+  // yet. A ref guard prevents double-sends if the effect
   // re-runs from `convList` refetching mid-stream. The guard resets
   // per component mount; across mounts `conversations.length > 0` as
   // soon as the first send lands, so the condition fails forever.
@@ -226,15 +226,15 @@ export function EditorPage() {
     if (!id) return;
     await apiJson(`/api/projects/${id}/cancel-migration`, { method: "POST" });
     await qc.invalidateQueries({ queryKey: ["project", id] });
-    // Also invalidate conversations — the stuck run may have
+    // Also invalidate conversations, the stuck run may have
     // half-created one, and refetching ensures the migration-kickoff
     // useEffect above doesn't re-fire based on a stale empty list.
     await qc.invalidateQueries({ queryKey: ["conversations", id] });
   }, [id, qc]);
 
   // Auto-start preview on mount: render the iframe immediately with the
-  // (deterministic) preview URL so the user sees the proxy boot page —
-  // no intermediate spinners. The dev server is started in the background.
+  // (deterministic) preview URL so the user sees the proxy boot page with no
+  // intermediate spinners. The dev server is started in the background.
   useEffect(() => {
     if (!id || previewStarted.current) return;
     previewStarted.current = true;
@@ -278,7 +278,7 @@ export function EditorPage() {
 
   const canPublish = project?.role === "admin" || project?.role === "editor";
   const startLabel =
-    previewLabel && previewLabel !== "—"
+    previewLabel && previewLabel !== "-"
       ? t("preview.startSpecific", { framework: previewLabel })
       : t("preview.startLive");
 
@@ -460,7 +460,7 @@ export function EditorPage() {
           {/* History sidebar (overlay) */}
           {showHistory && (
             <div className="border-b border-neutral-200 bg-white">
-              {/* Admin/editor/translator user filter — clients never see this */}
+              {/* Admin/editor/translator user filter, clients never see this */}
               {convList?.canSeeAll && (
                 <div className="flex items-center gap-2 border-b border-neutral-100 bg-neutral-50/50 px-3 py-2">
                   <svg
@@ -618,8 +618,7 @@ export function EditorPage() {
         )}
         {/* Desktop: inline preview pane.
             Mobile: hidden here and rendered inside the bottom sheet below.
-            While migrating to Astro: replaced by the MigrationBanner —
-            no preview makes sense while the project is being rewritten. */}
+            While migrating to Astro: replaced by the MigrationBanner,             no preview makes sense while the project is being rewritten. */}
         <section className="hidden min-w-0 flex-1 md:block">
           {isMigratingToAstro ? (
             <MigrationBanner onCancel={cancelMigration} />
@@ -642,8 +641,7 @@ export function EditorPage() {
       </div>
 
       {/* Mobile-only: preview bottom sheet (opened via chat-header button).
-          During a migration, the sheet shows the MigrationBanner instead —
-          no useful preview exists until the agent finishes. */}
+          During a migration, the sheet shows the MigrationBanner instead,           no useful preview exists until the agent finishes. */}
       <MobilePreviewSheet open={mobilePreviewOpen} onClose={() => setMobilePreviewOpen(false)}>
         {isMigratingToAstro ? (
           <MigrationBanner onCancel={cancelMigration} />

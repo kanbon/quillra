@@ -9,19 +9,19 @@ import { Navigate, useParams } from "react-router-dom";
  * valid, and historically this component only knew about two of them
  * which produced an infinite redirect loop for the third:
  *
- *  1. Better Auth session — the GitHub OAuth owner flow. Detected via
+ *  1. Better Auth session, the GitHub OAuth owner flow. Detected via
  *     the authClient.useSession() hook.
- *  2. Team session — email-code login for admins / editors / owners
+ *  2. Team session, email-code login for admins / editors / owners
  *     who don't use GitHub. Lives in its own cookie, validated by the
  *     server middleware, surfaces through GET /api/session.
- *  3. Client session — branded email-code login scoped to one project.
+ *  3. Client session, branded email-code login scoped to one project.
  *     Exposed via GET /api/clients/me because we need the projectId to
  *     route clients away from other projects' URLs.
  *
  * The unified /api/session endpoint covers 1 and 2 (and 3, but without
  * the project scope). /api/clients/me is kept as a secondary probe
  * only to discover the client's projectId when they're authed that
- * way. Hitting both in parallel keeps the component fast — the
+ * way. Hitting both in parallel keeps the component fast, the
  * branded-portal path adds no extra latency for team users.
  */
 
@@ -44,7 +44,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
       setUnified({ status: "authed", clientProjectId: null });
       return;
     }
-    // Neither Better Auth session nor loading — probe the unified
+    // Neither Better Auth session nor loading, probe the unified
     // session endpoint AND the client-scope endpoint in parallel.
     let cancelled = false;
     void (async () => {
@@ -83,7 +83,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  // Client on the wrong project's URL — bounce them back to their own.
+  // Client on the wrong project's URL, bounce them back to their own.
   if (unified.clientProjectId && params.projectId && params.projectId !== unified.clientProjectId) {
     return <Navigate to={`/p/${unified.clientProjectId}`} replace />;
   }

@@ -1,13 +1,14 @@
-import { LogoMark } from "@/components/atoms/LogoMark";
-import { apiJson } from "@/lib/api";
 /**
  * Public legal disclosure ("Impressum") page.
  *
- * Shows whoever is operating this Quillra instance — required by law in
+ * Shows whoever is operating this Quillra instance, required by law in
  * DE/AT for commercial websites, expected as a baseline by most EU hosts,
  * and referenced from the email footer. Completely static, fetches the
  * org info via the unauthenticated /api/instance/organization endpoint.
  */
+
+import { LogoMark } from "@/components/atoms/LogoMark";
+import { apiJson } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -147,7 +148,7 @@ export function ImpressumPage() {
                 <Link to="/" className="underline-offset-2 hover:underline">
                   Quillra
                 </Link>{" "}
-                — a GitHub-native CMS for client-ready websites.
+                , a GitHub-native CMS for client-ready websites.
               </p>
             </section>
           </div>

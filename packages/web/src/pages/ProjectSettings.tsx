@@ -286,7 +286,7 @@ export function ProjectSettingsPage() {
             {t("projectSettings.pageTitle")}
           </Heading>
           <p className="mt-1 text-sm text-neutral-500">
-            {projectQ.data?.name ?? "…"} — {projectQ.data?.githubRepoFullName ?? ""}
+            {projectQ.data?.name ?? "…"}, {projectQ.data?.githubRepoFullName ?? ""}
           </p>
         </div>
 
@@ -397,7 +397,7 @@ export function ProjectSettingsPage() {
                         </div>
                       ) : (
                         <p className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">
-                          {nameVal || "—"}
+                          {nameVal || "-"}
                         </p>
                       )}
                     </div>

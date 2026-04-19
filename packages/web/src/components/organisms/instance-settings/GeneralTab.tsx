@@ -1,12 +1,13 @@
+/**
+ * Organization / Impressum identity, the publicly visible fields.
+ * Mirror of the Setup wizard's "organization" step, but designed for
+ * post-install rotation: one Save button, dirty tracking, loading state.
+ */
+
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
-/**
- * Organization / Impressum identity — the publicly visible fields.
- * Mirror of the Setup wizard's "organization" step, but designed for
- * post-install rotation: one Save button, dirty tracking, loading state.
- */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { StatusResponse } from "./types";

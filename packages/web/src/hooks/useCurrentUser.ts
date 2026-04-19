@@ -1,21 +1,22 @@
-import { apiJson } from "@/lib/api";
-import { authClient } from "@/lib/auth-client";
 /**
  * Unified session hook recognizing every way a user can be signed in:
  *
- *  - "github"  — Better Auth session (GitHub OAuth). Used by the instance
+ *  - "github", Better Auth session (GitHub OAuth). Used by the instance
  *                owner and anyone who voluntarily linked GitHub.
- *  - "team"    — email-code session for admins/editors/translators who
+ *  - "team", email-code session for admins/editors/translators who
  *                don't want a GitHub account. Full dashboard access via
  *                projectMembers rows. From the UI's perspective this is
- *                equivalent to "github" — the only difference is the
+ *                equivalent to "github", the only difference is the
  *                sign-out endpoint.
- *  - "client"  — passwordless email-code session scoped to ONE project.
+ *  - "client", passwordless email-code session scoped to ONE project.
  *                These users never see the dashboard.
  *
  * Callers typically only need `kind === "client"` vs everything else.
  * The helper `isTeamSide(me)` bundles github+team for that exact check.
  */
+
+import { apiJson } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { useEffect, useState } from "react";
 
 export type CurrentUser =
@@ -68,7 +69,7 @@ export function useCurrentUser(): CurrentUser {
     let cancelled = false;
     (async () => {
       // Try team session (also resolves github sessions as a side effect,
-      // but that's fine — if Better Auth said no, /api/session says no too).
+      // but that's fine, if Better Auth said no, /api/session says no too).
       try {
         const r = await apiJson<SessionResponse>("/api/session");
         if (cancelled) return;

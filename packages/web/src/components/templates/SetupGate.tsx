@@ -1,14 +1,15 @@
-import { Spinner } from "@/components/atoms/Spinner";
-import { apiJson } from "@/lib/api";
 /**
  * First-run setup gate. Checks /api/setup/status on mount and, if the
  * instance isn't fully configured, redirects the user to the /setup
  * wizard. The wizard itself is exempt.
  *
  * Keeps a module-level cache of the result so we don't refetch on every
- * navigation — the status only changes after a successful save, and the
+ * navigation, the status only changes after a successful save, and the
  * wizard handles that via its own navigate().
  */
+
+import { Spinner } from "@/components/atoms/Spinner";
+import { apiJson } from "@/lib/api";
 import { type ReactNode, useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 
@@ -17,7 +18,7 @@ type Status = { needsSetup: boolean };
 let cachedStatus: Status | null = null;
 
 /** Invalidate the module-level cache so the next mount refetches /api/setup/status.
- *  Called by the Setup wizard right before the OAuth hand-off — when the user
+ *  Called by the Setup wizard right before the OAuth hand-off, when the user
  *  returns from GitHub the dashboard will recheck status and see the new owner
  *  without an extra redirect through /setup. */
 export function clearSetupGateCache() {
@@ -37,7 +38,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
         cachedStatus = s;
         setStatus(s);
       } catch {
-        // Status endpoint failed — assume configured so we don't trap users
+        // Status endpoint failed, assume configured so we don't trap users
         cachedStatus = { needsSetup: false };
         setStatus(cachedStatus);
       } finally {

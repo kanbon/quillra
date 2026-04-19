@@ -1,6 +1,3 @@
-import { Modal } from "@/components/atoms/Modal";
-import { apiJson } from "@/lib/api";
-import { cn } from "@/lib/cn";
 /**
  * Live preview debug modal.
  *
@@ -12,6 +9,10 @@ import { cn } from "@/lib/cn";
  *
  * Refresh button + auto-refresh every 2s while the logs are visible.
  */
+
+import { Modal } from "@/components/atoms/Modal";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useEffect, useMemo, useState } from "react";
 
 type DebugResponse = {

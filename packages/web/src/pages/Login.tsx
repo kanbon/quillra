@@ -1,18 +1,11 @@
-import { Button } from "@/components/atoms/Button";
-import { Heading } from "@/components/atoms/Heading";
-import { Input } from "@/components/atoms/Input";
-import { LogoMark } from "@/components/atoms/LogoMark";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
-import { cn } from "@/lib/cn";
 /**
  * Single-path sign-in page: passwordless 6-digit email code.
  *
  * Why no GitHub button: anyone could click it and go through the
  * Better Auth signup flow. That either (a) gets blocked by the
- * databaseHook with an opaque error, or (b) — on a fresh install —
- * silently creates a new owner account for the first random visitor.
- * Neither is a good first impression.
+ * databaseHook with an opaque error, or (b) on a fresh install silently
+ * creates a new owner account for the first random visitor. Neither is a
+ * good first impression.
  *
  * First-run bootstrap still works: the team-login endpoint allows
  * ANY email when the user table is empty, so the owner enters their
@@ -20,9 +13,17 @@ import { cn } from "@/lib/cn";
  * becomes owner on verify.
  *
  * Better Auth's GitHub provider stays configured on the backend for a
- * future "link GitHub to my account" feature in personal settings —
- * but it is not exposed as a sign-in surface on this page.
+ * future "link GitHub to my account" feature in personal settings, but it
+ * is not exposed as a sign-in surface on this page.
  */
+
+import { Button } from "@/components/atoms/Button";
+import { Heading } from "@/components/atoms/Heading";
+import { Input } from "@/components/atoms/Input";
+import { LogoMark } from "@/components/atoms/LogoMark";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -41,7 +42,7 @@ export function LoginPage() {
   const [info, setInfo] = useState<string | null>(null);
 
   // Redirect if a session already exists. /api/session is the single
-  // source of truth — it covers Better Auth (github owner), team sessions,
+  // source of truth, it covers Better Auth (github owner), team sessions,
   // and client sessions alike.
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +91,7 @@ export function LoginPage() {
         method: "POST",
         body: JSON.stringify({ email: email.trim(), code: code.trim() }),
       });
-      // Team session cookie is now set — navigate and let the dashboard
+      // Team session cookie is now set, navigate and let the dashboard
       // load via /api/session.
       window.location.href = "/dashboard";
     } catch (e) {

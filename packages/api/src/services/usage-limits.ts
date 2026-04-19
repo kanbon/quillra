@@ -9,7 +9,7 @@
  *   2. "role"   target = project role the user has in *this* project
  *   3. "global" target = ""
  *
- * A row can set just warn_usd OR just hard_usd — the other falls
+ * A row can set just warn_usd OR just hard_usd, the other falls
  * through to the next scope. Built-in defaults at the bottom: warn =
  * $20, hard = null (no cap).
  *
@@ -113,7 +113,7 @@ export async function shouldBlockRun(
     return { blocked: false, limits, spend };
   }
 
-  // Owner exemption — never lock the operator out of their own instance.
+  // Owner exemption, never lock the operator out of their own instance.
   const [u] = await db
     .select({ instanceRole: user.instanceRole })
     .from(user)
@@ -161,7 +161,7 @@ export async function markAlertSent(
     });
     return true;
   } catch {
-    // Conflict — another request already marked it. Treat as already-sent
+    // Conflict, another request already marked it. Treat as already-sent
     // so the caller doesn't double-email on a race.
     return false;
   }
@@ -173,7 +173,7 @@ export function getAlertRecipientEmail(fallback: string | null): string | null {
   return fallback;
 }
 
-/** Look up the organization owner's email — the default recipient when
+/** Look up the organization owner's email, the default recipient when
  *  USAGE_ALERT_EMAIL isn't set. */
 export async function getOwnerEmail(): Promise<string | null> {
   const [owner] = await db
@@ -202,14 +202,14 @@ export async function upsertUsageLimit(
 ): Promise<void> {
   const t = scope === "global" ? "" : target;
   // If both are null AND the row exists, delete it (nothing to inherit from
-  // at this scope — clean up noise).
+  // at this scope, clean up noise).
   if (warnUsd == null && hardUsd == null) {
     await db
       .delete(usageLimits)
       .where(and(eq(usageLimits.scope, scope), eq(usageLimits.target, t)));
     return;
   }
-  // Upsert — sqlite's ON CONFLICT on the composite primary key.
+  // Upsert, sqlite's ON CONFLICT on the composite primary key.
   rawSqlite
     .prepare(
       `INSERT INTO usage_limits (scope, target, warn_usd, hard_usd, updated_at)

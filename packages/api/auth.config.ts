@@ -1,5 +1,5 @@
 /**
- * Used by `npx @better-auth/cli generate` only — not imported at runtime.
+ * Used by `npx @better-auth/cli generate` only, not imported at runtime.
  */
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";

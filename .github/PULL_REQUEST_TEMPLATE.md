@@ -18,7 +18,7 @@
 ## Implementation notes
 
 <!--
-  Anything reviewers should know about the approach — trade-offs, alternatives you
+  Anything reviewers should know about the approach, trade-offs, alternatives you
   considered, tricky spots. Skip if it's obvious from the diff.
 -->
 

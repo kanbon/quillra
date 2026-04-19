@@ -180,7 +180,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     }));
 
     onSend(trimmed, attachments.length > 0 ? attachments : undefined);
-    // Don't revoke object URLs — the user message bubble still references them
+    // Don't revoke object URLs, the user message bubble still references them
     setStaged([]);
     setText("");
   }, [text, staged, onSend]);

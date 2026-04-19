@@ -13,7 +13,7 @@ type Props = {
   busy: boolean;
   /** Send a user message on behalf of an inline action (Continue button
    *  or an ask-option click). When undefined, those buttons render but
-   *  become no-ops — safe fallback for any mount that predates the wire. */
+   *  become no-ops, safe fallback for any mount that predates the wire. */
   onSend?: (text: string) => void;
   /** Called when the user clicks "Other" on an ask card. Parent dismisses
    *  the card (via chat-store `pickAskOther`) and focuses the composer. */
@@ -21,7 +21,7 @@ type Props = {
 };
 
 /**
- * Thinking bubble — much quieter than the old card. No borders, just a
+ * Thinking bubble, much quieter than the old card. No borders, just a
  * semibold darker header you can click to expand. While streaming the
  * bubble stays open so the thought scrolls by live; once it finishes
  * it auto-collapses after a short grace period (users can still click
@@ -40,7 +40,7 @@ function ThinkingCard({
   const startRef = useRef(Date.now());
   const [expanded, setExpanded] = useState(true);
   // Remember whether the user manually clicked the row after the thought
-  // finished — if they did, we respect that choice and never auto-collapse
+  // finished, if they did, we respect that choice and never auto-collapse
   // (or re-expand) behind their back.
   const [userToggled, setUserToggled] = useState(false);
 
@@ -146,7 +146,7 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
       {grouped.length === 0 && !busy && (
         <div className="flex flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-2.5 text-center">
-            {/* Lucide 'sparkles' icon, no container box — just the glyph */}
+            {/* Lucide 'sparkles' icon, no container box, just the glyph */}
             <svg
               className="h-6 w-6 text-neutral-300"
               viewBox="0 0 24 24"
@@ -295,7 +295,7 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
                 // the button keeps the reveal active.
                 <div className="group relative max-w-[min(100%,42rem)]">
                   <CopyMessageButton text={entry.text} />
-                  <ChatBubble role="user">{entry.text}</ChatBubble>
+                  <ChatBubble speaker="user">{entry.text}</ChatBubble>
                 </div>
               )}
             </div>
@@ -304,7 +304,7 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
         if (entry.kind === "assistant") {
           return (
             <div key={entry.id} className="animate-[fadeIn_0.2s_ease-out]">
-              <ChatBubble role="assistant" streaming={entry.streaming}>
+              <ChatBubble speaker="assistant" streaming={entry.streaming}>
                 {entry.text}
               </ChatBubble>
             </div>

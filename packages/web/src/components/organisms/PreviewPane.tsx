@@ -86,7 +86,7 @@ export function PreviewPane({
             <Heading as="h3" className="text-[15px] font-semibold tracking-tight text-neutral-900">
               {t("preview.title")}
             </Heading>
-            {engineLabel && engineLabel !== "—" ? (
+            {engineLabel && engineLabel !== "-" ? (
               <p className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.12em] text-neutral-400">
                 {engineLabel}
               </p>

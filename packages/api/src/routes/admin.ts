@@ -100,7 +100,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     });
 
     // Fire-and-forget invite email. The invited user doesn't need the
-    // token to accept — the email-code login flow looks up the email
+    // token to accept, the email-code login flow looks up the email
     // against instanceInvites automatically. Email is purely a nudge.
     let emailed = false;
     if (isMailerEnabled()) {
@@ -120,7 +120,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
           to: parsed.data.email,
           subject: `You're invited to ${org.instanceName}`,
           html,
-          text: `${r.user.name ?? r.user.email ?? "Someone"} invited you to ${org.instanceName}. Sign in at ${loginUrl} with your email — no GitHub account required.`,
+          text: `${r.user.name ?? r.user.email ?? "Someone"} invited you to ${org.instanceName}. Sign in at ${loginUrl} with your email, no GitHub account required.`,
           headers: {
             "List-Unsubscribe": `<${base}/login>, <mailto:noreply@quillra.com?subject=Unsubscribe>`,
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -168,8 +168,8 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
   })
   /**
    * Owner-only: send a test email to the SIGNED-IN owner's own email
-   * address. The recipient is taken from the session — never from the
-   * request body — so this can't be used as an open spam relay.
+   * address. The recipient is taken from the session, never from the
+   * request body, so this can't be used as an open spam relay.
    * Useful for verifying SMTP / Resend config immediately after saving.
    */
   .post("/test-email", async (c) => {
@@ -235,7 +235,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
    *   - perModel: one row per distinct model pulled from model_usage_json
    *
    * Uses raw SQL because the per-model aggregation needs sqlite's
-   * json_each to flatten the JSON blob — drizzle doesn't have a
+   * json_each to flatten the JSON blob, drizzle doesn't have a
    * clean ergonomic wrapper for that.
    */
   .get("/usage", async (c) => {
@@ -439,7 +439,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
 
   /**
    * Bulk-replace the usage-limit configuration. Accepts a flat list of
-   * rows and upserts them one by one — a row with both warn and hard
+   * rows and upserts them one by one, a row with both warn and hard
    * null is treated as a delete. Also updates the alert-email instance
    * setting in the same call so the UI can save everything with a
    * single request.
@@ -473,7 +473,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
   })
 
   /**
-   * Per-user preferences — currently just the "send me a monthly usage
+   * Per-user preferences, currently just the "send me a monthly usage
    * report" opt-in, but the endpoint is shaped so additional user-level
    * toggles can land here without another route.
    */

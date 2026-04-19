@@ -1,7 +1,7 @@
 /**
  * Translates Claude Agent SDK messages into the WebSocket event shape
  * the Quillra frontend expects. Isolated here because the mapping is
- * pure — no I/O, no state — which makes it easy to test and easy for
+ * pure, no I/O, no state, which makes it easy to test and easy for
  * contributors to grok without reading the orchestration code.
  *
  * Emitted event types (see chat-store.ts for the full shape):
@@ -44,7 +44,7 @@ function extractFromStreamEvent(event: unknown): StreamExtract {
 
 /** Extract any tool_use content blocks from an assistant message and
  *  emit a humanized tool_call event per block. Never leaks tool
- *  names, file paths, or commands — the humanizer is the chokepoint.
+ *  names, file paths, or commands, the humanizer is the chokepoint.
  */
 function tooCallEventsFromAssistantMessage(
   msg: Extract<SDKMessage, { type: "assistant" }>,

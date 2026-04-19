@@ -1,22 +1,23 @@
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 /**
  * Full-bleed panel that takes over the preview column (and the mobile
  * preview sheet) while the migration agent is rewriting the project
- * to Astro. Non-interactive by design — the user is locked out of
+ * to Astro. Non-interactive by design, the user is locked out of
  * intervening while the agent works.
  *
  * One exception: a subtle "Cancel" link at the bottom. The
  * migration_target flag can get stuck if the server crashes
  * mid-stream, the agent hits an unrecoverable error, or a container
  * restart drops the WebSocket before `done` fires. This link is the
- * frontend-reachable escape hatch — clicking it clears the flag
+ * frontend-reachable escape hatch, clicking it clears the flag
  * (and resets the workspace to origin) so the UI unlocks and the
  * user can either retry or use the project normally.
  *
  * Brand treatment: Astro orange (#FF5D01) gradient with soft radial
  * glows and a pulsing presence dot on the logo tile.
  */
+
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 import { useState } from "react";
 
 type Props = {
@@ -44,7 +45,7 @@ export function MigrationBanner({ onCancel }: Props) {
       setCancelling(false);
     }
     // On success the parent unmounts the banner, so no need to flip
-    // the spinner off — the component will be gone.
+    // the spinner off, the component will be gone.
   }
 
   return (
@@ -82,7 +83,7 @@ export function MigrationBanner({ onCancel }: Props) {
           {t("migration.banner.composerDisabled")}
         </div>
 
-        {/* Subtle escape hatch — always visible so a stuck migration
+        {/* Subtle escape hatch, always visible so a stuck migration
             is recoverable without SQL. Spelled out in small grey
             text so it doesn't dominate the happy-path UI. */}
         {onCancel && (

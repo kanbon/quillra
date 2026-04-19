@@ -4,7 +4,7 @@
  * repo, fetching a repo's package.json to detect the framework, etc.).
  *
  * Authentication is always via a GitHub App installation token. There
- * is no personal-access-token fallback — if the App isn't configured
+ * is no personal-access-token fallback, if the App isn't configured
  * or isn't installed on the target repo, calls throw a clear error and
  * the UI surfaces "install the Quillra GitHub App on this repo".
  */
@@ -45,7 +45,7 @@ export type GithubRepoListItem = {
 /**
  * Every repo the Quillra GitHub App has been granted access to, across
  * all installations. This is exactly the set of repos the owner can
- * create a Quillra project for — the App-install step is where they
+ * create a Quillra project for, the App-install step is where they
  * opt in repo by repo.
  */
 export async function listAccessibleRepos(): Promise<GithubRepoListItem[]> {
@@ -149,7 +149,7 @@ export async function fetchRepoManifest(
           : file.content;
       packageJson = JSON.parse(raw);
     } catch {
-      /* malformed package.json — leave null, detector falls back to root files */
+      /* malformed package.json, leave null, detector falls back to root files */
     }
   }
 

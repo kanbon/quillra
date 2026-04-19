@@ -4,7 +4,7 @@
  *
  * Precedence for reads: DB (decrypted on the fly) → env var → default.
  * Writes go straight to the DB, encrypted if the key is a secret. Env
- * vars always win when set — that gives operators a choice between
+ * vars always win when set, that gives operators a choice between
  * "manage everything in the browser UI" and "manage everything via env
  * vars at container start time".
  *
@@ -20,11 +20,11 @@ type Row = { value: string | null };
 /** Keys the wizard is allowed to set. Anything else is rejected. */
 export const SETTABLE_KEYS = [
   "ANTHROPIC_API_KEY",
-  // GitHub OAuth app — only for owner wizard sign-in, never for git
+  // GitHub OAuth app, only for owner wizard sign-in, never for git
   // operations. `GITHUB_CLIENT_SECRET` is a secret.
   "GITHUB_CLIENT_ID",
   "GITHUB_CLIENT_SECRET",
-  // GitHub App — the only supported credential for repo push operations.
+  // GitHub App, the only supported credential for repo push operations.
   // No personal access tokens, no human credentials.
   "GITHUB_APP_ID",
   "GITHUB_APP_SLUG",
@@ -42,7 +42,7 @@ export const SETTABLE_KEYS = [
   "SMTP_USER",
   "SMTP_PASSWORD",
   "SMTP_SECURE",
-  // Instance identity / Impressum — publicly visible (email footer, /impressum)
+  // Instance identity / Impressum, publicly visible (email footer, /impressum)
   "INSTANCE_NAME",
   "INSTANCE_OPERATOR_NAME",
   "INSTANCE_OPERATOR_COMPANY",
@@ -55,7 +55,7 @@ export const SETTABLE_KEYS = [
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
-/** Keys considered secret — encrypted at rest, masked when returned to
+/** Keys considered secret, encrypted at rest, masked when returned to
  *  the admin UI. */
 export const SECRET_KEYS = new Set<SettableKey>([
   "ANTHROPIC_API_KEY",
@@ -70,7 +70,7 @@ export const SECRET_KEYS = new Set<SettableKey>([
 /**
  * One-shot re-encryption pass at module init. Finds any row whose key is
  * a secret and whose value isn't already in the v1 envelope, and encrypts
- * it in place. Safe to run on every boot — it's a no-op after the first
+ * it in place. Safe to run on every boot, it's a no-op after the first
  * successful pass.
  *
  * Wrapped in a try so a fresh install with no instance_settings table
@@ -94,7 +94,7 @@ export const SECRET_KEYS = new Set<SettableKey>([
       }
     }
   } catch {
-    // Fresh install — instance_settings table doesn't exist yet. Nothing to migrate.
+    // Fresh install, instance_settings table doesn't exist yet. Nothing to migrate.
   }
 })();
 
@@ -157,7 +157,7 @@ export function setInstanceSetting(key: SettableKey, value: string | null): void
 }
 
 /**
- * Public operator / Impressum info — set via the wizard, rendered in email
+ * Public operator / Impressum info, set via the wizard, rendered in email
  * footers, the branded client login page, and the /impressum route. Never
  * secret.
  */
@@ -190,7 +190,7 @@ export function getOrganizationInfo(): OrganizationInfo {
 export function getSetupStatus(): {
   needsSetup: boolean;
   missing: string[];
-  /** True when no user rows exist yet — the wizard must drive the
+  /** True when no user rows exist yet, the wizard must drive the
    *  owner through the mandatory GitHub OAuth step. */
   needsOwner: boolean;
   values: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }>;
@@ -216,7 +216,7 @@ export function getSetupStatus(): {
   // Core runtime values that gate the wizard
   const missing: string[] = [];
   if (!out.ANTHROPIC_API_KEY.set) missing.push("ANTHROPIC_API_KEY");
-  // GitHub App is mandatory — no PAT fallback.
+  // GitHub App is mandatory, no PAT fallback.
   if (!out.GITHUB_APP_ID.set || !out.GITHUB_APP_PRIVATE_KEY.set) {
     missing.push("GITHUB_APP");
   }

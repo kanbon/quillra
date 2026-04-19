@@ -2,7 +2,7 @@
  * Role-based tool permissions for the Claude Agent SDK, factored out
  * of agent.ts so the per-role allowlist is the only thing in this file.
  * The SDK's `canUseTool` option calls the returned callback for every
- * tool use — we decide allow/deny based on (project role, migration
+ * tool use, we decide allow/deny based on (project role, migration
  * mode, tool name, tool input).
  *
  * Migration mode short-circuits to "allow everything" because the
@@ -11,16 +11,16 @@
  * composer while it runs so there's no interactive risk.
  *
  * Roles (defined in db/app-schema.ts):
- *  - admin   — full control of the project workspace
- *  - editor  — read everything; write non-src/config files; run
+ *  - admin, full control of the project workspace
+ *  - editor, read everything; write non-src/config files; run
  *              git/npm/yarn/pnpm/npx/node (no `git push`); full access
  *              to the diagnostics MCP server
- *  - client  — non-technical end user: read everything; write only
+ *  - client, non-technical end user: read everything; write only
  *              to content/ and assets/ with content/image extensions;
  *              no shell, no MCP tools
  *
  * Anything else is denied. That includes any tool the SDK adds in
- * future that we haven't explicitly thought about — fail closed.
+ * future that we haven't explicitly thought about, fail closed.
  */
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
@@ -63,7 +63,7 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
     }
 
     if (role === "admin") {
-      // Admins have full control of their own project workspace — every
+      // Admins have full control of their own project workspace, every
       // tool, every command, no paternalistic blocks. The workspace is
       // isolated (per-project clone on disk, git-backed so nothing is
       // truly unrecoverable) and the admin asked for Claude Code to

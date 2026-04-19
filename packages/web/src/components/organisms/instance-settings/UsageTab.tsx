@@ -1,19 +1,20 @@
-import { Spinner } from "@/components/atoms/Spinner";
-import { UsageLimitsPanel } from "@/components/organisms/instance-settings/UsageLimitsPanel";
-import { UserUsageDetail } from "@/components/organisms/instance-settings/UserUsageDetail";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
-import { cn } from "@/lib/cn";
 /**
  * Organization-level token usage + cost breakdown. Reads
  * `/api/admin/usage` and renders three tables: per-project, per-user,
  * per-model. A small range selector pivots the window between the
  * last 7 / 30 / 90 days and all time.
  *
- * Intentionally spreadsheet-ish — the goal is "who cost what, per
+ * Intentionally spreadsheet-ish, the goal is "who cost what, per
  * project and per user, exact numbers, no design flourishes that get
  * in the way of scanning the table". Finance-style.
  */
+
+import { Spinner } from "@/components/atoms/Spinner";
+import { UsageLimitsPanel } from "@/components/organisms/instance-settings/UsageLimitsPanel";
+import { UserUsageDetail } from "@/components/organisms/instance-settings/UserUsageDetail";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Totals = {
@@ -69,7 +70,7 @@ function formatUsd(n: number): string {
   // Human-scale currency: show at least 2 fractional digits for small
   // values so sub-cent runs don't disappear into "$0.00". Small costs
   // are still useful as a relative comparison across projects.
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "-";
   if (n >= 100) return `$${n.toFixed(0)}`;
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n >= 0.01) return `$${n.toFixed(3)}`;
@@ -245,7 +246,7 @@ export function UsageTab() {
             />
           </Section>
 
-          {/* Per-user table — each row drills into the user detail modal.
+          {/* Per-user table, each row drills into the user detail modal.
               Reports toggle lives in its own column; clicks are stopped so
               toggling doesn't also open the drill-down. */}
           <Section title={t("usage.sectionPerUser")}>
@@ -348,7 +349,7 @@ export function UsageTab() {
                                 />
                               </button>
                             ) : (
-                              <span className="text-neutral-300">—</span>
+                              <span className="text-neutral-300">-</span>
                             )}
                           </td>
                         </tr>

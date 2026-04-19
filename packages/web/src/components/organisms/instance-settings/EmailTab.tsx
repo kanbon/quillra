@@ -1,11 +1,5 @@
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
-import { cn } from "@/lib/cn";
 /**
- * Email delivery configuration — provider radio (none / Resend / SMTP)
+ * Email delivery configuration, provider radio (none / Resend / SMTP)
  * plus either a Resend API key or a full SMTP form, depending on the
  * selected provider.
  *
@@ -20,9 +14,16 @@ import { cn } from "@/lib/cn";
  * switching from one real provider to the other clears the opposite-
  * provider secrets.
  *
- * Test-email button sends to the signed-in owner only — never a body-
+ * Test-email button sends to the signed-in owner only, never a body-
  * supplied address, so it can't be used as a spam relay.
  */
+
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useEffect, useRef, useState } from "react";
 import { type StatusResponse, getStatus } from "./types";
 
@@ -122,7 +123,7 @@ export function EmailTab({ status, onSaved }: Props) {
         v.RESEND_API_KEY = null;
       }
     }
-    // provider === "none" — deliberately do NOT wipe credentials.
+    // provider === "none", deliberately do NOT wipe credentials.
     return v;
   }
 

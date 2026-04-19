@@ -1,18 +1,19 @@
-import { renderBrandedEmail } from "./email-template.js";
-import { getOrganizationInfo } from "./instance-settings.js";
 /**
  * Rendering + dispatch for the two alert emails the usage-limits
  * system can fire: a soft "warn" at first threshold crossing, and a
  * hard "cap" at first over-the-cap crossing. Both land in the operator's
- * inbox (or wherever USAGE_ALERT_EMAIL points), not the end user's —
- * the user finds out they're over via the friendly in-chat error.
+ * inbox (or wherever USAGE_ALERT_EMAIL points), not the end user's: the
+ * user finds out they're over via the friendly in-chat error.
  */
+
+import { renderBrandedEmail } from "./email-template.js";
+import { getOrganizationInfo } from "./instance-settings.js";
 import { isMailerEnabled, sendEmail } from "./mailer.js";
 
 type Who = {
   email: string;
   name: string;
-  /** Which rule hit — "global default", role name, or "your override". */
+  /** Which rule hit, "global default", role name, or "your override". */
   scopeDescription: string;
 };
 
@@ -31,7 +32,7 @@ export async function sendWarnAlert(opts: {
   monthLabel: string;
 }): Promise<void> {
   if (!isMailerEnabled()) {
-    console.warn("[usage-alerts] mailer disabled — skipping warn email for", opts.who.email);
+    console.warn("[usage-alerts] mailer disabled, skipping warn email for", opts.who.email);
     return;
   }
   const org = getOrganizationInfo();
@@ -43,8 +44,8 @@ export async function sendWarnAlert(opts: {
       paragraphs: [
         `${opts.who.name} (${opts.who.email}) has just crossed the ${formatUsd(opts.warnUsd)} warning threshold for ${opts.monthLabel}. Month-to-date spend is now ${formatUsd(opts.spendUsd)}.`,
         opts.hardUsd != null
-          ? `The hard cap for this user is ${formatUsd(opts.hardUsd)} — chat will be blocked automatically when they reach it.`
-          : `No hard cap is set — they can keep running indefinitely. Consider adding one in Organization Settings if you'd like an automatic cut-off.`,
+          ? `The hard cap for this user is ${formatUsd(opts.hardUsd)}, chat will be blocked automatically when they reach it.`
+          : `No hard cap is set, they can keep running indefinitely. Consider adding one in Organization Settings if you'd like an automatic cut-off.`,
         `This rule came from: ${opts.who.scopeDescription}.`,
       ],
       table: {
@@ -56,7 +57,7 @@ export async function sendWarnAlert(opts: {
           ["Period", opts.monthLabel],
         ],
       },
-      signature: "— Quillra",
+      signature: "- Quillra",
     },
   });
   await sendEmail({
@@ -75,7 +76,7 @@ export async function sendHardCapAlert(opts: {
   monthLabel: string;
 }): Promise<void> {
   if (!isMailerEnabled()) {
-    console.warn("[usage-alerts] mailer disabled — skipping cap email for", opts.who.email);
+    console.warn("[usage-alerts] mailer disabled, skipping cap email for", opts.who.email);
     return;
   }
   const org = getOrganizationInfo();
@@ -97,7 +98,7 @@ export async function sendHardCapAlert(opts: {
           ["Period", opts.monthLabel],
         ],
       },
-      signature: "— Quillra",
+      signature: "- Quillra",
     },
   });
   await sendEmail({

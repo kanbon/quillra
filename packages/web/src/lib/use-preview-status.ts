@@ -24,7 +24,7 @@ export type PreviewStatus = {
   stageMessage: string | null;
   childProcess: ChildProcess;
   upstreamProbe: UpstreamProbe;
-  /** Last 20 stderr log lines — enough context for an error overlay
+  /** Last 20 stderr log lines, enough context for an error overlay
    *  or a chat hand-off prompt without dumping the full log. */
   recentErrors: string[];
 };
@@ -41,7 +41,7 @@ type RawResponse = {
  * mounted. Returns null until the first response arrives, then updates
  * in place.
  *
- * Intentionally lightweight — the existing `PreviewDebugModal` polls at
+ * Intentionally lightweight, the existing `PreviewDebugModal` polls at
  * 2s with a richer shape; this hook is the always-on background pulse
  * that drives the error overlay in `PreviewPane`.
  */
@@ -75,7 +75,7 @@ export function usePreviewStatus(
           recentErrors,
         });
       } catch {
-        /* non-fatal — keep the previous status */
+        /* non-fatal, keep the previous status */
       } finally {
         if (!cancelled) timer = setTimeout(fetchOnce, 5000);
       }

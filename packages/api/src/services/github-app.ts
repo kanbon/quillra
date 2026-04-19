@@ -1,5 +1,5 @@
 /**
- * GitHub App integration — replaces the legacy personal-access-token
+ * GitHub App integration, replaces the legacy personal-access-token
  * flow for all server-side git operations (clone, push, and REST API
  * calls).
  *
@@ -63,9 +63,9 @@ type InstallationTokenResponse = {
   expires_at: string;
 };
 
-/** Installation token cache — tokens are valid for 1 hour, we keep each
+/** Installation token cache, tokens are valid for 1 hour, we keep each
  *  one for 50 minutes and refresh early. Per-process, not shared across
- *  workers, intentionally — shared caches are a multi-tenant concern. */
+ *  workers, intentionally, shared caches are a multi-tenant concern. */
 const installationTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 export function isGithubAppConfigured(): boolean {
@@ -93,7 +93,7 @@ export function getGithubAppCredentials(): GithubAppCreds | null {
  * Mint a short-lived RS256-signed JWT that identifies Quillra as the
  * GitHub App. Max lifetime per GitHub's docs is 10 minutes; we use 9.
  * The `iat` is backdated by 60 seconds to absorb clock skew between
- * the container and GitHub's servers — without this, JWTs are rejected
+ * the container and GitHub's servers, without this, JWTs are rejected
  * as "too far in the future" on hosts with loose NTP.
  */
 export function mintAppJwt(appId: string, privateKeyPem: string): string {
@@ -211,7 +211,7 @@ export async function listInstallations(): Promise<InstallationsResult> {
     // some other 404 could mean a different problem (e.g. revoked auth).
     if (msg.includes("GitHub App API 404") && msg.toLowerCase().includes("integration not found")) {
       console.warn(
-        "[github-app] remote App is gone (404 Integration not found) — clearing stored credentials",
+        "[github-app] remote App is gone (404 Integration not found), clearing stored credentials",
       );
       clearGithubAppCredentials();
       return { installations: [], cleared: "app-deleted" };
@@ -223,7 +223,7 @@ export async function listInstallations(): Promise<InstallationsResult> {
 /**
  * List every repository the App is installed on, across all installations.
  * Replaces `listAccessibleRepos()` from github-rest.ts when the App is
- * configured — the PAT version only knows about repos the owner's
+ * configured, the PAT version only knows about repos the owner's
  * personal token can see, while the App version only knows about repos
  * the App is installed on. Both are "what can I actually push to".
  */
@@ -265,7 +265,7 @@ export async function listRepositoriesAcrossInstallations(): Promise<
         if (page > 50) break;
       }
     } catch {
-      /* skip failing installations — their repos just won't show up */
+      /* skip failing installations, their repos just won't show up */
     }
   }
   // Dedupe by full_name (same repo can show up twice if multiple
@@ -321,7 +321,7 @@ export async function exchangeManifestCode(code: string): Promise<{
     html_url: string;
   };
 
-  // Persist every field — the secret ones go through the encryption layer
+  // Persist every field, the secret ones go through the encryption layer
   // automatically via SECRET_KEYS in instance-settings.ts.
   setInstanceSetting("GITHUB_APP_ID", String(data.id));
   setInstanceSetting("GITHUB_APP_SLUG", data.slug);

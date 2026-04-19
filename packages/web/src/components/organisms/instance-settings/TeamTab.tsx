@@ -1,13 +1,14 @@
+/**
+ * Team management tab: list of instance members, pending invites, and
+ * the invite form. Moved wholesale from the old monolithic InstanceSettings
+ * page, behaviour is identical, only the wrapping chrome changed.
+ */
+
 import { Button } from "@/components/atoms/Button";
 import { Heading } from "@/components/atoms/Heading";
 import { Input } from "@/components/atoms/Input";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
-/**
- * Team management tab: list of instance members, pending invites, and
- * the invite form. Moved wholesale from the old monolithic InstanceSettings
- * page — behaviour is identical, only the wrapping chrome changed.
- */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";

@@ -90,7 +90,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
       defaultBranch: z.string().min(1).default("main"),
       previewDevCommand: z.string().max(2000).nullable().optional(),
-      // Optional flag — set to "astro" if the user ticked the
+      // Optional flag, set to "astro" if the user ticked the
       // "Convert to Astro" card in ConnectProjectModal. Kicks off a
       // migration agent run on project open.
       migrationTarget: z.enum(["astro"]).nullable().optional(),
@@ -235,7 +235,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       const hasChanges = dirty.length > 0 || unpushed > 0;
 
       // Generate a plain-English summary using Claude. This is the
-      // expensive call (an API round-trip and tokens) — only run it when
+      // expensive call (an API round-trip and tokens), only run it when
       // the caller explicitly asks via ?summary=1, so the header's
       // changes-pill polling can hit this endpoint cheaply.
       const wantSummary = c.req.query("summary") === "1";
@@ -282,7 +282,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
    * Technical change overview. Returns every dirty + untracked file
    * with its full unified git diff, plus the list of local commits
    * that aren't on the remote default branch yet. Used by the
-   * "changes pill" in ProjectHeader — the pill itself polls the
+   * "changes pill" in ProjectHeader, the pill itself polls the
    * lightweight /publish-status endpoint, but when the user clicks
    * it, THIS endpoint supplies the per-file diff bodies shown in
    * the ChangesModal.
@@ -397,10 +397,9 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
    * Runs `git fetch origin` → `git reset --hard origin/<branch>` →
    * `git clean -fd`. The last step removes untracked files, but
    * `git clean` by default respects both `.gitignore` and
-   * `.git/info/exclude`, so anything in `.quillra-temp/` survives —
-   * we register that folder with the local exclude in
-   * ensureQuillraTempIgnored() precisely so that chat scratch assets
-   * don't get nuked by a discard.
+   * `.git/info/exclude`, so anything in `.quillra-temp/` survives. We
+   * register that folder with the local exclude in ensureQuillraTempIgnored()
+   * precisely so that chat scratch assets don't get nuked by a discard.
    *
    * Permission: admin or editor. Clients and translators can't
    * discard published work they didn't author.
@@ -419,7 +418,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
       const g = simpleGit(repoPath);
       // Make sure we know the latest state of the remote before resetting
-      // onto it. Failure here is non-fatal — we can still hard-reset to
+      // onto it. Failure here is non-fatal, we can still hard-reset to
       // whatever HEAD's upstream was when we cloned.
       await g.fetch("origin", p.defaultBranch).catch(() => undefined);
       const branches = await g.branch(["-r"]);
@@ -430,7 +429,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       }
       // Remove untracked files the reset didn't touch. `-f` (force) is
       // required by git by default, `-d` recurses into untracked
-      // directories. We deliberately do NOT pass `-x` — that would
+      // directories. We deliberately do NOT pass `-x`, that would
       // also wipe ignored files, including `.quillra-temp/` contents.
       await g.clean("fd");
       return c.json({ ok: true });
@@ -441,7 +440,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
   /**
    * Manually clear the `migration_target` flag on a project. Used by
    * the "Cancel migration" link inside the MigrationBanner when a
-   * migration run got stuck — server restart mid-stream, agent error
+   * migration run got stuck, server restart mid-stream, agent error
    * that never reached `done`, OOM kill, etc. Normally the WS handler
    * clears the flag itself when the SDK emits a clean `done`, but any
    * abnormal termination leaves the row flagged and the UI locked.
@@ -472,7 +471,7 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
       // Best-effort: roll the workspace back to origin so the next
       // chat message doesn't see half-written Astro files mixed with
       // the old framework. If the workspace isn't cloned yet or the
-      // remote branch doesn't exist, that's fine — the agent will
+      // remote branch doesn't exist, that's fine, the agent will
       // start fresh next time anyway.
       try {
         const repoPath = projectRepoPath(projectId);
@@ -622,7 +621,7 @@ Output ONLY the commit message, nothing else.`,
   })
   /**
    * Git commit history for the project. Shows version history in the UI
-   * sourced directly from the cloned repo — no separate audit log needed.
+   * sourced directly from the cloned repo, no separate audit log needed.
    */
   .get("/:id/commits", async (c) => {
     const r = await requireUser(c);
@@ -692,7 +691,7 @@ Output ONLY the commit message, nothing else.`,
     if (!p) return c.json({ error: "Not found" }, 404);
     const port = previewPortForProject(projectId);
     const url = getPreviewUrl(projectId, port);
-    let previewLabel = "—";
+    let previewLabel = "-";
     const repo = projectRepoPath(projectId);
     if (fs.existsSync(path.join(repo, "package.json"))) {
       previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
@@ -702,7 +701,7 @@ Output ONLY the commit message, nothing else.`,
   /**
    * Deep debug snapshot for the live-preview pipeline. Used by the Debug
    * modal in the editor to diagnose why a preview is failing. Collects
-   * everything we know locally — no external calls — so it never adds
+   * everything we know locally, no external calls, so it never adds
    * latency or leaks data.
    */
   .get("/:id/preview-debug", async (c) => {
@@ -755,7 +754,7 @@ Output ONLY the commit message, nothing else.`,
     const subdomainId = getProjectSubdomainId(projectId);
     const subdomainHost = process.env.PREVIEW_DOMAIN;
 
-    // Probe the upstream dev server — short timeout so the modal is snappy
+    // Probe the upstream dev server, short timeout so the modal is snappy
     type ProbeResult = { ok: boolean; status?: number; contentType?: string; error?: string };
     let probe: ProbeResult = { ok: false };
     try {
@@ -854,7 +853,7 @@ Output ONLY the commit message, nothing else.`,
 
     // Enrich with the creator's name/email so the UI can show who wrote
     // each chat without a second round-trip. Only do the join for non-
-    // client roles — clients already know it's all themselves.
+    // client roles, clients already know it's all themselves.
     type Author = { id: string; name: string; email: string; image: string | null };
     const authors = new Map<string, Author>();
     if (m.role !== "client") {
@@ -924,7 +923,7 @@ Output ONLY the commit message, nothing else.`,
    * Running cost total for a single conversation. Used to seed the
    * "this chat" counter on the cost checkpoint card so reloads don't
    * reset it to zero. Sums the `cost_usd` column of agent_runs for the
-   * given conversation only — same CAST pattern as the Usage tab
+   * given conversation only, same CAST pattern as the Usage tab
    * aggregation.
    */
   .get("/:id/conversations/:convId/cost-total", async (c) => {
@@ -934,7 +933,7 @@ Output ONLY the commit message, nothing else.`,
     const convId = c.req.param("convId");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
-    // Client-role members only see their own conversation totals — but
+    // Client-role members only see their own conversation totals, but
     // the agent_runs rows are always tied to the conversation that
     // produced them, so scoping by convId is sufficient as long as
     // the conversation itself belongs to the project.
@@ -1026,7 +1025,7 @@ Output ONLY the commit message, nothing else.`,
     // ignored via .git/info/exclude so files never show up in a commit
     // unless the agent explicitly promotes them to a real asset path
     // (public/, src/content/, etc.). This solves the "reference-only
-    // screenshot ends up pushed to GitHub" problem — the agent decides
+    // screenshot ends up pushed to GitHub" problem, the agent decides
     // per-file whether the attachment is a real asset for the site or
     // just context for the conversation.
     ensureQuillraTempIgnored(repoPath);
@@ -1080,7 +1079,7 @@ Output ONLY the commit message, nothing else.`,
       if (isImage) {
         // We still normalize heavy uploads (resize + pick an efficient
         // format) so the file is agent-friendly. The destination is
-        // .quillra-temp/ regardless — the agent decides later whether
+        // .quillra-temp/ regardless, the agent decides later whether
         // to move it into a real asset path.
         const stem = safeStem(file.name, "image");
         let outBuf: Buffer;

@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Quillra is a community of builders — contributors, reviewers, issue reporters, maintainers — and we all want working on it to feel safe and productive.
+Quillra is a community of builders, contributors, reviewers, issue reporters, maintainers, and we all want working on it to feel safe and productive.
 
 ## The short version
 
@@ -16,9 +16,9 @@ If you wouldn't say it in a professional Slack at a company you respect, don't s
 
 ## The long version
 
-We follow the **[Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)** — the community standard adopted by thousands of projects. The full text at that link describes expected behaviour, behaviour that is unacceptable, enforcement responsibilities, and the scope of this Code of Conduct.
+We follow the **[Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)**: the community standard adopted by thousands of projects. The full text at that link describes expected behaviour, behaviour that is unacceptable, enforcement responsibilities, and the scope of this Code of Conduct.
 
-That document is the authoritative reference for what is and isn't acceptable in our community spaces — GitHub issues, pull requests, discussions, code reviews, commit messages, and anywhere else Quillra is being discussed publicly.
+That document is the authoritative reference for what is and isn't acceptable in our community spaces, GitHub issues, pull requests, discussions, code reviews, commit messages, and anywhere else Quillra is being discussed publicly.
 
 ## Reporting
 

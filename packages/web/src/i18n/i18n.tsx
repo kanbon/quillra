@@ -101,7 +101,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    // Persist on the server (best-effort — UI already updated)
+    // Persist on the server (best-effort, UI already updated)
     try {
       await fetch("/api/session/language", {
         method: "PATCH",

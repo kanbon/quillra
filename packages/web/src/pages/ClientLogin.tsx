@@ -2,7 +2,7 @@
  * Branded client login page (/c/:projectId).
  *
  * Shown to passwordless invitees who got an invite email. The page renders
- * the project's own name and logo — NOT Quillra's branding — so the
+ * the project's own name and logo, NOT Quillra's branding, so the
  * experience feels like a small dedicated portal.
  *
  * Two-step flow:
@@ -73,7 +73,7 @@ export function ClientLoginPage() {
         const me = await apiJson<{ user: unknown; projectId: string }>("/api/clients/me");
         if (me.projectId === projectId) nav(`/p/${projectId}`, { replace: true });
       } catch {
-        /* not signed in — stay on this page */
+        /* not signed in, stay on this page */
       }
     })();
   }, [projectId, nav]);

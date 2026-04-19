@@ -1,6 +1,6 @@
 /**
  * In-memory project presence tracking. Stores "who's currently looking at
- * project X" with a short TTL. Intentionally not persisted — on restart the
+ * project X" with a short TTL. Intentionally not persisted, on restart the
  * list rebuilds itself within one heartbeat interval (clients beat every 10s).
  *
  * This module lives entirely in the API process memory. Lost on crash, not

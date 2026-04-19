@@ -1,7 +1,7 @@
 /**
  * Claude Agent SDK orchestrator. Thin coordinator that:
  *   1. builds the system prompt (base + language + migration skill +
- *      diagnostics hint, in that order — see agent-prompts.ts),
+ *      diagnostics hint, in that order, see agent-prompts.ts),
  *   2. picks the model by mode (Sonnet day-to-day, Opus for migrations),
  *   3. wires a fresh diagnostics MCP server and the role-based canUseTool
  *      gate per query() call,
@@ -9,11 +9,11 @@
  *   5. recovers from a lost resume-session by retrying without resume.
  *
  * Every piece that isn't orchestration lives in a sibling file:
- *   - agent-prompts.ts           — text constants
- *   - agent-permissions.ts       — role-based canUseTool
- *   - agent-humanizer.ts         — plain-language tool labels
- *   - agent-stream-mapper.ts     — SDK message → WS event
- *   - agent-diagnostics-tools.ts — in-process MCP server
+ *   - agent-prompts.ts, text constants
+ *   - agent-permissions.ts, role-based canUseTool
+ *   - agent-humanizer.ts, plain-language tool labels
+ *   - agent-stream-mapper.ts, SDK message → WS event
+ *   - agent-diagnostics-tools.ts, in-process MCP server
  */
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
@@ -46,7 +46,7 @@ export async function* runProjectAgent(params: {
   prompt: string;
   role: ProjectRole;
   projectId: string;
-  /** From projects.preview_dev_command — lets the diagnostics tools
+  /** From projects.preview_dev_command, lets the diagnostics tools
    *  resolve the exact dev command the user configured. */
   previewDevCommandOverride?: string | null;
   language?: string | null;
@@ -65,7 +65,7 @@ export async function* runProjectAgent(params: {
 }): AsyncGenerator<Record<string, unknown>> {
   const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
   if (!apiKey) {
-    yield { type: "error", message: "Quillra is not configured yet — finish the setup wizard." };
+    yield { type: "error", message: "Quillra is not configured yet, finish the setup wizard." };
     return;
   }
 
@@ -77,7 +77,7 @@ export async function* runProjectAgent(params: {
   // turn.
   //
   // Default migration model is Opus 4.7 (requires claude-agent-sdk
-  // 0.2.112+ — older bundles have a hard-coded adaptive-thinking
+  // 0.2.112+, older bundles have a hard-coded adaptive-thinking
   // allowlist that whitelists only opus-4-6 / sonnet-4-6 and falls
   // back to the deprecated `thinking.type.enabled` payload, which
   // Opus 4.7 rejects with a 400). If you pin an older SDK, override
@@ -92,7 +92,7 @@ export async function* runProjectAgent(params: {
   // because the agent still needs to respect tool-call semantics; we
   // just add a massive "here's how Astro works and how to migrate"
   // block on top. The "don't say technical words" directive in the
-  // base prompt becomes advisory during migration — the user is
+  // base prompt becomes advisory during migration, the user is
   // locked out of the composer anyway, so chatter is harmless.
   const languageName = params.language ? LANGUAGE_NAMES[params.language] : null;
   let systemPromptText = languageName
@@ -104,12 +104,12 @@ export async function* runProjectAgent(params: {
 
   // Technical roles (admin + editor) get in-process diagnostic tools
   // wired up as an MCP server. Gives the agent a way to see why the
-  // live preview isn't working — previously it was blind to npm-install
+  // live preview isn't working, previously it was blind to npm-install
   // OOMs, dev-server crash loops, and Astro config errors and would
   // either claim success or retry without understanding. Clients never
   // touch the preview, so they don't get these tools.
   //
-  // The server INSTANCE has to be rebuilt per `query()` call — the SDK's
+  // The server INSTANCE has to be rebuilt per `query()` call, the SDK's
   // internal MCP client calls `.connect()` on the underlying Server,
   // and the Server only allows one transport at a time. Re-using the
   // same instance across the SESSION_LOST retry throws
@@ -152,7 +152,7 @@ export async function* runProjectAgent(params: {
           // IS_SANDBOX=1 bypasses the CLI's refusal to run
           // --dangerously-skip-permissions as root. We legitimately
           // run as root inside a Docker container (which *is* a
-          // sandbox) — setting this env tells the CLI so. Without it
+          // sandbox), setting this env tells the CLI so. Without it
           // the subprocess exits 1 on startup with "cannot be used
           // with root/sudo privileges for security reasons" and the
           // whole chat falls over.
@@ -161,7 +161,7 @@ export async function* runProjectAgent(params: {
         tools: { type: "preset", preset: "claude_code" },
         ...(diagnosticsServer ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } } : {}),
         // Opus 4.7 (and the Claude 4.6+ line) requires BOTH adaptive
-        // thinking AND an explicit effort level — setting one without
+        // thinking AND an explicit effort level, setting one without
         // the other either triggers an API 400 (on Opus) or silently
         // degrades to non-thinking mode. Per the adaptive-thinking
         // docs, `effort: "high"` for migrations (Opus) and `medium`
@@ -175,7 +175,7 @@ export async function* runProjectAgent(params: {
         // SDK's own permission system (which prompts for approval on
         // anything that isn't a file edit) stays out of the way.
         // bypassPermissions requires allowDangerouslySkipPermissions
-        // — without the pair, the CLI subprocess exits 1 on startup.
+        //, without the pair, the CLI subprocess exits 1 on startup.
         canUseTool: buildCanUseTool(params.role, { migrationMode: params.migrationMode }),
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
@@ -194,7 +194,7 @@ export async function* runProjectAgent(params: {
       }
       // Intercept the SDK's terminal `result` envelope to surface the
       // per-run usage/cost before handing it to the mapper. Only fire
-      // onResult on success — the caller shouldn't bill the user for
+      // onResult on success, the caller shouldn't bill the user for
       // a run that failed halfway.
       if (msg.type === "result" && msg.subtype === "success") {
         try {
@@ -256,7 +256,7 @@ export async function* runProjectAgent(params: {
     yield* run(params.agentSessionId ?? null);
   } catch (e) {
     if (e === SESSION_LOST) {
-      // Session is gone — clear it on the server side so future runs
+      // Session is gone, clear it on the server side so future runs
       // start fresh, then retry this run without `resume`.
       params.onSessionId?.("");
       try {

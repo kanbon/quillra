@@ -1,4 +1,3 @@
-import { and, eq } from "drizzle-orm";
 /**
  * Durable monthly-report scheduler. Fires daily and, on each tick, looks
  * for users who (a) opted into monthly reports and (b) have not yet
@@ -9,6 +8,8 @@ import { and, eq } from "drizzle-orm";
  * the 1st. Daily catch-up means even a server restart on the morning of
  * the 2nd still sends March's report; monthly-exact cron would miss it.
  */
+
+import { and, eq } from "drizzle-orm";
 import cron, { type ScheduledTask } from "node-cron";
 import { usageReportsSent } from "../db/app-schema.js";
 import { user } from "../db/auth-schema.js";
@@ -85,7 +86,7 @@ async function sendOneUserReport(
     try {
       await db.insert(usageReportsSent).values({ userId, monthYmd: ymd, sentAt: new Date() });
     } catch {
-      /* already marked — harmless */
+      /* already marked, harmless */
     }
     return false;
   }
@@ -108,7 +109,7 @@ async function sendOneUserReport(
         rows: rows.map((r) => [r.projectName, String(r.runs), formatUsd(r.costUsd)]),
         totalRow: ["Total", String(totalRuns), formatUsd(totalCost)],
       },
-      signature: `— ${org}`,
+      signature: `- ${org}`,
     },
   });
 
@@ -139,7 +140,7 @@ export async function reconcileMonthlyReports(): Promise<{
 }> {
   const targetMonth = previousMonthYmd();
   if (!isMailerEnabled()) {
-    console.warn("[reports] mailer disabled — skipping reconcile for", targetMonth);
+    console.warn("[reports] mailer disabled, skipping reconcile for", targetMonth);
     return { targetMonth, candidates: 0, sent: 0, skipped: 0, mailerDisabled: true };
   }
 
@@ -183,14 +184,14 @@ export async function reconcileMonthlyReports(): Promise<{
 let task: ScheduledTask | null = null;
 
 /**
- * Start the scheduler. Safe to call once at boot — idempotent (a second
+ * Start the scheduler. Safe to call once at boot, idempotent (a second
  * call is a no-op). Immediately runs a catch-up reconcile so any report
  * missed while the server was down goes out within a few seconds of the
  * server coming back.
  */
 export function startReportScheduler(): void {
   if (task) return;
-  // Off-peak, off-minute — avoid the 0/15/30/45 clustering that makes
+  // Off-peak, off-minute, avoid the 0/15/30/45 clustering that makes
   // every app's cron fire simultaneously.
   task = cron.schedule("37 3 * * *", () => {
     void reconcileMonthlyReports().catch((e) =>
@@ -198,7 +199,7 @@ export function startReportScheduler(): void {
     );
   });
   // Boot-time catch-up. Fire-and-forget so it never blocks request
-  // serving — any mailer failure is logged.
+  // serving, any mailer failure is logged.
   void reconcileMonthlyReports().catch((e) => console.warn("[reports] boot reconcile failed:", e));
 }
 

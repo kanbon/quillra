@@ -1,13 +1,14 @@
+/**
+ * Version history modal, sources from the git commit log in the cloned
+ * workspace. Shows a vertical timeline with author, message, relative
+ * time, short SHA, and whether the commit has been pushed to origin yet.
+ */
+
 import { Modal } from "@/components/atoms/Modal";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
-/**
- * Version history modal — sources from the git commit log in the cloned
- * workspace. Shows a vertical timeline with author, message, relative
- * time, short SHA, and whether the commit has been pushed to origin yet.
- */
 import { useMemo } from "react";
 
 type Commit = {

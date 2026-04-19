@@ -6,11 +6,11 @@
  * never see other projects, and the agent enforces a content-only sandbox.
  *
  * Routes:
- *   GET  /api/clients/branding/:projectId        — public, returns name + logo
- *   POST /api/clients/request-code               — sends a 6-digit code
- *   POST /api/clients/verify-code                — exchanges code for a session cookie
- *   POST /api/clients/logout                     — clears the session cookie
- *   GET  /api/clients/me                         — returns the active client session
+ *   GET  /api/clients/branding/:projectId, public, returns name + logo
+ *   POST /api/clients/request-code, sends a 6-digit code
+ *   POST /api/clients/verify-code, exchanges code for a session cookie
+ *   POST /api/clients/logout, clears the session cookie
+ *   GET  /api/clients/me, returns the active client session
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -47,7 +47,7 @@ function generateCode(): string {
 }
 
 export const clientsRouter = new Hono()
-  /** Public — used by the branded login page to render the project's logo + name */
+  /** Public, used by the branded login page to render the project's logo + name */
   .get("/branding/:projectId", async (c) => {
     const projectId = c.req.param("projectId");
     const [p] = await db
@@ -87,7 +87,7 @@ export const clientsRouter = new Hono()
       if (!m || m.role !== "client") clientUserId = null;
     }
 
-    // Don't reveal whether the email is a member — always return ok.
+    // Don't reveal whether the email is a member, always return ok.
     // Only actually send the code if the email is a client member.
     if (!clientUserId) {
       return c.json({ ok: true });
@@ -174,7 +174,7 @@ export const clientsRouter = new Hono()
       return c.json({ error: "Invalid code" }, 400);
     }
 
-    // Code is good — find the user + verify they're still a client of this project
+    // Code is good, find the user + verify they're still a client of this project
     const [u] = await db.select().from(user).where(eq(user.email, email)).limit(1);
     if (!u) return c.json({ error: "Invalid code" }, 400);
     const [m] = await db

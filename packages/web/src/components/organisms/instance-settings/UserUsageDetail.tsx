@@ -1,14 +1,15 @@
-import { Modal } from "@/components/atoms/Modal";
-import { Spinner } from "@/components/atoms/Spinner";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
-import { cn } from "@/lib/cn";
 /**
  * Per-user usage drill-down modal. Fetches a 12-month (or configurable)
  * breakdown for one user and renders it as a stacked bar chart plus
  * three raw tables (monthly / per-project / per-model). Opens from a
  * clickable row in the main Usage tab.
  */
+
+import { Modal } from "@/components/atoms/Modal";
+import { Spinner } from "@/components/atoms/Spinner";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
@@ -51,7 +52,7 @@ type DetailResponse = {
 };
 
 function formatUsd(n: number): string {
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "-";
   if (n >= 100) return `$${n.toFixed(0)}`;
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n >= 0.01) return `$${n.toFixed(3)}`;

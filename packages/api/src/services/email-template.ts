@@ -17,26 +17,26 @@ const BRAND_COLOR_DARK = "#a50e19";
 export type EmailBody = {
   /** "Hi Alice," */
   greeting?: string;
-  /** One paragraph per entry — rendered as <p> in HTML, blank-line-separated in text. */
+  /** One paragraph per entry, rendered as <p> in HTML, blank-line-separated in text. */
   paragraphs: string[];
-  /** Optional data table — displayed as a zebra-striped HTML table and as
+  /** Optional data table, displayed as a zebra-striped HTML table and as
    *  a simple column-aligned plain-text grid. */
   table?: {
     headers: string[];
     rows: string[][];
-    /** Rendered with a top border + bold cells — typically the "Total" row. */
+    /** Rendered with a top border + bold cells, typically the "Total" row. */
     totalRow?: string[];
   };
   /** Bulletproof CTA button. Falls back to a plain link in text. */
   cta?: { label: string; url: string };
-  /** "— The Acme team" sign-off. */
+  /** "- The Acme team" sign-off. */
   signature?: string;
 };
 
 export type RenderOptions = {
   /** Shown in the <title> tag and mentioned in the text preamble. */
   title: string;
-  /** Sentence Gmail et al. preview next to the subject — kept under 90 chars
+  /** Sentence Gmail et al. preview next to the subject, kept under 90 chars
    *  is ideal. Hidden from the visible body via a zero-size hidden span. */
   preheader: string;
   body: EmailBody;

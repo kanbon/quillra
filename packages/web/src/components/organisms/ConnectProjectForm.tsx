@@ -145,7 +145,7 @@ export function ConnectProjectForm({ onCreated }: Props) {
           </>
         ) : (
           <p className="flex min-h-[42px] items-center rounded-md border border-neutral-200 bg-neutral-50 px-3 text-sm text-neutral-800">
-            {nameVal || "—"}
+            {nameVal || "-"}
           </p>
         )}
       </div>

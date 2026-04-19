@@ -1,3 +1,14 @@
+/**
+ * Single source of truth for the top bar when the user is inside a specific
+ * project. Used by BOTH the Editor and Project Settings routes so the tab
+ * positions + overall header chrome stay pixel-identical when switching
+ * between them, no layout shift.
+ *
+ * The Editor/Project NavLink pair lives inside an absolute-centered wrapper
+ * so left and right content can change width (e.g. the Publish button only
+ * rendering on the editor route) without moving the tabs.
+ */
+
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
@@ -10,16 +21,6 @@ import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
-/**
- * Single source of truth for the top bar when the user is inside a specific
- * project. Used by BOTH the Editor and Project Settings routes so the tab
- * positions + overall header chrome stay pixel-identical when switching
- * between them — no layout shift.
- *
- * The Editor/Project NavLink pair lives inside an absolute-centered wrapper
- * so left and right content can change width (e.g. the Publish button only
- * rendering on the editor route) without moving the tabs.
- */
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 
@@ -82,7 +83,7 @@ export function ProjectHeader({
 
   // Light-weight polling of publish-status so the "N changes" pill can
   // show the current dirty count without hammering the AI-summary path.
-  // Only enabled for users who can actually publish — clients never see
+  // Only enabled for users who can actually publish, clients never see
   // this indicator.
   const { data: publishStatus } = useQuery({
     queryKey: ["publish-status", projectId],

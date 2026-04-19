@@ -1,19 +1,20 @@
-import { signOutUnified, useCurrentUser } from "@/hooks/useCurrentUser";
-import type { Language } from "@/i18n/dictionaries";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
-import { cn } from "@/lib/cn";
 /**
  * Vercel-style account menu anchored to the user's avatar in the app
  * header. Replaces the old gear-icon + SettingsModal combo: one click
  * on the avatar drops a menu with everything a signed-in user actually
- * reaches for — language switch, organisation settings shortcut, sign
- * out — without forcing them through a modal dialog.
+ * reaches for, language switch, organisation settings shortcut, sign
+ * out, without forcing them through a modal dialog.
  *
  * Used by both the dashboard-level AppHeader and the in-editor
  * ProjectHeader so the entry point is in the same place no matter
  * where the user is.
  */
+
+import { signOutUnified, useCurrentUser } from "@/hooks/useCurrentUser";
+import type { Language } from "@/i18n/dictionaries";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -49,7 +50,7 @@ export function AvatarDropdown() {
         const r = await apiJson<{ user: SessionInfo | null }>("/api/session");
         if (!cancelled) setInfo(r.user);
       } catch {
-        /* ignore — the cached useCurrentUser() data is good enough */
+        /* ignore, the cached useCurrentUser() data is good enough */
       }
     })();
     return () => {
@@ -184,7 +185,7 @@ export function AvatarDropdown() {
             aria-label={t("settings.title")}
             className={cn(
               "z-50 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-xl",
-              // Mobile: fixed bottom sheet — declared FIRST so the
+              // Mobile: fixed bottom sheet, declared FIRST so the
               // sm:* overrides that follow win at desktop breakpoints.
               "fixed inset-x-3 bottom-3",
               // Desktop: anchor under the avatar, right-aligned. The
@@ -230,7 +231,7 @@ export function AvatarDropdown() {
               </div>
             </div>
 
-            {/* Language — inline toggle, the single most-used personal setting */}
+            {/* Language, inline toggle, the single most-used personal setting */}
             <div className="border-b border-neutral-100 p-2">
               <p className="mb-1.5 px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
                 {t("language.title")}

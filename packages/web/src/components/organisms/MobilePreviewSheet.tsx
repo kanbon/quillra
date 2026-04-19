@@ -1,14 +1,15 @@
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 /**
  * Bottom-sheet style preview for mobile. Slides up from the bottom of
- * the viewport with a translucent backdrop — dismiss by tapping the
+ * the viewport with a translucent backdrop, dismiss by tapping the
  * backdrop, the close button, the drag handle, hitting Escape, or
  * pulling the drag handle / header area downward.
  *
  * Renders the actual PreviewPane iframe inside so the same
  * loading/boot-page + framework badge behaviour works on mobile too.
  */
+
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 import { type PointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -107,7 +108,7 @@ export function MobilePreviewSheet({ open, onClose, children }: Props) {
         ref={sheetRef}
         className={cn(
           "absolute inset-x-0 bottom-0 flex max-h-[92vh] flex-col overflow-hidden rounded-t-3xl bg-white shadow-[0_-8px_32px_rgba(0,0,0,0.2)]",
-          // Only animate when not actively dragging — during a drag we want
+          // Only animate when not actively dragging, during a drag we want
           // the sheet to track the finger 1:1 without lag.
           !dragging && "transition-transform duration-300 ease-out",
           open ? "translate-y-0" : "translate-y-full",
@@ -117,7 +118,7 @@ export function MobilePreviewSheet({ open, onClose, children }: Props) {
           transform: open ? `translateY(${dragY}px)` : undefined,
         }}
       >
-        {/* Drag handle — tap to close, swipe down to dismiss */}
+        {/* Drag handle, tap to close, swipe down to dismiss */}
         <div
           className="flex h-8 shrink-0 cursor-grab touch-none items-center justify-center bg-white active:cursor-grabbing"
           onPointerDown={onPointerDown}

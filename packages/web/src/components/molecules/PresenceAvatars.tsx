@@ -1,14 +1,15 @@
-import type { PresenceUser } from "@/hooks/useProjectPresence";
 /**
  * Stack of small circular avatars for the users currently viewing a
  * project, displayed in the ProjectHeader next to the version-history
- * clock. Renders nothing when the list is empty — presence UI is only
+ * clock. Renders nothing when the list is empty, presence UI is only
  * visible when someone *else* is actually here.
  *
  * Each avatar has a green ring as a "live" indicator, matching the Slack
  * / Google Docs / Figma convention. Hover reveals a tiny tooltip with the
  * viewer's name, email, and role (team / client).
  */
+
+import type { PresenceUser } from "@/hooks/useProjectPresence";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 

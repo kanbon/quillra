@@ -1,5 +1,5 @@
 /**
- * Framework detection — thin wrapper around the central registry.
+ * Framework detection, thin wrapper around the central registry.
  *
  * The registry in framework-registry.ts is the single source of truth for
  * every framework Quillra supports (label, icon, dev command, assets dir,
@@ -77,7 +77,7 @@ export function detectFramework(repoPath: string): FrameworkInfo {
   try {
     mtimeMs = fs.statSync(pkgPath).mtimeMs;
   } catch {
-    // No package.json — still cache by repo path with mtime 0
+    // No package.json, still cache by repo path with mtime 0
   }
   const cached = cache.get(repoPath);
   if (cached && cached.mtimeMs === mtimeMs) return cached.info;

@@ -13,7 +13,7 @@ import { registerPreviewPort, setPreviewStatus } from "./preview-status.js";
 /**
  * Resolve a short-lived GitHub App installation token for a specific
  * repo. Returns null if the App isn't configured OR isn't installed on
- * the repo — the caller should surface "install the Quillra GitHub App
+ * the repo, the caller should surface "install the Quillra GitHub App
  * on this repository" in both cases. No PAT fallback: the App is the
  * only supported auth path for git operations.
  */
@@ -74,17 +74,17 @@ export function projectRepoPath(projectId: string): string {
 
 /** Folder inside the cloned repo where chat attachments live until the
  *  agent either promotes them to a real asset path or leaves them be.
- *  Path is relative to the repo root — join with projectRepoPath() to
+ *  Path is relative to the repo root, join with projectRepoPath() to
  *  get an absolute path. */
 export const QUILLRA_TEMP_DIR = ".quillra-temp";
 
 /**
  * Make sure the `.quillra-temp/` folder is hidden from git without
  * modifying the committed `.gitignore`. We use `.git/info/exclude`
- * instead — it's a local-only ignore file that git reads alongside
+ * instead, it's a local-only ignore file that git reads alongside
  * `.gitignore` but never commits. Safe to call on every clone/refresh.
  *
- * See: https://git-scm.com/docs/gitignore#_description — "Patterns
+ * See: https://git-scm.com/docs/gitignore#_description, "Patterns
  * which a user wants git to ignore in all situations should go into
  * a file specified by core.excludesFile (...), or for repository-
  * specific ignores into `$GIT_DIR/info/exclude`".
@@ -106,7 +106,7 @@ export function ensureQuillraTempIgnored(repoPath: string): void {
       const suffix = content === "" || content.endsWith("\n") ? "" : "\n";
       fs.appendFileSync(
         excludePath,
-        `${suffix}# Quillra scratch space for chat attachments — never committed\n${line}\n`,
+        `${suffix}# Quillra scratch space for chat attachments, never committed\n${line}\n`,
       );
     }
     // Belt-and-suspenders: also make sure the directory exists so the
@@ -307,7 +307,7 @@ export async function reinstallProjectDependencies(projectId: string): Promise<v
  * git operation. A container OOM-kill or process restart mid-`git
  * commit` can leave this file, after which every subsequent checkout /
  * pull fails with "Another git process seems to be running". This is
- * safe to delete unconditionally — simple-git operations are sequential
+ * safe to delete unconditionally, simple-git operations are sequential
  * within a single repo dir, so if the file exists AND we're about to
  * start a new operation, nobody else is holding it.
  */
@@ -326,13 +326,13 @@ function sweepStaleGitLocks(repoPath: string): void {
 /**
  * Per-project in-process mutex for anything touching `.git/`. Concurrent
  * chat turns on the same project used to race on git-fetch/pull and
- * die with `fatal: Unable to create ... index.lock: File exists.` —
- * git itself locks at the filesystem level, so the cleanest fix is to
+ * die with `fatal: Unable to create ... index.lock: File exists.`. Git
+ * itself locks at the filesystem level, so the cleanest fix is to
  * serialise the operations before they reach git at all.
  *
  * Keyed by projectId. The map holds the *tail* promise of each
  * project's queue; new operations chain `.then(op)` and replace the
- * tail. The chain never retains old resolved promises — GC frees them
+ * tail. The chain never retains old resolved promises, GC frees them
  * as soon as the next op attaches.
  */
 const repoOpQueue = new Map<string, Promise<unknown>>();
@@ -357,14 +357,14 @@ export async function ensureRepoCloned(
     /** Skip running npm/yarn/pnpm install on the cloned repo. Set
      *  when the caller is about to rewrite package.json (migration)
      *  so we don't waste minutes installing a dep tree the agent
-     *  will just throw away — or worse, OOM the container on an
+     *  will just throw away, or worse, OOM the container on an
      *  ancient CRA / Gatsby dep graph before the agent even runs. */
     skipInstall?: boolean;
     /** Called when the install step fails (missing version, ETARGET,
      *  peer-dep conflict, OOM, etc). Called INSTEAD of throwing so the
      *  chat turn can still run and the agent can see + fix the cause.
      *  File ops don't require node_modules. When this callback is not
-     *  supplied, install failures still throw — the old behaviour. */
+     *  supplied, install failures still throw, the old behaviour. */
     onInstallFailed?: (error: string) => void;
   } = {},
 ): Promise<string> {
@@ -514,7 +514,7 @@ export async function pushToGitHub(
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
   // Always resolve the token via the App → legacy PAT chain. We used
   // to accept an explicit `userToken` parameter here and the publish
-  // route was passing the signed-in user's OAuth access token — which
+  // route was passing the signed-in user's OAuth access token, which
   // (a) meant pushes happened under the human's credentials instead
   // of the App's bot identity and (b) leaked the user's PAT-level
   // scope into repos they didn't necessarily intend to push. The App
@@ -531,7 +531,7 @@ export async function pushToGitHub(
   await g.remote(["set-url", "origin", authUrl]);
 
   // Committer identity. When the App is configured, commits are
-  // *committed by* the App's bot (`<slug>[bot]` — shows on github.com
+  // *committed by* the App's bot (`<slug>[bot]`, shows on github.com
   // with the robot icon). The human who drove the change is attached
   // as the git `author` via `--author=` so attribution stays visible
   // in `git log` and the GitHub UI ("<name> authored, <slug>[bot]
@@ -542,7 +542,7 @@ export async function pushToGitHub(
   if (creds?.slug) {
     const botName = `${creds.slug}[bot]`;
     // GitHub Apps use a noreply email format of
-    // `<bot-user-id>+<slug>[bot]@users.noreply.github.com` — we don't
+    // `<bot-user-id>+<slug>[bot]@users.noreply.github.com`, we don't
     // know the bot user id at push time without an extra API round
     // trip, so fall back to a stable noreply address that still
     // resolves to the Apps bot user in github.com's email matching.
@@ -603,7 +603,7 @@ export async function pushToGitHub(
 
   const log = await g.log({ from: `origin/${branch}`, to: "HEAD", maxCount: 100 });
   if (log.total === 0) {
-    return { ok: false, message: "Nothing new to push — already in sync with GitHub." };
+    return { ok: false, message: "Nothing new to push, already in sync with GitHub." };
   }
 
   try {

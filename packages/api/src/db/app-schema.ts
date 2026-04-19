@@ -66,7 +66,7 @@ export const clientLoginCodes = sqliteTable(
 );
 
 /**
- * Team sessions — email-code login for admins / editors / translators who
+ * Team sessions, email-code login for admins / editors / translators who
  * don't want (or don't have) a GitHub account. Unlike clientSessions these
  * are NOT project-scoped: a team member can access every project they're
  * a member of via projectMembers, identical to a Better Auth session.
@@ -174,7 +174,7 @@ export const conversations = sqliteTable(
 );
 
 /**
- * One row per Claude Agent SDK run — an agent "turn" triggered by a
+ * One row per Claude Agent SDK run, an agent "turn" triggered by a
  * single user message. Used by the owner-only Usage tab to break down
  * cost/tokens by project, user, and model. The model_usage_json column
  * stores the SDK's per-model detail as a JSON blob so we don't need a
@@ -196,7 +196,7 @@ export const agentRuns = sqliteTable(
     costUsd: text("cost_usd").notNull().default("0"),
     numTurns: integer("num_turns").notNull().default(1),
     /** JSON: { [modelName]: { inputTokens, outputTokens, cacheReadInputTokens,
-     *  cacheCreationInputTokens, costUSD, ... } } — what the SDK's
+     *  cacheCreationInputTokens, costUSD, ... } }, what the SDK's
      *  modelUsage map gave us verbatim. Read with json_each() for
      *  per-model aggregation without a second table. */
     modelUsageJson: text("model_usage_json"),
@@ -218,7 +218,7 @@ export const agentRuns = sqliteTable(
  * global → built-in default when looking up the effective limit for
  * a given (user, role-in-this-project) pair.
  *
- * NULL on either column means "inherit" — a row can exist just to set
+ * NULL on either column means "inherit", a row can exist just to set
  * `warn_usd` and leave `hard_usd` to fall back to a less specific scope.
  */
 export const usageLimits = sqliteTable(

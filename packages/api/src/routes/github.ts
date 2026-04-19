@@ -91,7 +91,7 @@ export const githubRouter = new Hono<{ Variables: Variables }>()
       );
     }
   })
-  /** Public list of every framework Quillra supports — used by the connect modal and the badge */
+  /** Public list of every framework Quillra supports, used by the connect modal and the badge */
   .get("/frameworks", async (c) => {
     return c.json({ frameworks: publicFrameworkList() });
   });

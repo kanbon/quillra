@@ -1,3 +1,15 @@
+/**
+ * Tabbed Organization Settings page, the owner-only post-install home
+ * for everything the setup wizard touched. The wizard itself (Setup.tsx)
+ * is unchanged; this page exposes the same knobs for ongoing rotation.
+ *
+ * Auth: this page is client-guarded by calling /api/session on mount and
+ * rendering a dedicated "Owner access only" empty state for non-owners.
+ * The actual security guarantee lives on the server, /api/setup/save is
+ * already owner-gated, so even if the client-side guard were bypassed a
+ * non-owner could not mutate anything.
+ */
+
 import { Heading } from "@/components/atoms/Heading";
 import { LogoMark } from "@/components/atoms/LogoMark";
 import { type TabItem, Tabs } from "@/components/molecules/Tabs";
@@ -10,17 +22,6 @@ import { UsageTab } from "@/components/organisms/instance-settings/UsageTab";
 import type { StatusResponse } from "@/components/organisms/instance-settings/types";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
-/**
- * Tabbed Organization Settings page — the owner-only post-install home
- * for everything the setup wizard touched. The wizard itself (Setup.tsx)
- * is unchanged; this page exposes the same knobs for ongoing rotation.
- *
- * Auth: this page is client-guarded by calling /api/session on mount and
- * rendering a dedicated "Owner access only" empty state for non-owners.
- * The actual security guarantee lives on the server — /api/setup/save is
- * already owner-gated, so even if the client-side guard were bypassed a
- * non-owner could not mutate anything.
- */
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 

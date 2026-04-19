@@ -1,23 +1,24 @@
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 /**
  * Secure-input primitive for API keys, tokens, and other secrets.
  *
  * Security guarantees (enforced by this component + its contract with the
  * server):
- *  - The backend NEVER returns the full secret value — only a masked
+ *  - The backend NEVER returns the full secret value, only a masked
  *    version like `••••••••ab12`. This component trusts the mask.
  *  - When the user clicks Replace, the draft input is EMPTY. We never
  *    prefill with the masked value. Pasting over nothing is explicit.
  *  - The underlying <input> is type=password by default, flipped to text
  *    only while the user holds down the eye toggle. autoComplete/1Password
  *    are disabled so browser password managers don't grab the draft.
- *  - The draft is dropped when the parent cancels editing — no leak into
+ *  - The draft is dropped when the parent cancels editing, no leak into
  *    persistent state.
  *  - The "source" badge tells the owner whether the current value came
  *    from the environment or the database. Env values are read-only
  *    unless they explicitly override.
  */
+
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 import { type ReactNode, useState } from "react";
 
 export type SecretStatus = {

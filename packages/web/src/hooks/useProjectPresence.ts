@@ -1,4 +1,3 @@
-import { apiJson } from "@/lib/api";
 /**
  * Hook that reports which other users are currently viewing {projectId}.
  *
@@ -7,9 +6,11 @@ import { apiJson } from "@/lib/api";
  * map and (b) returns every other fresh viewer. The server excludes the
  * caller so the hook's output is guaranteed "everyone *else* who's here".
  *
- * Idle tabs stop beating (refetchIntervalInBackground: false) — no need
+ * Idle tabs stop beating (refetchIntervalInBackground: false), no need
  * to hammer the API for a tab nobody is looking at.
  */
+
+import { apiJson } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 
 export type PresenceUser = {
@@ -34,7 +35,7 @@ export function useProjectPresence(projectId: string | undefined): PresenceUser[
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
     staleTime: 0,
-    // Don't retry aggressively — a transient failure just means no presence
+    // Don't retry aggressively, a transient failure just means no presence
     // this tick; the next tick is 10s away.
     retry: false,
   });

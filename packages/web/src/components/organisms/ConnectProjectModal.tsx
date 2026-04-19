@@ -174,7 +174,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
           <p className="mt-0.5 text-[13px] text-neutral-500">
             {step === "repo" && "Pick a repository and branch."}
             {step === "framework" && "We're checking what framework your site uses."}
-            {step === "name" && "Almost done — give it a name."}
+            {step === "name" && "Almost done, give it a name."}
           </p>
         </div>
         <button
@@ -241,7 +241,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
         })}
       </div>
 
-      {/* STEP 1 — repo + branch */}
+      {/* STEP 1, repo + branch */}
       {step === "repo" && (
         <div className="space-y-5">
           <section>
@@ -417,7 +417,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
         </div>
       )}
 
-      {/* STEP 2 — framework check */}
+      {/* STEP 2, framework check */}
       {step === "framework" && (
         <div className="min-h-[220px]">
           {fwQ.isLoading && (
@@ -570,7 +570,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
         </div>
       )}
 
-      {/* STEP 3 — name + advanced */}
+      {/* STEP 3, name + advanced */}
       {step === "name" && (
         <div className="space-y-5">
           <div>
@@ -591,7 +591,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
 
           {/*
             Convert-to-Astro card. Shown only when the detected framework
-            is NOT already Astro or Next.js — those two work natively
+            is NOT already Astro or Next.js, those two work natively
             with Quillra, so migration would be a no-op. Subtle: muted
             border by default, Astro logo tile + a native-looking
             switch. Activating it flips a flag on the project row and

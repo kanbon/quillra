@@ -1,13 +1,14 @@
+/**
+ * Runtime credentials Quillra itself uses: Anthropic API key for the
+ * chat editor. GitHub credentials live under Integrations as a GitHub
+ * App, not here, because the App is the only supported auth path
+ * for repo operations.
+ */
+
 import { Button } from "@/components/atoms/Button";
 import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
-/**
- * Runtime credentials Quillra itself uses: Anthropic API key for the
- * chat editor. GitHub credentials live under Integrations as a GitHub
- * App — not here — because the App is the only supported auth path
- * for repo operations.
- */
 import { useState } from "react";
 import { type StatusResponse, getStatus } from "./types";
 

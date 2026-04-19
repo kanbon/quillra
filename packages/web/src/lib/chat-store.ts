@@ -1,5 +1,5 @@
 /**
- * Module-level chat store — survives React component unmount/remount.
+ * Module-level chat store, survives React component unmount/remount.
  * Keyed by "projectId:conversationId" for multi-conversation support.
  */
 
@@ -8,7 +8,7 @@ import { apiJson } from "@/lib/api";
 export type Attachment = {
   path: string;
   originalName: string;
-  /** "image" or "content" — content files (txt/md/html) render as a chip */
+  /** "image" or "content", content files (txt/md/html) render as a chip */
   kind?: "image" | "content";
   previewUrl?: string;
 };
@@ -19,13 +19,13 @@ export type ChatLine =
   | { id: string; kind: "tool"; detail: string }
   | { id: string; kind: "thinking"; text: string; durationMs?: number; streaming?: boolean }
   | { id: string; kind: "tool_active"; toolName: string; elapsed: number }
-  // Subtle per-step line in the transcript — "Reading the homepage",
-  // "Updating the Hero section", "Restarting your site" — emitted by
+  // Subtle per-step line in the transcript, "Reading the homepage",
+  // "Updating the Hero section", "Restarting your site", emitted by
   // the server's humanizer from each tool_use block. Gives visibility
   // into what the agent is actually doing without ever surfacing a
   // tool name or file path.
   | { id: string; kind: "tool_call"; label: string }
-  // Shown once per completed turn — subtle full-width card with cost + wall-clock.
+  // Shown once per completed turn, subtle full-width card with cost + wall-clock.
   | {
       id: string;
       kind: "checkpoint";
@@ -39,7 +39,7 @@ export type ChatLine =
   | { id: string; kind: "continue_prompt" }
   // A structured multiple-choice question from the agent. The frontend
   // always appends an "Other" option that bypasses the options and focuses
-  // the composer input — never sent from the server.
+  // the composer input, never sent from the server.
   | { id: string; kind: "ask"; question: string; options: string[] };
 
 type Listener = () => void;
@@ -70,7 +70,7 @@ const snapshots = new Map<string, ChatSnapshot>();
 const internals = new Map<string, Internal>();
 const listeners = new Map<string, Set<Listener>>();
 // Keyed the same as snapshots. Fires when the agent asks a question and
-// the user clicks "Other" — composer subscribes and pulls focus.
+// the user clicks "Other", composer subscribes and pulls focus.
 const focusComposerListeners = new Map<string, Set<FocusComposerListener>>();
 
 const EMPTY: ChatSnapshot = {
@@ -233,8 +233,8 @@ export async function loadHistory(projectId: string, conversationId: string | nu
     }
     update(k, { lines: mapped, conversationId });
     // Seed the "this chat" running total from the backend so the cost
-    // checkpoint card doesn't reset to $0 on every reload. Best-effort —
-    // if it fails, we just start counting from zero for this session.
+    // checkpoint card doesn't reset to $0 on every reload. Best-effort: if
+    // it fails, we just start counting from zero for this session.
     if (conversationId) {
       try {
         const totalRes = await apiJson<{ totalCostUsd: number }>(
@@ -478,15 +478,14 @@ export function sendMessage(
       let updated = finalizeStreaming(snap.lines);
       updated = finalizeThinking(updated, internal);
       updated = updated.filter((l) => l.kind !== "tool_active");
-      // Cost checkpoint — subtle full-width card summarising what this
+      // Cost checkpoint, subtle full-width card summarising what this
       // turn cost and how long it took. We trust the server's costUsd
       // and durationMs but fall back to a locally-measured duration if
       // the payload is missing one.
       //
-      // Skip the card entirely when the turn paused on an <ask> block —
-      // the task isn't "done", the agent is waiting for the user's
-      // answer. Showing a "Done in 3s" card under an open question is
-      // misleading.
+      // Skip the card entirely when the turn paused on an <ask> block: the
+      // task isn't "done", the agent is waiting for the user's answer.
+      // Showing a "Done in 3s" card under an open question is misleading.
       const costUsd =
         typeof data.costUsd === "number" && Number.isFinite(data.costUsd) ? data.costUsd : 0;
       const serverMs =
@@ -511,7 +510,7 @@ export function sendMessage(
       // Cumulative cost still counts even when we don't render the card,
       // so the next checkpoint picks up an accurate running total.
       update(currentK, { lines: updated, busy: false, cumulativeCostUsd: nextCumulative });
-      // Always reload the preview when streaming finishes — the agent
+      // Always reload the preview when streaming finishes, the agent
       // may have edited files and the iframe should reflect the result.
       onRefreshPreview?.();
       ws.close();

@@ -4,12 +4,12 @@
  * `sendEmail()` and never has to know which provider is wired up.
  *
  * Backends:
- *   - "none"   — sending is disabled. send() resolves with { sent: false }
+ *   - "none", sending is disabled. send() resolves with { sent: false }
  *                so callers can fall back to shareable invite links etc.
  *                Default for fresh installs.
- *   - "resend" — Resend API via plain fetch (no SDK dependency). Set
+ *   - "resend", Resend API via plain fetch (no SDK dependency). Set
  *                RESEND_API_KEY and EMAIL_FROM.
- *   - "smtp"   — Universal SMTP via nodemailer. Works with any standard
+ *   - "smtp", Universal SMTP via nodemailer. Works with any standard
  *                SMTP server: Postfix, Mailgun, SendGrid, AWS SES, Postmark,
  *                Gmail, Outlook, your own server, etc. Set SMTP_HOST, PORT,
  *                USER, PASSWORD, SECURE, and EMAIL_FROM.
@@ -22,7 +22,7 @@ export type MailMessage = {
   subject: string;
   /** Plain-text body (used as fallback if html is empty too) */
   text?: string;
-  /** HTML body (preferred — most modern clients use this) */
+  /** HTML body (preferred, most modern clients use this) */
   html?: string;
   /** Optional reply-to override */
   replyTo?: string;
@@ -156,7 +156,7 @@ async function sendViaSmtp(msg: MailMessage): Promise<SendResult> {
 /**
  * Send an email through the configured backend.
  *
- * The function NEVER throws — callers should branch on `result.sent` and
+ * The function NEVER throws, callers should branch on `result.sent` and
  * fall back to shareable links or in-app notifications when sending isn't
  * configured. This keeps the rest of the app email-optional.
  */
@@ -170,7 +170,7 @@ export async function sendEmail(msg: MailMessage): Promise<SendResult> {
   return { sent: false, backend, reason: "Unknown backend" };
 }
 
-/** Reset any cached mailer state — called after the setup wizard saves new config */
+/** Reset any cached mailer state, called after the setup wizard saves new config */
 export function resetMailer(): void {
   smtpTransport = null;
   smtpTransportKey = "";

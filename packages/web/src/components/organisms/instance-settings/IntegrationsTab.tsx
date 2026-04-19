@@ -1,10 +1,5 @@
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
 /**
- * Integrations tab — two separate GitHub configurations stacked in one view:
+ * Integrations tab, two separate GitHub configurations stacked in one view:
  *
  *   1. GitHub App (top, primary): the one that commits to repos. Its
  *      credentials are set through the setup-wizard manifest flow, or
@@ -15,6 +10,12 @@ import { apiJson } from "@/lib/api";
  *      GitHub account for wizard sign-in. Owner-editable here because
  *      it's the one thing the wizard can't self-bootstrap.
  */
+
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { SecretField, type SecretStatus } from "@/components/molecules/SecretField";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { type StatusResponse, getStatus } from "./types";
 
@@ -58,7 +59,7 @@ export function IntegrationsTab({ status, onSaved }: Props) {
           error?: string;
         }>("/api/admin/github-app/installations");
         if (cancelled) return;
-        // Backend auto-wiped orphaned credentials — refresh the parent
+        // Backend auto-wiped orphaned credentials, refresh the parent
         // status so the tab re-renders into the "Create App" state.
         if (r.cleared === "app-deleted") {
           onSaved();
@@ -148,7 +149,7 @@ export function IntegrationsTab({ status, onSaved }: Props) {
         {t("instanceSettings.tabIntegrations")}
       </h2>
 
-      {/* GitHub App — the one that commits */}
+      {/* GitHub App, the one that commits */}
       <div className="rounded-xl border border-neutral-200 bg-white p-5">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
@@ -257,7 +258,7 @@ export function IntegrationsTab({ status, onSaved }: Props) {
         )}
       </div>
 
-      {/* GitHub OAuth app — for user sign-in, lower priority */}
+      {/* GitHub OAuth app, for user sign-in, lower priority */}
       <div className="rounded-xl border border-neutral-200 bg-white p-5">
         <h3 className="mb-1 text-sm font-semibold text-neutral-900">
           {t("instanceSettings.ghOauthTitle")}

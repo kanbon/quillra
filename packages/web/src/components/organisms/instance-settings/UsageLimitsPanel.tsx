@@ -1,13 +1,14 @@
-import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
 /**
  * Spend-controls panel rendered beneath the Usage tables. Edits three
  * scopes of usage_limits rows (global, role, user) plus the alert
  * recipient email. Saves the whole shape in one POST so the UI can stay
- * a simple form — no per-row save buttons, no optimistic merges.
+ * a simple form, no per-row save buttons, no optimistic merges.
  */
+
+import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
+import { useT } from "@/i18n/i18n";
+import { apiJson } from "@/lib/api";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type LimitRow = {
@@ -317,7 +318,7 @@ function LabeledInput({
         inputMode="decimal"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="—"
+        placeholder="-"
         className="w-20 rounded-md border border-neutral-200 bg-white px-2 py-1 text-right text-[13px] tabular-nums text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-400"
       />
     </label>

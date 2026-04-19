@@ -22,7 +22,7 @@ function renderOperatorFooter(): string {
   const org = getOrganizationInfo();
   // Who's operating this Quillra instance. Every email carries the
   // operator's name/company/contact so recipients know where it's
-  // coming from and how to reach a human — also satisfies Impressum
+  // coming from and how to reach a human, also satisfies Impressum
   // / "sender identity" requirements in DE/AT and makes Gmail happier.
   const nameLine = org.company
     ? `${escapeHtml(org.company)}${org.operatorName ? ` · ${escapeHtml(org.operatorName)}` : ""}`

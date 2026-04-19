@@ -53,7 +53,7 @@ try {
   /* table may not exist yet on a fresh init */
 }
 
-// Usage accounting — one row per agent run. Written by the chat WS
+// Usage accounting, one row per agent run. Written by the chat WS
 // handler when the SDK emits its terminal `result` event; read by the
 // Organization Settings → Usage tab for per-project / per-user
 // breakdowns.
@@ -137,7 +137,7 @@ try {
   /* ignore */
 }
 
-// Instance settings — key/value store used by the first-run setup wizard
+// Instance settings, key/value store used by the first-run setup wizard
 // and any config the admin can change at runtime without restarting the
 // container (Anthropic key, GitHub token, mailer backend, etc.)
 try {
@@ -205,7 +205,7 @@ try {
 // One-shot sweep: the `translator` project role was dropped in favour
 // of narrowing member grants to admin/editor/client only. Any existing
 // translator rows are safely collapsed into `editor`, which gives the
-// user back the closest equivalent permission set. Idempotent — after
+// user back the closest equivalent permission set. Idempotent, after
 // the first boot there are no translator rows left to update.
 try {
   sqlite.prepare(`UPDATE project_members SET role = 'editor' WHERE role = 'translator'`).run();

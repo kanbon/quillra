@@ -46,7 +46,7 @@ export function DashboardPage() {
     enabled: me.kind !== "client",
   });
 
-  // Clients have no Dashboard — bounce them to their project
+  // Clients have no Dashboard, bounce them to their project
   if (me.kind === "client") {
     return <Navigate to={`/p/${me.projectId}`} replace />;
   }
@@ -120,7 +120,7 @@ export function DashboardPage() {
           </div>
         )}
 
-        {/* Loading state — skeleton grid */}
+        {/* Loading state, skeleton grid */}
         {isLoading && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[0, 1, 2, 3, 4, 5].map((i) => (

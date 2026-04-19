@@ -3,19 +3,19 @@
  *
  * Threat model: "attacker got a copy of data/cms.sqlite". Without the master
  * key that lives in the container env, the stored secrets are useless. This
- * does NOT defend against a compromised running process — the key is in
+ * does NOT defend against a compromised running process, the key is in
  * memory, and anyone with access to the container env can decrypt. That's
  * the honest trade-off for a single-box self-hosted app; enterprise
  * HSM/TPM/Vault setups are out of scope.
  *
  * On-disk format: `v1:<iv-b64url>:<ciphertext-b64url>:<authTag-b64url>`.
  * A value that doesn't start with `v1:` is treated as legacy plaintext so
- * upgrades are transparent — the instance_settings boot migration
+ * upgrades are transparent, the instance_settings boot migration
  * re-encrypts every legacy row in place on the first start after this
  * change lands.
  *
  * Key sources, in order of precedence:
- *   1. `QUILLRA_ENCRYPTION_KEY` — 32 bytes hex-encoded (64 hex chars).
+ *   1. `QUILLRA_ENCRYPTION_KEY`, 32 bytes hex-encoded (64 hex chars).
  *   2. Derived via HKDF-SHA256 from `BETTER_AUTH_SECRET`. Automatic so
  *      existing installs don't need operator action, but we log a loud
  *      warning on boot telling the owner to set `QUILLRA_ENCRYPTION_KEY`
@@ -62,7 +62,7 @@ function resolveMasterKey(): Buffer {
     if (!warnedAboutDerivedKey) {
       warnedAboutDerivedKey = true;
       console.warn(
-        "[crypto] QUILLRA_ENCRYPTION_KEY not set — deriving from BETTER_AUTH_SECRET. " +
+        "[crypto] QUILLRA_ENCRYPTION_KEY not set, deriving from BETTER_AUTH_SECRET. " +
           "Set QUILLRA_ENCRYPTION_KEY (32 hex bytes) to decouple secret encryption from session signing.",
       );
     }
@@ -91,7 +91,7 @@ export function isEncryptedV1(stored: string): boolean {
   return typeof stored === "string" && stored.startsWith(`${VERSION}:`);
 }
 
-/** Encrypt a plaintext string. Never throws on malformed input — every
+/** Encrypt a plaintext string. Never throws on malformed input, every
  *  non-empty string is wrappable. */
 export function encryptSecret(plain: string): string {
   if (plain === "") return "";

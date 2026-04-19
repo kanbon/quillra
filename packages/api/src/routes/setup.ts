@@ -1,12 +1,12 @@
 /**
  * First-run setup wizard API.
  *
- * GET  /api/setup/status                    — returns configuration status
- * POST /api/setup/save                      — writes setting values to the DB
- * GET  /api/setup/github-app/start          — emits an auto-submitting form
+ * GET  /api/setup/status, returns configuration status
+ * POST /api/setup/save, writes setting values to the DB
+ * GET  /api/setup/github-app/start, emits an auto-submitting form
  *                                              that hands the user off to the
  *                                              GitHub App Manifest flow
- * GET  /api/setup/github-app/callback       — receives the manifest code back
+ * GET  /api/setup/github-app/callback, receives the manifest code back
  *                                              from GitHub, exchanges it for
  *                                              the App credentials, persists
  *                                              them, then redirects the user
@@ -73,7 +73,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     const parsed = saveSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
-    // Only allow known keys. Silently ignore anything else — no surprise writes.
+    // Only allow known keys. Silently ignore anything else, no surprise writes.
     const allowed = new Set<SettableKey>(SETTABLE_KEYS);
     const writes: Array<{ key: SettableKey; value: string | null }> = [];
     for (const [k, v] of Object.entries(parsed.data.values)) {
@@ -82,18 +82,18 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     }
     for (const w of writes) setInstanceSetting(w.key, w.value);
 
-    // Mailer may have new SMTP/Resend config — reset its cached transport
+    // Mailer may have new SMTP/Resend config, reset its cached transport
     resetMailer();
 
     return c.json({ ok: true, status: getSetupStatus() });
   })
   /**
-   * GitHub App Manifest flow — step 1: emit an HTML page with a form that
+   * GitHub App Manifest flow, step 1: emit an HTML page with a form that
    * auto-submits to github.com/settings/apps/new with the manifest.
    *
    * This is a SERVER-RENDERED page (not JSON) because GitHub's manifest
    * flow expects a standard form POST with the manifest JSON in a hidden
-   * field. We can't do this from the SPA — the SPA can only issue
+   * field. We can't do this from the SPA, the SPA can only issue
    * JSON/fetch, not a form POST with navigation. So the wizard opens
    * this URL in the same tab, the page auto-submits the form, GitHub
    * renders its "Create GitHub App" preview, and the user clicks approve.
@@ -132,7 +132,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       // installation id and can immediately start using the App.
       setup_url: `${origin}/api/setup/github-app/installed`,
       setup_on_update: false,
-      // PUBLIC — this is required so the owner can install the App on
+      // PUBLIC, this is required so the owner can install the App on
       // organizations they admin, not just their personal account. A
       // private App created under a personal account is installable
       // only on that personal account, which breaks any self-hosted
@@ -142,7 +142,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       // installing another org's Quillra App on their own repos.
       public: true,
       default_permissions: {
-        // read+write access to repository file contents — this is what
+        // read+write access to repository file contents, this is what
         // github.com's install screen labels "Read and write access to
         // code". It's the permission that lets Quillra commit and push.
         contents: "write",
@@ -165,7 +165,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
 
     // The form posts to github.com's "new app from manifest" endpoint. A
     // tiny inline script submits it automatically so the user doesn't see
-    // an intermediate page — they just click "Create GitHub App" on
+    // an intermediate page, they just click "Create GitHub App" on
     // github.com and come back.
     const html = `<!doctype html>
 <html lang="en">
@@ -193,7 +193,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     return c.html(html);
   })
   /**
-   * GitHub App Manifest flow — step 2: receive the one-time `code` GitHub
+   * GitHub App Manifest flow, step 2: receive the one-time `code` GitHub
    * sends back after the user clicks "Create GitHub App", exchange it for
    * the real credentials (id, private key, webhook secret, etc.), persist
    * them through the encrypted instance_settings layer, and redirect the
@@ -219,7 +219,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     }
   })
   /**
-   * GitHub App Manifest flow — step 3: GitHub redirects here after the
+   * GitHub App Manifest flow, step 3: GitHub redirects here after the
    * owner finishes picking repos on github.com/apps/<slug>/installations/new
    * (this is the `setup_url` baked into the manifest). The URL carries
    * `installation_id` and `setup_action=install|update`.
@@ -228,7 +228,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
    * githubApp step (with success state), standalone flows land in
    * /admin on the Integrations tab. Since we don't track which origin
    * kicked off the flow, we check whether the instance still needs
-   * setup — if yes, the user was in the wizard; if no, they were in
+   * setup, if yes, the user was in the wizard; if no, they were in
    * Organization Settings.
    */
   .get("/github-app/installed", async (c) => {

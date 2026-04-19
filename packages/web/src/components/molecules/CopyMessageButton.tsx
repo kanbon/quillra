@@ -1,15 +1,13 @@
-import { useT } from "@/i18n/i18n";
-import { cn } from "@/lib/cn";
 /**
  * Hover-revealed copy button for chat messages. Minimal styling by
- * design: no background, no border — just a subtle light-grey icon
+ * design: no background, no border, just a subtle light-grey icon
  * at rest that darkens on hover.
  *
  * The hover-bridge problem:
  *   The button sits at `right-full` (to the left of its group, just
  *   outside the bubble's bounding box). Moving the cursor from the
- *   bubble to the icon crosses a small gap where — if the button had
- *   `pointer-events-none` — the browser would lose :hover on the
+ *   bubble to the icon crosses a small gap where, if the button had
+ *   `pointer-events-none`, the browser would lose :hover on the
  *   group, the fade-out would start, and the user wouldn't reach
  *   the icon in time to click it.
  *
@@ -32,6 +30,9 @@ import { cn } from "@/lib/cn";
  *   that window so the user sees the confirmation even if they
  *   already moved the cursor away.
  */
+
+import { useT } from "@/i18n/i18n";
+import { cn } from "@/lib/cn";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Props = {
@@ -93,7 +94,7 @@ export function CopyMessageButton({ text, className }: Props) {
       className={cn(
         // Absolutely positioned with its right edge at the bubble's
         // left edge. `pr-2.5` adds 10px of hit area to the right of
-        // the visible icon — the hover bridge.
+        // the visible icon, the hover bridge.
         "absolute right-full top-1/2 flex h-7 -translate-y-1/2 items-center pr-2.5",
         // Transition opacity cheaply; never pointer-events-none so
         // the button catches the cursor the moment it reaches its

@@ -1,6 +1,6 @@
 # Contributing to Quillra
 
-Thanks for your interest in making Quillra better! Whether you're filing a bug, proposing a feature, or shipping a pull request — you're welcome here.
+Thanks for your interest in making Quillra better! Whether you're filing a bug, proposing a feature, or shipping a pull request, you're welcome here.
 
 This document covers:
 
@@ -18,9 +18,9 @@ Quillra is released under the **[Functional Source License (FSL-1.1-MIT)](./LICE
 
 In plain English:
 
-- ✅ You can use Quillra **commercially** — run it for your own company, your clients, your agency, your side projects. Charge whatever you want for the work you do with it.
+- ✅ You can use Quillra **commercially**: run it for your own company, your clients, your agency, your side projects. Charge whatever you want for the work you do with it.
 - ✅ You can **fork it, modify it, and self-host it** for your own use.
-- ✅ After **two years**, every version automatically becomes MIT-licensed — no restrictions at all.
+- ✅ After **two years**, every version automatically becomes MIT-licensed, no restrictions at all.
 - ❌ You **cannot** use Quillra to build a **competing hosted/managed CMS service** (i.e. a "Quillra-as-a-service" competitor). That's the one thing we're protecting, because we run one ourselves.
 
 By submitting a pull request you confirm that:
@@ -28,12 +28,12 @@ By submitting a pull request you confirm that:
 1. You have the right to license your contribution under the same FSL-1.1-MIT terms, and
 2. You're submitting your work under those terms.
 
-No CLA signing required. We use the [Developer Certificate of Origin](https://developercertificate.org/) — if that's unfamiliar, the short version is: only contribute code you actually wrote or have the right to contribute, and don't include anything you'd be embarrassed to have your name on.
+No CLA signing required. We use the [Developer Certificate of Origin](https://developercertificate.org/), if that's unfamiliar, the short version is: only contribute code you actually wrote or have the right to contribute, and don't include anything you'd be embarrassed to have your name on.
 
 ## Reporting bugs
 
 1. **Search [existing issues](https://github.com/kanbon/quillra/issues) first.** Someone may already be tracking it.
-2. If it's new, open a **Bug report** using the issue template. Fill every field you can — the more we know up front, the faster it gets fixed.
+2. If it's new, open a **Bug report** using the issue template. Fill every field you can, the more we know up front, the faster it gets fixed.
 3. For **security-sensitive** issues, please email the maintainers directly instead of filing a public issue. We'll acknowledge within a few working days.
 
 Good bug reports include:
@@ -77,7 +77,7 @@ cd packages/api && DATABASE_URL=file:./data/cms.sqlite yarn db:push && cd ../..
 yarn dev    # API :3000 + Vite :5173 via Turbo
 ```
 
-First-run you'll also see the setup wizard at `http://localhost:5173/setup` — it's a nicer way to configure the secrets if you prefer a UI over editing `.env`.
+First-run you'll also see the setup wizard at `http://localhost:5173/setup`, it's a nicer way to configure the secrets if you prefer a UI over editing `.env`.
 
 **Project layout**
 
@@ -88,7 +88,7 @@ packages/web/       React 19 + Vite + Tailwind + React Query
 
 **Running tests**
 
-We don't have a formal test suite yet — please add one if you're touching anything with non-trivial logic. Until then: typecheck both packages before submitting:
+We don't have a formal test suite yet, please add one if you're touching anything with non-trivial logic. Until then: typecheck both packages before submitting:
 
 ```bash
 cd packages/api && yarn typecheck
@@ -97,7 +97,7 @@ cd packages/web && yarn typecheck
 
 ## Code style & conventions
 
-- **TypeScript strict mode** is on everywhere. Don't widen types with `any` to silence errors — fix the root cause.
+- **TypeScript strict mode** is on everywhere. Don't widen types with `any` to silence errors, fix the root cause.
 - **React components** follow atomic-ish structure: `atoms/`, `molecules/`, `organisms/`, `templates/`. New primitives go in `atoms/` or `molecules/`, complex stateful blocks go in `organisms/`.
 - **Tailwind** for all styling. No CSS-in-JS. `cn()` from `@/lib/cn` for conditional classes.
 - **Small files, small functions.** If you find yourself needing a comment block to explain what a function does, it probably wants to be split up.
@@ -108,14 +108,14 @@ cd packages/web && yarn typecheck
 ## Submitting a pull request
 
 1. Fork the repo, branch from `main`, name your branch something descriptive (`fix/preview-flicker`, `feat/smtp-backend`).
-2. Make your change. Keep it focused — if you find unrelated cleanup that's tempting, do it in a separate PR.
+2. Make your change. Keep it focused, if you find unrelated cleanup that's tempting, do it in a separate PR.
 3. Run typechecks in both packages.
 4. **If you touched anything that reads secrets or env files**, scan your diff:
    ```bash
    git diff --staged | grep -E 'sk-|ghp_|github_pat_|re_[a-z0-9]|API_KEY=[^$]|TOKEN=[^$]|PASSWORD=[^$]'
    ```
    Should be empty. Quillra is a public repo.
-5. Push and open a PR against `main` using the template. Fill it out — describe the user problem and how your change fixes it.
+5. Push and open a PR against `main` using the template. Fill it out, describe the user problem and how your change fixes it.
 6. A maintainer will review. If changes are requested, push follow-up commits to the same branch (no force-push, we squash on merge).
 
 ## Commit message style
@@ -128,8 +128,8 @@ We don't enforce Conventional Commits but we do like short, useful subject lines
 - `chore: bump framework registry with Qwik`
 - `docs: contributing guide`
 
-The body of the commit (when needed) should explain **why**, not just **what** — the diff shows what. One paragraph, plus a `Co-Authored-By:` trailer if AI helped.
+The body of the commit (when needed) should explain **why**, not just **what**: the diff shows what. One paragraph, plus a `Co-Authored-By:` trailer if AI helped.
 
 ---
 
-Thanks again — and welcome! 🪶
+Thanks again, and welcome! 🪶

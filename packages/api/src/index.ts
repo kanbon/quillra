@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Keep the process alive through library-level bugs that throw inside a
-// detached async chain — e.g. the Claude Agent SDK's MCP transport
+// detached async chain, e.g. the Claude Agent SDK's MCP transport
 // emitting an uncaught rejection mid-stream. Default node behaviour is
 // to crash the whole API container; one broken chat turn shouldn't
 // take every other signed-in user with it. Just log so the operator
@@ -144,7 +144,7 @@ function previewBootHtml(port: string | number): string {
   var steps = document.querySelectorAll('.step');
   var attempts = 0;
   var pollId = 0;
-  // Once we latch into "errored" we stop touching the DOM — otherwise a
+  // Once we latch into "errored" we stop touching the DOM, otherwise a
   // stale poll that started before the error flips us back to spinner.
   var errored = false;
 
@@ -217,7 +217,7 @@ function previewBootHtml(port: string | number): string {
  */
 // Only hide the mini dev toolbars that float at the bottom of the page.
 // NEVER hide error overlays (vite-error-overlay, astro-error-overlay, etc.)
-// — those exist to tell the user something is broken in their code and
+//, those exist to tell the user something is broken in their code and
 // swallowing them makes compile errors appear as blank pages.
 const HIDE_DEV_TOOLBARS_CSS = `
 <style data-quillra-preview>
@@ -366,7 +366,7 @@ app.get("/api/preview-status", async (c) => {
   if (!Number.isFinite(port)) return c.json({ stage: "idle", label: "Preparing", detail: "" });
 
   // Self-heal: actively probe the dev server. If it's reachable, tell the
-  // boot page to reload regardless of what our in-memory state says — the
+  // boot page to reload regardless of what our in-memory state says, the
   // map can go stale across server restarts.
   try {
     const probe = await fetch(`http://127.0.0.1:${port}/`, {
@@ -377,7 +377,7 @@ app.get("/api/preview-status", async (c) => {
       return c.json({ stage: "ready", label: "Ready", detail: "Loading your site…" });
     }
   } catch {
-    /* not reachable yet — fall through to status reporting */
+    /* not reachable yet, fall through to status reporting */
   }
 
   const projectId = getProjectByPort(port);
@@ -444,7 +444,7 @@ app.get("/ws/chat/:projectId", upgradeWebSocket(chatWsHandler));
 
 /* ── Preview reverse proxy ────────────────────────────────────────────
  * Proxies /__preview/:port/* → localhost:port/* so the preview iframe
- * loads over the same HTTPS origin — no mixed-content, no extra DNS.
+ * loads over the same HTTPS origin, no mixed-content, no extra DNS.
  */
 app.all("/__preview/:port{[0-9]+}/*", async (c) => {
   const port = c.req.param("port");

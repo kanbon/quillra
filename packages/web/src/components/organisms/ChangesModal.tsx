@@ -1,20 +1,21 @@
+/**
+ * Technical, git-like changes overview for the ProjectHeader "N changes"
+ * pill. Shows one collapsible card per changed file with its unified diff
+ * (red/green line-by-line), plus a list of unpushed commits at the top.
+ *
+ * Deliberately not pretty and not translated, this is the debug view the
+ * user asked for: "a technical almost debug like overview of changes".
+ * It's meant to be informationally dense and instantly obvious to anyone
+ * who has ever typed `git status`. We do not apologize for showing raw
+ * diff hunks here, that's the point.
+ */
+
 import { Modal } from "@/components/atoms/Modal";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useQueryClient } from "@tanstack/react-query";
-/**
- * Technical, git-like changes overview for the ProjectHeader "N changes"
- * pill. Shows one collapsible card per changed file with its unified diff
- * (red/green line-by-line), plus a list of unpushed commits at the top.
- *
- * Deliberately not pretty and not translated — this is the debug view the
- * user asked for: "a technical almost debug like overview of changes".
- * It's meant to be informationally dense and instantly obvious to anyone
- * who has ever typed `git status`. We do not apologize for showing raw
- * diff hunks here — that's the point.
- */
 import { useEffect, useState } from "react";
 
 type FileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed";
@@ -124,7 +125,7 @@ function FileCard({ file }: { file: FileChange }) {
       )}
       {expanded && file.isBinary && (
         <div className="border-t border-neutral-200 bg-neutral-50 px-4 py-3 text-[11px] text-neutral-500">
-          Binary file — no diff preview.
+          Binary file, no diff preview.
         </div>
       )}
       {expanded && !file.isBinary && !file.diff && (
@@ -181,7 +182,7 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
       void qc.invalidateQueries({ queryKey: ["publish-status", projectId] });
       // Tell the Editor (if mounted) to refresh its preview iframe.
       // The dev server's file watcher should HMR most edits, but a
-      // hard reset touches a lot of files at once — a cheap iframe
+      // hard reset touches a lot of files at once, a cheap iframe
       // src bump guarantees the user sees the reverted state
       // without having to manually refresh.
       window.dispatchEvent(new CustomEvent("quillra:refresh-preview"));
@@ -201,7 +202,7 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-neutral-900">Pending changes</h2>
           <p className="text-[12px] text-neutral-500">
-            Technical view — uncommitted files and unpushed commits.
+            Technical view, uncommitted files and unpushed commits.
           </p>
         </div>
         <button
