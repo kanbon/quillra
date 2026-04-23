@@ -337,6 +337,22 @@ function sweepStaleGitLocks(repoPath: string): void {
  */
 const repoOpQueue = new Map<string, Promise<unknown>>();
 
+/**
+ * Run an async operation while holding the per-project git lock. Exposed
+ * so the sync service (pull, merge, conflict-resolver) shares the same
+ * serialisation as the chat turn, avoiding `.git/index.lock` races when
+ * a remote-sync fetch collides with an in-flight chat.
+ */
+export function runInProjectLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+  return withRepoLock(projectId, op);
+}
+
+/** Thin factory so callers don't have to import simple-git directly just
+ *  to get a handle on a project's workspace clone. */
+export function simpleGitForProject(repoPath: string) {
+  return simpleGit(repoPath);
+}
+
 function withRepoLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
   const prev = repoOpQueue.get(projectId) ?? Promise.resolve();
   const next = prev.then(op, op); // run op whether prev resolved or rejected

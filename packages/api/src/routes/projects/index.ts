@@ -6,6 +6,7 @@ import { presenceRouter } from "./presence.js";
 import { previewRouter } from "./preview.js";
 import { publishRouter } from "./publish.js";
 import type { Variables } from "./shared.js";
+import { syncRouter } from "./sync.js";
 
 export const projectsRouter = new Hono<{ Variables: Variables }>()
   .route("/", crudRouter)
@@ -13,4 +14,5 @@ export const projectsRouter = new Hono<{ Variables: Variables }>()
   .route("/", previewRouter)
   .route("/", chatRouter)
   .route("/", filesRouter)
-  .route("/", presenceRouter);
+  .route("/", presenceRouter)
+  .route("/", syncRouter);

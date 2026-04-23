@@ -12,10 +12,12 @@ import { EditorChrome } from "@/components/organisms/editor/EditorChrome";
 import { EditorMobileSheet } from "@/components/organisms/editor/EditorMobileSheet";
 import { EditorPreviewPanel } from "@/components/organisms/editor/EditorPreviewPanel";
 import { EditorPublishModal } from "@/components/organisms/editor/EditorPublishModal";
+import { EditorSyncModal, EditorSyncToast } from "@/components/organisms/editor/EditorSyncModal";
 import { useEditorMigration } from "@/components/organisms/editor/useEditorMigration";
 import { useEditorPaste } from "@/components/organisms/editor/useEditorPaste";
 import { useEditorPreview } from "@/components/organisms/editor/useEditorPreview";
 import { useEditorPublish } from "@/components/organisms/editor/useEditorPublish";
+import { useEditorSync } from "@/components/organisms/editor/useEditorSync";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useProjectChat } from "@/hooks/useProjectChat";
 import { apiJson } from "@/lib/api";
@@ -156,6 +158,11 @@ export function EditorPage() {
     send,
   });
 
+  // Remote-sync check on editor load. Silently fast-forwards when safe,
+  // surfaces a modal when the user has local changes AND the team pushed
+  // new commits. See components/organisms/editor/useEditorSync.ts.
+  const sync = useEditorSync(id);
+
   const startNewChat = useCallback(() => {
     if (id) clearNewChat(id);
     setConversationId(null);
@@ -244,6 +251,9 @@ export function EditorPage() {
         publishStatus={publishStatus}
         publishStatusLoading={publishStatusLoading}
       />
+
+      <EditorSyncModal controller={sync} />
+      <EditorSyncToast toast={sync.toast} />
     </div>
   );
 }
