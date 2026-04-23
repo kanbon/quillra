@@ -23,6 +23,7 @@ import { DIAGNOSTICS_TOOL_HINT, LANGUAGE_NAMES, QUILLRA_SYSTEM_PROMPT } from "./
 import { mapSdkMessageToClient } from "./agent-stream-mapper.js";
 import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
 import { getInstanceSetting } from "./instance-settings.js";
+import { type RoleName, getRolePrompt } from "./role-prompts.js";
 
 export { mapSdkMessageToClient } from "./agent-stream-mapper.js";
 
@@ -119,6 +120,19 @@ export async function* runProjectAgent(params: {
   const diagnosticsEligible = params.role === "admin" || params.role === "editor";
   if (diagnosticsEligible) {
     systemPromptText = `${systemPromptText}\n\n---\n\n${DIAGNOSTICS_TOOL_HINT}`;
+  }
+
+  // Operator-editable behavior guidance for this role. Falls back to the
+  // built-in default when the owner hasn't customized the prompt. Lives
+  // under its own heading so the agent can tell it apart from the other
+  // sections; contents are plain English, not a rule list.
+  try {
+    const rolePrompt = await getRolePrompt(params.role as RoleName);
+    if (rolePrompt.trim()) {
+      systemPromptText = `${systemPromptText}\n\n---\n\nRole-specific guidance (${params.role}):\n${rolePrompt}`;
+    }
+  } catch {
+    /* db lookup failed, run with the base prompt rather than blocking the turn */
   }
   const buildDiagnosticsForThisQuery = () =>
     diagnosticsEligible

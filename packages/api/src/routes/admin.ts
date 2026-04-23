@@ -19,6 +19,13 @@ import {
 } from "../services/instance-settings.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 import { reconcileMonthlyReports } from "../services/report-scheduler.js";
+import {
+  ROLE_NAMES,
+  type RoleName,
+  listRolePrompts,
+  resetRolePrompt,
+  setRolePrompt,
+} from "../services/role-prompts.js";
 import { getOwnerEmail, listUsageLimitRows, upsertUsageLimit } from "../services/usage-limits.js";
 
 type Variables = { user: SessionUser | null };
@@ -506,4 +513,53 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     if ("error" in r) return r.error;
     const result = await reconcileMonthlyReports();
     return c.json(result);
+  })
+
+  /**
+   * List every role's effective permission prompt. Used by the Instance
+   * Settings "Permissions" tab. Returns the built-in default alongside
+   * the current value so the UI can render a "Reset to default" control.
+   */
+  .get("/role-prompts", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const rows = await listRolePrompts();
+    return c.json({ roles: rows });
+  })
+
+  /**
+   * Replace the stored prompt for one role. Empty values are rejected;
+   * reset-to-default goes through DELETE instead.
+   */
+  .put("/role-prompts/:role", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const role = c.req.param("role") as RoleName;
+    if (!(ROLE_NAMES as readonly string[]).includes(role)) {
+      return c.json({ error: "Unknown role" }, 400);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ prompt: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    try {
+      await setRolePrompt(role, parsed.data.prompt);
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Save failed" }, 400);
+    }
+  })
+
+  /**
+   * Drop the stored row for one role so the built-in default takes over
+   * on the next chat turn. Idempotent: returns the default either way.
+   */
+  .delete("/role-prompts/:role", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const role = c.req.param("role") as RoleName;
+    if (!(ROLE_NAMES as readonly string[]).includes(role)) {
+      return c.json({ error: "Unknown role" }, 400);
+    }
+    const defaultPrompt = await resetRolePrompt(role);
+    return c.json({ ok: true, prompt: defaultPrompt });
   });

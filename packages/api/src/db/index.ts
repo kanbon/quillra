@@ -202,6 +202,20 @@ try {
   /* table may not exist yet on a fresh init */
 }
 
+// Operator-editable behavior prompt per project role. Rows are seeded
+// lazily: when a prompt is missing we fall back to the built-in default
+// from services/role-prompts.ts, so there's nothing to bootstrap here
+// beyond creating the table.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS role_permission_prompts (
+    role TEXT PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+} catch {
+  /* ignore */
+}
+
 // One-shot sweep: the `translator` project role was dropped in favour
 // of narrowing member grants to admin/editor/client only. Any existing
 // translator rows are safely collapsed into `editor`, which gives the

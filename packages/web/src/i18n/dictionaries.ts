@@ -415,6 +415,7 @@ const enDict = {
     tabIntegrations: "Integrations",
     tabUsage: "Usage",
     tabTeam: "Team",
+    tabPermissions: "Permissions",
     // General tab
     publiclyVisible: "Publicly visible.",
     publiclyVisibleBody: "These values appear in every email footer and on the public impressum page.",
@@ -912,6 +913,7 @@ export const de: Mirror<Dictionary> = {
     tabIntegrations: "Integrationen",
     tabUsage: "Nutzung",
     tabTeam: "Team",
+    tabPermissions: "Berechtigungen",
     publiclyVisible: "Öffentlich sichtbar.",
     publiclyVisibleBody: "Diese Werte erscheinen in jeder E-Mail-Fußzeile und auf der öffentlichen Impressum-Seite.",
     instanceNameLabel: "Instanzname",

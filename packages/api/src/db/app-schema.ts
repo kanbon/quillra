@@ -274,6 +274,26 @@ export const usageReportsSent = sqliteTable(
   (table) => [index("usage_reports_sent_user_idx").on(table.userId)],
 );
 
+/**
+ * Operator-editable system-prompt fragment per project role.
+ *
+ * The hard-coded tool allow-list in services/agent-permissions.ts is still
+ * what bounds what an agent can actually do. This table stores plain-English
+ * behavior guidance (tone, scope, what to confirm, etc.) that gets appended
+ * to the agent's system prompt when a user with that role starts a chat.
+ *
+ * Seeded with defaults from services/role-prompts.ts on first boot. Owners
+ * edit the rows from Instance Settings. Missing rows fall back to the
+ * built-in default.
+ */
+export const rolePermissionPrompts = sqliteTable("role_permission_prompts", {
+  role: text("role").primaryKey(),
+  prompt: text("prompt").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+});
+
 export const messages = sqliteTable(
   "messages",
   {

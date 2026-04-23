@@ -17,6 +17,7 @@ import { ApiKeysTab } from "@/components/organisms/instance-settings/ApiKeysTab"
 import { EmailTab } from "@/components/organisms/instance-settings/EmailTab";
 import { GeneralTab } from "@/components/organisms/instance-settings/GeneralTab";
 import { IntegrationsTab } from "@/components/organisms/instance-settings/IntegrationsTab";
+import { PermissionsTab } from "@/components/organisms/instance-settings/PermissionsTab";
 import { TeamTab } from "@/components/organisms/instance-settings/TeamTab";
 import { UsageTab } from "@/components/organisms/instance-settings/UsageTab";
 import type { StatusResponse } from "@/components/organisms/instance-settings/types";
@@ -25,7 +26,7 @@ import { apiJson } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-type TabId = "general" | "apiKeys" | "email" | "integrations" | "usage" | "team";
+type TabId = "general" | "apiKeys" | "email" | "integrations" | "usage" | "team" | "permissions";
 const VALID_TAB_IDS: ReadonlyArray<TabId> = [
   "general",
   "apiKeys",
@@ -33,6 +34,7 @@ const VALID_TAB_IDS: ReadonlyArray<TabId> = [
   "integrations",
   "usage",
   "team",
+  "permissions",
 ];
 function isTabId(s: string | null): s is TabId {
   return s !== null && (VALID_TAB_IDS as ReadonlyArray<string>).includes(s);
@@ -202,6 +204,25 @@ export function InstanceSettingsPage() {
         </svg>
       ),
     },
+    {
+      id: "permissions",
+      label: t("instanceSettings.tabPermissions"),
+      icon: (
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1.8}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9 12a3 3 0 106 0 3 3 0 00-6 0zm-5.386-1.35A11.954 11.954 0 0112 2.944a11.954 11.954 0 018.386 7.706c.08.26.08.548 0 .808a11.954 11.954 0 01-8.386 7.706 11.954 11.954 0 01-8.386-7.706.994.994 0 010-.808z"
+          />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -274,6 +295,7 @@ export function InstanceSettingsPage() {
             )}
             {active === "usage" && <UsageTab />}
             {active === "team" && <TeamTab />}
+            {active === "permissions" && <PermissionsTab />}
           </main>
         </div>
       )}
