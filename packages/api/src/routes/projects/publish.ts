@@ -298,8 +298,13 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     if ("error" in r) return r.error;
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
-    if (!m || (m.role !== "admin" && m.role !== "editor")) {
-      return c.json({ error: "Only editors and admins can publish." }, 403);
+    // Every project member can publish. Clients and translators see the
+    // button too: "I'm done, put it live" is the end of their workflow.
+    // The security boundary remains the per-role agent tool allow-list,
+    // publish itself is just a git push of whatever the agent already
+    // committed during chat.
+    if (!m) {
+      return c.json({ error: "You are not a member of this project." }, 403);
     }
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);

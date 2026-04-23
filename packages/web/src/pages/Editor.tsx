@@ -164,14 +164,18 @@ export function EditorPage() {
 
   if (!id) return null;
 
-  const canPublish = project?.role === "admin" || project?.role === "editor";
+  // Every project member can publish, including clients and translators.
+  // Publish is git push of whatever the agent already committed; the
+  // per-role agent tool allow-list is what bounds what actually lands
+  // in those commits.
+  const canPublish = Boolean(project?.role);
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-white">
       <EditorChrome
         projectId={id}
         projectName={project?.name ?? "…"}
-        canPublish={Boolean(canPublish)}
+        canPublish={canPublish}
         publishing={publishMut.isPending}
         onPublish={openPublishModal}
         error={error}
