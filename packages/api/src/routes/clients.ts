@@ -21,6 +21,7 @@ import { nanoid } from "nanoid";
 import { user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import { clientLoginCodes, clientSessions, projectMembers, projects } from "../db/schema.js";
+import { getProjectBrand } from "../services/branding.js";
 import { loginCodeEmailHtml } from "../services/email-templates.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
@@ -47,16 +48,30 @@ function generateCode(): string {
 }
 
 export const clientsRouter = new Hono()
-  /** Public, used by the branded login page to render the project's logo + name */
+  /**
+   * Public, used by the branded login page to render the project's
+   * effective brand (project > group > instance > Quillra default). The
+   * shape stays backward-compatible with the old `{id, name, logoUrl}`
+   * payload, plus three new fields the white-label flow needs.
+   */
   .get("/branding/:projectId", async (c) => {
     const projectId = c.req.param("projectId");
     const [p] = await db
-      .select({ id: projects.id, name: projects.name, logoUrl: projects.logoUrl })
+      .select({ id: projects.id })
       .from(projects)
       .where(eq(projects.id, projectId))
       .limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
-    return c.json(p);
+    const referer = new URL(c.req.url).host || null;
+    const brand = await getProjectBrand(projectId, referer);
+    return c.json({
+      id: p.id,
+      name: brand.displayName,
+      logoUrl: brand.logoUrl,
+      accentColor: brand.accentColor,
+      tagline: brand.tagline,
+      poweredBy: brand.poweredBy,
+    });
   })
 
   /** Send a 6-digit login code to a client's email for the given project */

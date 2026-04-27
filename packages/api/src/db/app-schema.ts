@@ -5,6 +5,38 @@ import { user } from "./auth-schema.js";
 export const projectRoleValues = ["admin", "editor", "client"] as const;
 export type ProjectRole = (typeof projectRoleValues)[number];
 
+/**
+ * Project groups. Optional grouping that lets one operator host multiple
+ * agencies on the same Quillra instance, each with its own brand: logo,
+ * accent color, and display name. Projects inside a group inherit the
+ * group's brand by default; per-project overrides take precedence.
+ *
+ * The group has its own slug so the customer-facing portal URL doesn't
+ * leak the operator's instance domain when the operator wires up a
+ * subdomain or proxy in front. Slugs are lowercase letters, digits, and
+ * hyphens; uniqueness enforced at the DB level.
+ */
+export const projectGroups = sqliteTable("project_groups", {
+  id: text("id").primaryKey(),
+  /** Display name shown to clients (e.g. "Acme Studio"). */
+  name: text("name").notNull(),
+  /** URL-safe slug used in the portal route. Globally unique. */
+  slug: text("slug").notNull().unique(),
+  /** Brand assets cascade: project's value > group's value > instance default > Quillra. */
+  brandLogoUrl: text("brand_logo_url"),
+  brandAccentColor: text("brand_accent_color"),
+  brandDisplayName: text("brand_display_name"),
+  /** Optional one-line tagline shown under the brand on the portal page. */
+  brandTagline: text("brand_tagline"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .$onUpdate(() => new Date())
+    .notNull(),
+});
+
 export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -15,6 +47,17 @@ export const projects = sqliteTable("projects", {
   previewDevCommand: text("preview_dev_command"),
   /** Optional URL of a logo shown on the branded client login page */
   logoUrl: text("logo_url"),
+  /**
+   * Per-project brand overrides. When set they win over the group brand
+   * and the instance brand. NULL means inherit from the group (or fall
+   * through to the instance / Quillra default).
+   */
+  brandDisplayName: text("brand_display_name"),
+  brandAccentColor: text("brand_accent_color"),
+  /** Optional FK to a project group. Set NULL to keep the project ungrouped. */
+  groupId: text("group_id").references(() => projectGroups.id, {
+    onDelete: "set null",
+  }),
   /**
    * Set to "astro" while the migration agent is actively rewriting
    * the project to Astro. Server clears this to NULL when the agent

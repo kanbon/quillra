@@ -190,9 +190,11 @@ How commits land in the repo and how downstream pipelines react.
 
 Make every Quillra instance feel like the operator's product, not Quillra's.
 
-- **White-label client portal.** Today the client login page already takes a per-project logo. Next: custom accent color, custom domain (`edit.yourbrand.com`), and a "Powered by Quillra" toggle the operator can flip off.
+- ✅ **Per-project white-label** *(shipped).* Each project carries its own display name, accent color, and logo, layered over an optional **project group** (one Quillra instance, many agencies, each with their own brand) and the instance defaults. Client login + editor chrome render the effective brand; nothing on those surfaces says "Quillra" to the client. Set up under Project Settings → Branding and Organization Settings → Groups.
 
-- **Project-level theming.** Logo and accent color applied to the editor chrome and outbound emails for that project, so clients of different agencies on the same instance each see their own brand.
+- **Cross-project customer portal.** A `/portal/:groupSlug` landing page where a client logs in once and lands on a branded overview of every project they're a member of inside that group. Today they sign in per-project; this stitches them together.
+
+- **Custom domain per group.** `edit.yourbrand.com` instead of `cms.example.com`. Adds the DNS + on-demand TLS plumbing for true white-label without the operator domain leaking into the URL bar.
 
 - **Email template editor.** WYSIWYG for the invite, usage-warning, and monthly-report emails. Tag-style variables for fields like `{user_name}`, `{project_name}`, `{spend_month_to_date}`. Per-instance defaults, per-project overrides for agency-style "this is from Studio X" mailings.
 

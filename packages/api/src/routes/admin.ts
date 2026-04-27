@@ -3,7 +3,7 @@ import { eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { instanceInvites, projectMembers, projects } from "../db/app-schema.js";
+import { instanceInvites, projectGroups, projectMembers, projects } from "../db/app-schema.js";
 import { user } from "../db/auth-schema.js";
 import { db, rawSqlite } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
@@ -562,4 +562,129 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     }
     const defaultPrompt = await resetRolePrompt(role);
     return c.json({ ok: true, prompt: defaultPrompt });
+  })
+
+  /**
+   * Project groups (white-label container). The same Quillra instance
+   * can host multiple agencies, each with its own brand and project
+   * subset. Owner-only because misuse here would let anyone rename or
+   * detach a peer agency's projects.
+   */
+  .get("/groups", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const rows = await db.select().from(projectGroups).orderBy(projectGroups.name);
+    // For each group, count how many projects reference it. Cheap with
+    // the small project counts we expect on a single instance.
+    const projectCountByGroup = new Map<string, number>();
+    const all = await db.select({ id: projects.id, groupId: projects.groupId }).from(projects);
+    for (const p of all) {
+      if (!p.groupId) continue;
+      projectCountByGroup.set(p.groupId, (projectCountByGroup.get(p.groupId) ?? 0) + 1);
+    }
+    return c.json({
+      groups: rows.map((g) => ({
+        ...g,
+        projectCount: projectCountByGroup.get(g.id) ?? 0,
+      })),
+    });
+  })
+
+  .post("/groups", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const body = await c.req.json().catch(() => null);
+    const schema = z.object({
+      name: z.string().min(1).max(120),
+      slug: z
+        .string()
+        .min(2)
+        .max(40)
+        .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "Lowercase letters, digits, and hyphens"),
+      brandLogoUrl: z.string().url().optional().nullable(),
+      brandAccentColor: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/, "Hex color like #C1121F")
+        .optional()
+        .nullable(),
+      brandDisplayName: z.string().max(120).optional().nullable(),
+      brandTagline: z.string().max(200).optional().nullable(),
+    });
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    try {
+      const id = nanoid();
+      await db.insert(projectGroups).values({
+        id,
+        name: parsed.data.name.trim(),
+        slug: parsed.data.slug.trim(),
+        brandLogoUrl: parsed.data.brandLogoUrl?.trim() || null,
+        brandAccentColor: parsed.data.brandAccentColor?.trim() || null,
+        brandDisplayName: parsed.data.brandDisplayName?.trim() || null,
+        brandTagline: parsed.data.brandTagline?.trim() || null,
+      });
+      return c.json({ id, ok: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Create failed";
+      // SQLite UNIQUE on slug => surface a friendly error.
+      if (msg.toLowerCase().includes("unique")) {
+        return c.json({ error: "A group with that slug already exists." }, 409);
+      }
+      return c.json({ error: msg }, 500);
+    }
+  })
+
+  .put("/groups/:id", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => null);
+    const schema = z
+      .object({
+        name: z.string().min(1).max(120).optional(),
+        slug: z
+          .string()
+          .min(2)
+          .max(40)
+          .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/)
+          .optional(),
+        brandLogoUrl: z.string().url().nullable().optional(),
+        brandAccentColor: z
+          .string()
+          .regex(/^#[0-9a-fA-F]{6}$/)
+          .nullable()
+          .optional(),
+        brandDisplayName: z.string().max(120).nullable().optional(),
+        brandTagline: z.string().max(200).nullable().optional(),
+      })
+      .strict();
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    const patch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(parsed.data)) {
+      // Trim strings; pass through nulls so the operator can clear a field.
+      if (typeof v === "string") patch[k] = v.trim();
+      else patch[k] = v;
+    }
+    if (Object.keys(patch).length === 0) return c.json({ ok: true });
+    try {
+      await db.update(projectGroups).set(patch).where(eq(projectGroups.id, id));
+      return c.json({ ok: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Save failed";
+      if (msg.toLowerCase().includes("unique")) {
+        return c.json({ error: "A group with that slug already exists." }, 409);
+      }
+      return c.json({ error: msg }, 500);
+    }
+  })
+
+  .delete("/groups/:id", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const id = c.req.param("id");
+    // The FK on projects.groupId is ON DELETE SET NULL, so projects
+    // detach automatically and inherit instance defaults.
+    await db.delete(projectGroups).where(eq(projectGroups.id, id));
+    return c.json({ ok: true });
   });

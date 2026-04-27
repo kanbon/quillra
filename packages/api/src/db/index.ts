@@ -216,6 +216,42 @@ try {
   /* ignore */
 }
 
+// Project groups + per-project brand override columns. The white-label
+// system layers project > group > instance > Quillra default; this
+// block creates the table and adds the columns to projects on existing
+// installs that already had the table.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS project_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    brand_logo_url TEXT,
+    brand_accent_color TEXT,
+    brand_display_name TEXT,
+    brand_tagline TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+  sqlite.exec("CREATE INDEX IF NOT EXISTS project_groups_slug_idx ON project_groups(slug)");
+} catch {
+  /* ignore */
+}
+try {
+  ensureColumn("projects", "brand_display_name", "TEXT");
+} catch {
+  /* table may not exist yet on a fresh init */
+}
+try {
+  ensureColumn("projects", "brand_accent_color", "TEXT");
+} catch {
+  /* table may not exist yet on a fresh init */
+}
+try {
+  ensureColumn("projects", "group_id", "TEXT");
+} catch {
+  /* table may not exist yet on a fresh init */
+}
+
 // One-shot sweep: the `translator` project role was dropped in favour
 // of narrowing member grants to admin/editor/client only. Any existing
 // translator rows are safely collapsed into `editor`, which gives the

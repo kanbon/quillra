@@ -8,6 +8,7 @@
 
 import { Heading } from "@/components/atoms/Heading";
 import { ProjectHeader } from "@/components/organisms/ProjectHeader";
+import { BrandingSection } from "@/components/organisms/project-settings/BrandingSection";
 import { DangerZoneSection } from "@/components/organisms/project-settings/DangerZoneSection";
 import { GeneralSection } from "@/components/organisms/project-settings/GeneralSection";
 import { TeamSection } from "@/components/organisms/project-settings/TeamSection";
@@ -44,8 +45,20 @@ export function ProjectSettingsPage() {
         defaultBranch: string;
         previewDevCommand: string | null;
         logoUrl: string | null;
+        brandDisplayName: string | null;
+        brandAccentColor: string | null;
+        groupId: string | null;
       }>(`/api/projects/${id}`),
   });
+
+  // Owner check controls the group picker visibility in BrandingSection.
+  // The instance-settings session endpoint already gates this server-side.
+  const sessionQ = useQuery({
+    queryKey: ["session"],
+    queryFn: () => apiJson<{ user: { instanceRole?: string | null } | null }>("/api/session"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const isOwner = sessionQ.data?.user?.instanceRole === "owner";
 
   const {
     register: registerProject,
@@ -125,6 +138,19 @@ export function ProjectSettingsPage() {
               repoFull={repoFull}
               branch={branch}
               nameVal={nameVal}
+            />
+          )}
+
+          {projectQ.data && (
+            <BrandingSection
+              projectId={id}
+              isAdmin={Boolean(isAdmin)}
+              isOwner={Boolean(isOwner)}
+              initial={{
+                brandDisplayName: projectQ.data.brandDisplayName,
+                brandAccentColor: projectQ.data.brandAccentColor,
+                groupId: projectQ.data.groupId,
+              }}
             />
           )}
 

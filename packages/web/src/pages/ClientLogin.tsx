@@ -21,7 +21,12 @@ type Branding = {
   id: string;
   name: string;
   logoUrl: string | null;
+  accentColor?: string | null;
+  tagline?: string | null;
+  poweredBy?: { label: string; href: string } | null;
 };
+
+const DEFAULT_ACCENT = "#C1121F";
 
 function initialsOf(name: string): string {
   return (
@@ -123,8 +128,13 @@ export function ClientLoginPage() {
     );
   }
 
+  const accent = branding?.accentColor || DEFAULT_ACCENT;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-neutral-50 to-neutral-100 px-4">
+    <div
+      className="flex min-h-screen items-center justify-center bg-gradient-to-b from-neutral-50 to-neutral-100 px-4"
+      style={{ ["--brand-accent" as string]: accent } as React.CSSProperties}
+    >
       <div className="w-full max-w-md">
         <div className="overflow-hidden rounded-3xl border border-neutral-200/80 bg-white shadow-xl shadow-neutral-200/50">
           <div className="flex flex-col items-center px-8 pb-2 pt-10">
@@ -163,17 +173,18 @@ export function ClientLoginPage() {
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="h-12 rounded-xl border border-neutral-200 bg-white px-4 text-[15px] text-neutral-900 placeholder:text-neutral-400 transition-colors focus:border-neutral-900 focus:outline-none focus:ring-0"
+                  className="h-12 rounded-xl border border-neutral-200 bg-white px-4 text-[15px] text-neutral-900 placeholder:text-neutral-400 transition-colors focus:border-[var(--brand-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-accent)]/30"
                   disabled={submitting}
                 />
                 <button
                   type="submit"
                   disabled={submitting || !email.trim()}
+                  style={{ backgroundColor: "var(--brand-accent)" }}
                   className={cn(
-                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-neutral-900 text-[15px] font-semibold text-white shadow-sm transition-all",
+                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold text-white shadow-sm transition-all",
                     submitting || !email.trim()
                       ? "cursor-not-allowed opacity-50"
-                      : "hover:bg-neutral-800 hover:shadow",
+                      : "hover:opacity-90 hover:shadow",
                   )}
                 >
                   {submitting ? (
@@ -210,7 +221,7 @@ export function ClientLoginPage() {
                   placeholder="123456"
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="h-14 rounded-xl border border-neutral-200 bg-white px-4 text-center font-mono text-[24px] tracking-[0.4em] text-neutral-900 placeholder:text-neutral-300 transition-colors focus:border-neutral-900 focus:outline-none focus:ring-0"
+                  className="h-14 rounded-xl border border-neutral-200 bg-white px-4 text-center font-mono text-[24px] tracking-[0.4em] text-neutral-900 placeholder:text-neutral-300 transition-colors focus:border-[var(--brand-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-accent)]/30"
                   disabled={submitting}
                 />
                 {devCode && (
@@ -222,11 +233,12 @@ export function ClientLoginPage() {
                 <button
                   type="submit"
                   disabled={submitting || code.length !== 6}
+                  style={{ backgroundColor: "var(--brand-accent)" }}
                   className={cn(
-                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-neutral-900 text-[15px] font-semibold text-white shadow-sm transition-all",
+                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold text-white shadow-sm transition-all",
                     submitting || code.length !== 6
                       ? "cursor-not-allowed opacity-50"
-                      : "hover:bg-neutral-800 hover:shadow",
+                      : "hover:opacity-90 hover:shadow",
                   )}
                 >
                   {submitting ? (
@@ -256,9 +268,18 @@ export function ClientLoginPage() {
             )}
           </div>
         </div>
-        <p className="mt-6 text-center text-[10px] uppercase tracking-[0.18em] text-neutral-400">
-          Powered by Quillra
-        </p>
+        {branding?.poweredBy && (
+          <p className="mt-6 text-center">
+            <a
+              href={branding.poweredBy.href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-[11px] text-neutral-400 hover:text-neutral-600"
+            >
+              {branding.poweredBy.label}
+            </a>
+          </p>
+        )}
       </div>
     </div>
   );

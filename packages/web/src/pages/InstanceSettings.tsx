@@ -16,6 +16,7 @@ import { type TabItem, Tabs } from "@/components/molecules/Tabs";
 import { ApiKeysTab } from "@/components/organisms/instance-settings/ApiKeysTab";
 import { EmailTab } from "@/components/organisms/instance-settings/EmailTab";
 import { GeneralTab } from "@/components/organisms/instance-settings/GeneralTab";
+import { GroupsTab } from "@/components/organisms/instance-settings/GroupsTab";
 import { IntegrationsTab } from "@/components/organisms/instance-settings/IntegrationsTab";
 import { PermissionsTab } from "@/components/organisms/instance-settings/PermissionsTab";
 import { TeamTab } from "@/components/organisms/instance-settings/TeamTab";
@@ -26,7 +27,15 @@ import { apiJson } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-type TabId = "general" | "apiKeys" | "email" | "integrations" | "usage" | "team" | "permissions";
+type TabId =
+  | "general"
+  | "apiKeys"
+  | "email"
+  | "integrations"
+  | "usage"
+  | "team"
+  | "permissions"
+  | "groups";
 const VALID_TAB_IDS: ReadonlyArray<TabId> = [
   "general",
   "apiKeys",
@@ -35,6 +44,7 @@ const VALID_TAB_IDS: ReadonlyArray<TabId> = [
   "usage",
   "team",
   "permissions",
+  "groups",
 ];
 function isTabId(s: string | null): s is TabId {
   return s !== null && (VALID_TAB_IDS as ReadonlyArray<string>).includes(s);
@@ -223,6 +233,22 @@ export function InstanceSettingsPage() {
         </svg>
       ),
     },
+    {
+      id: "groups",
+      label: t("instanceSettings.tabGroups"),
+      icon: (
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1.8}
+        >
+          <rect x="4" y="4" width="12" height="12" rx="2" />
+          <rect x="8" y="8" width="12" height="12" rx="2" />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -296,6 +322,7 @@ export function InstanceSettingsPage() {
             {active === "usage" && <UsageTab />}
             {active === "team" && <TeamTab />}
             {active === "permissions" && <PermissionsTab />}
+            {active === "groups" && <GroupsTab />}
           </main>
         </div>
       )}

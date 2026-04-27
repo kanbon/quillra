@@ -86,6 +86,9 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
       defaultBranch: p.defaultBranch,
       previewDevCommand: p.previewDevCommand,
       logoUrl: p.logoUrl,
+      brandDisplayName: p.brandDisplayName,
+      brandAccentColor: p.brandAccentColor,
+      groupId: p.groupId,
       migrationTarget: p.migrationTarget,
       role: m.role,
     });
@@ -117,6 +120,13 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
         )
         .nullable()
         .optional(),
+      brandDisplayName: z.string().max(120).nullable().optional(),
+      brandAccentColor: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/, "Hex color like #C1121F")
+        .nullable()
+        .optional(),
+      groupId: z.string().nullable().optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
@@ -126,6 +136,9 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
       githubRepoFullName?: string;
       defaultBranch?: string;
       logoUrl?: string | null;
+      brandDisplayName?: string | null;
+      brandAccentColor?: string | null;
+      groupId?: string | null;
       updatedAt: Date;
     } = { updatedAt: new Date() };
     if (parsed.data.name !== undefined) patch.name = parsed.data.name;
@@ -135,6 +148,11 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
       patch.githubRepoFullName = parsed.data.githubRepoFullName;
     if (parsed.data.defaultBranch !== undefined) patch.defaultBranch = parsed.data.defaultBranch;
     if (parsed.data.logoUrl !== undefined) patch.logoUrl = parsed.data.logoUrl;
+    if (parsed.data.brandDisplayName !== undefined)
+      patch.brandDisplayName = parsed.data.brandDisplayName?.trim() || null;
+    if (parsed.data.brandAccentColor !== undefined)
+      patch.brandAccentColor = parsed.data.brandAccentColor?.trim() || null;
+    if (parsed.data.groupId !== undefined) patch.groupId = parsed.data.groupId || null;
 
     const repoChanged =
       patch.githubRepoFullName !== undefined &&

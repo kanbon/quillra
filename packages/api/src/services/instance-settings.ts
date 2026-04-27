@@ -49,6 +49,13 @@ export const SETTABLE_KEYS = [
   "INSTANCE_OPERATOR_EMAIL",
   "INSTANCE_OPERATOR_ADDRESS",
   "INSTANCE_OPERATOR_WEBSITE",
+  // Instance-level brand defaults. Layered under group and project
+  // overrides; see services/branding.ts. INSTANCE_POWERED_BY = "off"
+  // hides the small Quillra footer on white-labeled surfaces (managed
+  // SaaS only; self-hosters keep it on by license).
+  "INSTANCE_LOGO_URL",
+  "INSTANCE_ACCENT_COLOR",
+  "INSTANCE_POWERED_BY",
   // Where usage warnings + cap-hit notifications are emailed. Empty =
   // fall back to the organization owner's email at read time.
   "USAGE_ALERT_EMAIL",

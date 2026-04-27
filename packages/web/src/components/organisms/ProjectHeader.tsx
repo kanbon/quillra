@@ -16,6 +16,7 @@ import { AvatarDropdown } from "@/components/organisms/AvatarDropdown";
 import { ChangesModal } from "@/components/organisms/ChangesModal";
 import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useProjectBrand } from "@/hooks/useProjectBrand";
 import { useProjectPresence } from "@/hooks/useProjectPresence";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
@@ -69,6 +70,10 @@ export function ProjectHeader({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const showPublish = Boolean(canPublish && onPublish);
+  // Clients see the project's brand instead of Quillra. The hook is a
+  // no-op (returns null) when projectId is empty or the user is not a
+  // client (we only consume `brand` in the isClient branch below).
+  const { brand } = useProjectBrand(isClient ? projectId : undefined);
   // Clients beat presence too (so the team can see them viewing), but they
   // don't get to see who else is here. Only team members read the roster.
   const presence = useProjectPresence(projectId);
@@ -102,7 +107,17 @@ export function ProjectHeader({
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {isClient ? (
             <div className="flex shrink-0 items-center gap-2">
-              <LogoMark size={22} />
+              {brand?.logoUrl ? (
+                <img
+                  src={brand.logoUrl}
+                  alt={brand.displayName}
+                  className="h-[22px] w-[22px] rounded object-cover"
+                />
+              ) : (
+                <span className="text-[13px] font-semibold tracking-tight text-neutral-900">
+                  {brand?.displayName ?? projectName}
+                </span>
+              )}
             </div>
           ) : (
             <Link

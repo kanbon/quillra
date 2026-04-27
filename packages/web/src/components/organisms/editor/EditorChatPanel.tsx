@@ -15,6 +15,7 @@
 import { ChatComposer, type ChatComposerHandle } from "@/components/organisms/ChatComposer";
 import { ChatTranscript } from "@/components/organisms/ChatTranscript";
 import { signOutUnified } from "@/hooks/useCurrentUser";
+import { useProjectBrand } from "@/hooks/useProjectBrand";
 import { useT } from "@/i18n/i18n";
 import { pickAskOther } from "@/lib/chat-store";
 import { useRef, useState } from "react";
@@ -94,6 +95,10 @@ export function EditorChatPanel({
   const { t } = useT();
   const chatDragDepth = useRef(0);
   const [chatDragging, setChatDragging] = useState(false);
+  // Clients see a "Powered by Quillra" footer (only when the brand
+  // payload includes a poweredBy link, owners can null it out per
+  // group / instance to fully white-label).
+  const { brand } = useProjectBrand(isClient ? id : undefined);
 
   return (
     <section
@@ -365,6 +370,18 @@ export function EditorChatPanel({
         onSend={send}
         disabled={busy || isMigratingToAstro}
       />
+      {isClient && brand?.poweredBy && (
+        <div className="flex justify-end px-3 pb-1.5 pt-0">
+          <a
+            href={brand.poweredBy.href}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-[11px] text-neutral-400 hover:text-neutral-600"
+          >
+            {brand.poweredBy.label}
+          </a>
+        </div>
+      )}
     </section>
   );
 }
