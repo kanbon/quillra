@@ -166,6 +166,76 @@ Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` f
 
 **Ready for use.** Used in production by agencies handing real CMSes to real clients. The surface is stable; ongoing work is polish, wider framework coverage, and the managed SaaS (waitlist open at [quillra.com](https://www.quillra.com)).
 
+---
+
+## Roadmap
+
+What's next, grouped by theme. Order is rough priority, not commitment. PRs that move any of these forward are welcome (see [CONTRIBUTING.md](./CONTRIBUTING.md)).
+
+&nbsp;
+
+### Identity &amp; deploy
+
+How commits land in the repo and how downstream pipelines react.
+
+- **Optional commit-as-user.** Today, Quillra's GitHub App pushes commits as `quillra[bot]` (signed by the App's private key). Vercel, Netlify, Cloudflare Pages, and GitHub Actions all build on those pushes the same way they would on a human push, so customers can already hit Publish and ship. The roadmap item is letting an editor or client paste a fine-grained personal access token in their settings so their commits show up under their own GitHub identity instead of the bot, for repos with stricter contributor-graph or signed-commit rules.
+
+- **Branch-based environments.** A "Publish to staging" toggle alongside the current Publish, so the agency's existing `staging` branch gets its own preview URL and the client signs off there before promoting.
+
+- **Per-project deploy hooks.** Fire a Vercel / Netlify / custom deploy webhook after Publish, so non-Git deploys (CDN uploads, image-only changes) still rebuild.
+
+&nbsp;
+
+### Branding &amp; customization
+
+Make every Quillra instance feel like the operator's product, not Quillra's.
+
+- **White-label client portal.** Today the client login page already takes a per-project logo. Next: custom accent color, custom domain (`edit.yourbrand.com`), and a "Powered by Quillra" toggle the operator can flip off.
+
+- **Project-level theming.** Logo and accent color applied to the editor chrome and outbound emails for that project, so clients of different agencies on the same instance each see their own brand.
+
+- **Email template editor.** WYSIWYG for the invite, usage-warning, and monthly-report emails. Tag-style variables for fields like `{user_name}`, `{project_name}`, `{spend_month_to_date}`. Per-instance defaults, per-project overrides for agency-style "this is from Studio X" mailings.
+
+- **Custom prompt addons per project.** The global Role Permissions tab (admin / editor / client) already exists. Extend it with a per-project block so an operator can pin "never change the brand voice" or "always confirm before pricing changes" for one specific site.
+
+- **More UI languages.** English and German ship today; the dictionaries file is shaped for fr, es, it, nl, pt-BR. Translators welcome.
+
+&nbsp;
+
+### Editor &amp; content
+
+The chat-and-preview surface itself.
+
+- **Side-by-side diff viewer.** The hand-rolled unified-diff colorizer in the changes modal is fine for code, less great for prose. Word-level diffs help translators and clients spot subtle copy edits.
+
+- **Content-collection awareness.** Surface Astro and Next.js content collections as structured cards in the chat ("Edit the *Spring 2026* blog post" rather than "Edit `src/content/blog/spring-2026.md`").
+
+- **Image library per project.** Browseable view of every asset Quillra has uploaded to the repo, with rename, delete, and reuse-this-image-elsewhere.
+
+&nbsp;
+
+### Collaboration &amp; review
+
+Multi-person editing of the same site.
+
+- **Comments on commits.** A client can leave "I'm not sure about this headline" on a specific commit; the assistant sees it on the next turn and can ask, edit, or escalate.
+
+- **Approval queue.** For agencies with strict workflows: every commit gets queued for an admin or editor to approve before Publish enables. Audit-friendly.
+
+&nbsp;
+
+### Operator polish
+
+Owner-side controls and observability.
+
+- **Audit log.** One timeline of who chatted, who published, who invited, who hit the cap. Export as CSV for billing and compliance.
+
+- **Per-project usage limits.** Today's caps are global / per-role / per-user. Add a per-project axis so a flat-fee project can't quietly burn through the agency's monthly budget.
+
+- **Bring-your-own model.** Plug a custom Anthropic gateway, Bedrock, or Vertex endpoint instead of the Anthropic public API. Useful for enterprise compliance and aggregated billing.
+
+---
+
 ## Contributing
 
 Contributions are welcome, bug reports, feature proposals, PRs, docs, framework support.
