@@ -61,6 +61,28 @@ function trustedOriginsList(): string[] {
 
 const app = new Hono<{ Variables: Variables }>();
 
+// Global error handler. Without this, Hono swallows handler exceptions
+// into a bare 500 with no body and no stack in `docker compose logs`,
+// which made the original first-run wizard "Internal server error" in
+// production almost impossible to triage. Now every unhandled throw in
+// a route prints a labelled stack to stderr (visible in container logs)
+// and the response body carries a request-id the operator can grep for.
+app.onError((err, c) => {
+  const requestId = `err_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const method = c.req.method;
+  const url = new URL(c.req.url).pathname;
+  console.error(
+    `[api-error] ${requestId} ${method} ${url}\n${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+  );
+  return c.json(
+    {
+      error: err instanceof Error ? err.message : "Internal server error",
+      requestId,
+    },
+    500,
+  );
+});
+
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 /**
  * Build the polling HTML shown while the preview is starting up. Includes
