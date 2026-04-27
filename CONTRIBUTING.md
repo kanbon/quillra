@@ -70,14 +70,25 @@ Large PRs that come out of nowhere often need major rework before they can land.
 git clone https://github.com/kanbon/quillra.git
 cd quillra
 yarn install
-cp packages/api/.env.example packages/api/.env
-# Fill in ANTHROPIC_API_KEY, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_TOKEN,
-# BETTER_AUTH_SECRET (openssl rand -base64 32), etc.
-cd packages/api && DATABASE_URL=file:./data/cms.sqlite yarn db:push && cd ../..
-yarn dev    # API :3000 + Vite :5173 via Turbo
+yarn db:push     # creates the SQLite schema (one-shot on a fresh checkout)
+yarn dev         # API :3000 + Vite :5173 via Turbo
 ```
 
-First-run you'll also see the setup wizard at `http://localhost:5173/setup`, it's a nicer way to configure the secrets if you prefer a UI over editing `.env`.
+That's it. Open `http://localhost:5173/setup` in your browser and the
+first-run wizard walks you through the rest (Anthropic API key, GitHub
+App, optional email, owner account).
+
+The session-signing secret is generated automatically on first boot
+(written to `packages/api/data/.boot-secret`, gitignored, mode 0600) so
+local dev needs no `.env` file. **For production**, copy
+`packages/api/.env.example` to `packages/api/.env` and set
+`BETTER_AUTH_SECRET` explicitly so the secret lives outside the data
+volume:
+
+```bash
+cp packages/api/.env.example packages/api/.env
+# generate once: openssl rand -base64 32
+```
 
 **Project layout**
 

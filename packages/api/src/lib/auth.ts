@@ -16,13 +16,26 @@ function trustedOrigins(): string[] {
     .filter(Boolean);
 }
 
+// `BETTER_AUTH_SECRET` is guaranteed to be populated by the time this
+// module loads: lib/boot-secrets.ts runs as the first side-effect
+// import in index.ts and either passes through the env value or
+// generates a persisted dev secret on disk. Refusing to fall back to a
+// well-known placeholder is intentional, "everyone in the world has
+// the same signing key" is a worse default than a loud failure.
+const betterAuthSecret = process.env.BETTER_AUTH_SECRET?.trim();
+if (!betterAuthSecret) {
+  throw new Error(
+    "BETTER_AUTH_SECRET is empty after boot-secrets ran. Set it in the environment, or check the [boot-secrets] log line on startup for the file path that should hold the persisted dev secret.",
+  );
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "sqlite",
     schema,
     camelCase: true,
   }),
-  secret: process.env.BETTER_AUTH_SECRET ?? "dev-only-change-me-in-production",
+  secret: betterAuthSecret,
   baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
   trustedOrigins: trustedOrigins(),
   socialProviders: {

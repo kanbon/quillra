@@ -65,8 +65,7 @@ describe("crypto", () => {
     it("returns false for plain strings and non-strings", () => {
       expect(isEncryptedV1("plain")).toBe(false);
       expect(isEncryptedV1("")).toBe(false);
-      // biome-ignore lint/suspicious/noExplicitAny: testing the defensive check
-      expect(isEncryptedV1(null as any)).toBe(false);
+      expect(isEncryptedV1(null as unknown as string)).toBe(false);
     });
   });
 
