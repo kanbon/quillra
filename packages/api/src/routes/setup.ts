@@ -51,6 +51,25 @@ function originFromRequest(c: {
   return `${proto}://${host}`;
 }
 
+/**
+ * Heuristic for "GitHub can reach this host". Used to decide whether to
+ * subscribe to webhooks in the App manifest. RFC1918 + loopback + .local
+ * mDNS hosts are private to the operator's machine or LAN; everything
+ * else we assume is public.
+ */
+function isLoopbackHost(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "0.0.0.0") return true;
+  if (hostname === "::1" || hostname === "[::1]") return true;
+  if (hostname.endsWith(".local")) return true;
+  if (hostname.endsWith(".localhost")) return true;
+  if (/^127\./.test(hostname)) return true;
+  if (/^10\./.test(hostname)) return true;
+  if (/^192\.168\./.test(hostname)) return true;
+  // 172.16.0.0 - 172.31.255.255
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
+  return false;
+}
+
 export const setupRouter = new Hono<{ Variables: Variables }>()
   .get("/status", async (c) => {
     return c.json(getSetupStatus());
@@ -117,16 +136,23 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     // GitHub App names must be globally unique; append the host as a
     // disambiguator so multiple self-hosted instances don't fight over
     // the same name in the user's App list.
-    const host = new URL(origin).host;
+    const originUrl = new URL(origin);
+    const host = originUrl.host;
     const appName = `${instanceName} @ ${host}`.slice(0, 34);
 
-    const manifest = {
+    // GitHub validates the manifest's webhook URL against "reachable
+    // over the public Internet" and rejects loopback / RFC1918
+    // addresses. Locally, that means the manifest creation step 500s on
+    // GitHub's side before the App ever exists. Quillra also doesn't
+    // currently handle GitHub webhook events (no POST handler under
+    // /api/github-app/webhook), so subscribing was speculative anyway.
+    // Drop hook_attributes entirely for non-public origins; production
+    // instances on a real domain still register it normally.
+    const isPublicOrigin = !isLoopbackHost(originUrl.hostname);
+
+    const manifest: Record<string, unknown> = {
       name: appName,
       url: origin,
-      hook_attributes: {
-        url: `${origin}/api/github-app/webhook`,
-        active: true,
-      },
       redirect_url: `${origin}/api/setup/github-app/callback`,
       // After install GitHub redirects here so Quillra learns the
       // installation id and can immediately start using the App.
@@ -159,8 +185,14 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
         // repos it can see, etc.) without needing a separate call
         administration: "read",
       },
-      default_events: ["push", "pull_request", "issues"],
     };
+    if (isPublicOrigin) {
+      manifest.hook_attributes = {
+        url: `${origin}/api/github-app/webhook`,
+        active: true,
+      };
+      manifest.default_events = ["push", "pull_request", "issues"];
+    }
     const manifestJson = JSON.stringify(manifest).replace(/</g, "\\u003c");
 
     // The form posts to github.com's "new app from manifest" endpoint. A
