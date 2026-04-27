@@ -70,6 +70,34 @@ function isLoopbackHost(hostname: string): boolean {
   return false;
 }
 
+/**
+ * Browser-facing origin for redirects back into the SPA.
+ *
+ * Production: same as the API origin. The API serves the built SPA
+ * out of `packages/api/public/`, so a redirect to `${origin}/setup`
+ * lands on the right place.
+ *
+ * Local dev: the API runs on `:3000` but the SPA is served by Vite
+ * on `:5173`. A redirect to `:3000/setup` hits the API's "no built
+ * SPA" placeholder (the "Run `yarn build`" message). We detect the
+ * dev port and swap it for the Vite port so post-OAuth redirects
+ * land on the SPA the user is actually looking at. Operators can
+ * override with WEB_ORIGIN if they run a non-default Vite port.
+ */
+function webOriginFromRequest(c: {
+  req: { url: string; header: (k: string) => string | undefined };
+}): string {
+  const explicit = process.env.WEB_ORIGIN?.replace(/\/$/, "");
+  if (explicit) return explicit;
+  const apiOrigin = originFromRequest(c);
+  const u = new URL(apiOrigin);
+  if (isLoopbackHost(u.hostname) && u.port === "3000") {
+    u.port = "5173";
+    return u.origin;
+  }
+  return apiOrigin;
+}
+
 export const setupRouter = new Hono<{ Variables: Variables }>()
   .get("/status", async (c) => {
     return c.json(getSetupStatus());
@@ -264,7 +292,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
    * Organization Settings.
    */
   .get("/github-app/installed", async (c) => {
-    const origin = originFromRequest(c);
+    const origin = webOriginFromRequest(c);
     const installationId = c.req.query("installation_id") ?? "";
     const status = getSetupStatus();
     const dest = status.needsSetup
