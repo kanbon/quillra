@@ -66,7 +66,7 @@ export function SecretField({
   const envOverride = status.set && status.source === "env";
 
   return (
-    <div role="group" aria-labelledby={`${name}-label`} className="space-y-2">
+    <fieldset aria-labelledby={`${name}-label`} className="min-w-0 space-y-2 border-0 p-0">
       <div className="flex items-baseline justify-between gap-3">
         <label
           id={`${name}-label`}
@@ -100,7 +100,6 @@ export function SecretField({
               className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
               aria-label={show ? t("instanceSettings.hideValue") : t("instanceSettings.showValue")}
               title={show ? t("instanceSettings.hideValue") : t("instanceSettings.showValue")}
-              tabIndex={-1}
             >
               {show ? (
                 <svg
@@ -192,7 +191,7 @@ export function SecretField({
           {docsLabel ?? "Get a key →"}
         </a>
       )}
-    </div>
+    </fieldset>
   );
 }
 

@@ -124,7 +124,12 @@ export function UserUsageDetail({
   ];
 
   return (
-    <Modal open onClose={onClose} className="max-w-5xl p-0">
+    <Modal
+      open
+      onClose={onClose}
+      ariaLabel={t("usage.drillTitle", { name: userName })}
+      className="max-w-5xl p-0"
+    >
       <div className="flex max-h-[86vh] w-full flex-col overflow-hidden rounded-2xl bg-white">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-100 px-6 py-4">
           <div className="min-w-0 flex-1">

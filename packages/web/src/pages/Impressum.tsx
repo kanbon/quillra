@@ -80,7 +80,7 @@ export function ImpressumPage() {
             <p className="mt-2 text-xs text-neutral-400">
               If you're the admin, visit{" "}
               <Link to="/admin" className="text-neutral-700 underline-offset-2 hover:underline">
-                Instance Settings → Organisation
+                Instance Settings → Organization
               </Link>{" "}
               to fill them in.
             </p>

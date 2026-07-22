@@ -1,19 +1,38 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Caveat";
+  src: url("/fonts/Caveat-Variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   --font-brand: "Caveat", cursive;
   --color-brand: #c1121f;
+  --color-canvas: #fafaf8;
+  --color-paper: #ffffff;
+  --color-ink: #191918;
+  --color-graphite: #62615d;
+  --color-rule: #deddd8;
 }
 
 @layer base {
   html {
-    @apply text-neutral-900 bg-white;
+    @apply bg-canvas text-ink;
   }
   a {
     @apply text-brand underline-offset-2 hover:underline;
   }
+}
+
+/* Shared focus treatment for controls without their own form-field ring. */
+:focus-visible:not(input):not(textarea):not(select) {
+  outline: 2px solid var(--color-brand) !important;
+  outline-offset: 2px !important;
 }
 
 @keyframes fadeIn {
@@ -68,5 +87,16 @@
 @keyframes preview-orbit {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

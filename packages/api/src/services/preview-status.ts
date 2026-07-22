@@ -14,6 +14,8 @@ export type PreviewStatus = {
 
 const statusByProject = new Map<string, PreviewStatus>();
 const portToProject = new Map<number, string>();
+const portByProject = new Map<string, number>();
+const activeProjects = new Set<string>();
 
 export function setPreviewStatus(projectId: string, stage: PreviewStage, message?: string) {
   statusByProject.set(projectId, { stage, message, updatedAt: Date.now() });
@@ -24,11 +26,51 @@ export function getPreviewStatus(projectId: string): PreviewStatus {
 }
 
 export function registerPreviewPort(port: number, projectId: string) {
+  const owner = portToProject.get(port);
+  if (owner && owner !== projectId) return false;
+
+  const previousPort = portByProject.get(projectId);
+  if (previousPort !== undefined && previousPort !== port) {
+    portToProject.delete(previousPort);
+    activeProjects.delete(projectId);
+  }
   portToProject.set(port, projectId);
+  portByProject.set(projectId, port);
+  return true;
 }
 
 export function getProjectByPort(port: number): string | undefined {
   return portToProject.get(port);
+}
+
+/** Mark a reservation proxyable only after its dev server has started. */
+export function markPreviewPortActive(projectId: string, port: number): boolean {
+  if (portByProject.get(projectId) !== port || portToProject.get(port) !== projectId) return false;
+  activeProjects.add(projectId);
+  return true;
+}
+
+export function getActiveProjectByPort(port: number): string | undefined {
+  const projectId = portToProject.get(port);
+  return projectId && activeProjects.has(projectId) ? projectId : undefined;
+}
+
+export function isPreviewPortActive(projectId: string, port: number): boolean {
+  return activeProjects.has(projectId) && portByProject.get(projectId) === port;
+}
+
+export function getPortByProject(projectId: string): number | undefined {
+  return portByProject.get(projectId);
+}
+
+export function unregisterPreviewPort(projectId: string, expectedPort?: number): void {
+  const port = portByProject.get(projectId);
+  if (expectedPort !== undefined && port !== expectedPort) return;
+  if (port !== undefined && portToProject.get(port) === projectId) {
+    portToProject.delete(port);
+  }
+  activeProjects.delete(projectId);
+  portByProject.delete(projectId);
 }
 
 /** Friendly label for each stage, used by the fallback page */

@@ -18,7 +18,7 @@ import { useEditorPaste } from "@/components/organisms/editor/useEditorPaste";
 import { useEditorPreview } from "@/components/organisms/editor/useEditorPreview";
 import { useEditorPublish } from "@/components/organisms/editor/useEditorPublish";
 import { useEditorSync } from "@/components/organisms/editor/useEditorSync";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { isTeamSide, useCurrentUser } from "@/hooks/useCurrentUser";
 import { useProjectChat } from "@/hooks/useProjectChat";
 import { apiJson } from "@/lib/api";
 import { clearNewChat } from "@/lib/chat-store";
@@ -52,6 +52,7 @@ type ConversationsResponse = {
 export function EditorPage() {
   const me = useCurrentUser();
   const isClient = me.kind === "client";
+  const isTeam = isTeamSide(me);
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
   const qc = useQueryClient();
@@ -116,7 +117,7 @@ export function EditorPage() {
     refreshPreview,
     startPreview,
     starting,
-  } = useEditorPreview(id);
+  } = useEditorPreview(id, isTeam);
 
   const {
     showPublishModal,
@@ -161,7 +162,7 @@ export function EditorPage() {
   // Remote-sync check on editor load. Silently fast-forwards when safe,
   // surfaces a modal when the user has local changes AND the team pushed
   // new commits. See components/organisms/editor/useEditorSync.ts.
-  const sync = useEditorSync(id);
+  const sync = useEditorSync(id, isTeam);
 
   const startNewChat = useCallback(() => {
     if (id) clearNewChat(id);
@@ -171,7 +172,7 @@ export function EditorPage() {
 
   if (!id) return null;
 
-  // Every project member can publish, including clients and translators.
+  // Every project member can publish, including clients.
   // Publish is git push of whatever the agent already committed; the
   // per-role agent tool allow-list is what bounds what actually lands
   // in those commits.
@@ -253,7 +254,10 @@ export function EditorPage() {
       />
 
       <EditorSyncModal controller={sync} />
-      <EditorSyncToast toast={sync.toast} />
+      <EditorSyncToast
+        toast={sync.toast ?? (sync.phase === "failed" ? sync.error : null)}
+        error={sync.phase === "failed"}
+      />
     </div>
   );
 }

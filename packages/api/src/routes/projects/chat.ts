@@ -15,7 +15,7 @@ export const chatRouter = new Hono<{ Variables: Variables }>()
 
     // Visibility rules:
     //   - clients only see their own conversations
-    //   - admins / editors / translators see every conversation in the
+    //   - admins / editors see every conversation in the
     //     project, with an optional ?userId=... filter for the UI's
     //     "show only this person" dropdown
     const filterUserId = c.req.query("userId");
@@ -79,15 +79,32 @@ export const chatRouter = new Hono<{ Variables: Variables }>()
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
     const conversationId = c.req.query("conversationId");
-    const where = conversationId
+    const projectMessageWhere = conversationId
       ? and(eq(messages.projectId, projectId), eq(messages.conversationId, conversationId))
       : eq(messages.projectId, projectId);
-    const rows = await db
-      .select()
-      .from(messages)
-      .where(where)
-      .orderBy(desc(messages.id))
-      .limit(100);
+    const rows =
+      m.role === "client"
+        ? (
+            await db
+              .select({ message: messages })
+              .from(messages)
+              .innerJoin(
+                conversations,
+                and(
+                  eq(conversations.id, messages.conversationId),
+                  eq(conversations.projectId, projectId),
+                ),
+              )
+              .where(and(projectMessageWhere, eq(conversations.createdByUserId, r.user.id)))
+              .orderBy(desc(messages.id))
+              .limit(100)
+          ).map(({ message }) => message)
+        : await db
+            .select()
+            .from(messages)
+            .where(projectMessageWhere)
+            .orderBy(desc(messages.id))
+            .limit(100);
     return c.json({
       messages: rows.reverse().map((x) => {
         let attachments: { path: string; originalName: string }[] | undefined;
@@ -123,16 +140,14 @@ export const chatRouter = new Hono<{ Variables: Variables }>()
     const convId = c.req.param("convId");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
-    // Client-role members only see their own conversation totals, but
-    // the agent_runs rows are always tied to the conversation that
-    // produced them, so scoping by convId is sufficient as long as
-    // the conversation itself belongs to the project.
     const [conv] = await db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, createdByUserId: conversations.createdByUserId })
       .from(conversations)
       .where(and(eq(conversations.id, convId), eq(conversations.projectId, projectId)))
       .limit(1);
-    if (!conv) return c.json({ error: "Not found" }, 404);
+    if (!conv || (m.role === "client" && conv.createdByUserId !== r.user.id)) {
+      return c.json({ error: "Not found" }, 404);
+    }
     const row = rawSqlite
       .prepare(
         `SELECT COALESCE(SUM(CAST(cost_usd AS REAL)), 0) as total

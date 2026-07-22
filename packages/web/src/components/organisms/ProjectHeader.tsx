@@ -15,7 +15,7 @@ import { PresenceAvatars } from "@/components/molecules/PresenceAvatars";
 import { AvatarDropdown } from "@/components/organisms/AvatarDropdown";
 import { ChangesModal } from "@/components/organisms/ChangesModal";
 import { VersionHistoryModal } from "@/components/organisms/VersionHistoryModal";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { isTeamSide, useCurrentUser } from "@/hooks/useCurrentUser";
 import { useProjectBrand } from "@/hooks/useProjectBrand";
 import { useProjectPresence } from "@/hooks/useProjectPresence";
 import { useT } from "@/i18n/i18n";
@@ -67,6 +67,7 @@ export function ProjectHeader({
   const { t } = useT();
   const me = useCurrentUser();
   const isClient = me.kind === "client";
+  const isTeam = isTeamSide(me);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const showPublish = Boolean(canPublish && onPublish);
@@ -82,7 +83,11 @@ export function ProjectHeader({
   const { data: framework } = useQuery({
     queryKey: ["project-framework", projectId],
     queryFn: () => apiJson<FrameworkInfo>(`/api/projects/${projectId}/framework`),
-    enabled: Boolean(projectId),
+    // Framework metadata is team-side chrome. Besides exposing an
+    // implementation detail clients do not need, detecting it may clone the
+    // repository on first access. A client opening their site must never
+    // trigger that workspace side effect.
+    enabled: Boolean(projectId) && isTeam,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -93,7 +98,7 @@ export function ProjectHeader({
   const { data: publishStatus } = useQuery({
     queryKey: ["publish-status", projectId],
     queryFn: () => apiJson<PublishStatusLite>(`/api/projects/${projectId}/publish-status`),
-    enabled: Boolean(projectId) && showPublish,
+    enabled: Boolean(projectId) && showPublish && isTeam,
     refetchInterval: 20_000,
     refetchIntervalInBackground: false,
     staleTime: 10_000,
@@ -145,7 +150,7 @@ export function ProjectHeader({
               >
                 {projectName}
               </Heading>
-              {framework && framework.id !== "unknown" && (
+              {isTeam && framework && framework.id !== "unknown" && (
                 <span
                   className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white py-1 pl-1 pr-2.5 text-[11px] font-semibold tracking-tight text-neutral-700 shadow-sm ring-1 ring-neutral-200"
                   title={`${framework.label}${framework.optimizes ? ` · ${t("toolbar.autoOptimisesImages")}` : ""}`}

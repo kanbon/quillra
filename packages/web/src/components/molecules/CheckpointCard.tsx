@@ -25,12 +25,11 @@ function formatCost(usd: number): string {
 export function CheckpointCard({ durationMs, costUsd, cumulativeCostUsd }: Props) {
   const { t } = useT();
   return (
-    <div
+    <output
       className="-mx-3 flex animate-[fadeIn_0.25s_ease-out] items-center justify-between gap-3 border-y border-neutral-200/70 bg-neutral-50/70 px-4 py-2 text-[11px] font-medium"
-      role="status"
       aria-label={t("chat.checkpointLabel")}
     >
-      <div className="flex min-w-0 items-center gap-2 text-neutral-600">
+      <span className="flex min-w-0 items-center gap-2 text-neutral-600">
         <span
           className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600"
           aria-hidden
@@ -50,12 +49,12 @@ export function CheckpointCard({ durationMs, costUsd, cumulativeCostUsd }: Props
         <span className="truncate">
           {t("chat.doneIn", { duration: formatDuration(durationMs) })}
         </span>
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5 text-neutral-400 tabular-nums">
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5 text-neutral-400 tabular-nums">
         <span className="text-neutral-500">{formatCost(costUsd)}</span>
         <span aria-hidden>·</span>
         <span>{t("chat.totalThisChat", { total: formatCost(cumulativeCostUsd) })}</span>
-      </div>
-    </div>
+      </span>
+    </output>
   );
 }

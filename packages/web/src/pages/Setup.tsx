@@ -2,7 +2,8 @@
  * First-run instance setup wizard.
  *
  * Walks a fresh install through the values Quillra needs to actually
- * function: Anthropic key, GitHub App, and optional email delivery.
+ * function: Anthropic key, GitHub App, optional email delivery, and the
+ * first owner account.
  *
  * Routes-level guard: any time /api/setup/status says needsSetup is
  * true, the rest of the app bounces users here (see App.tsx).
@@ -13,29 +14,48 @@ import { AnthropicStep } from "@/components/organisms/setup/AnthropicStep";
 import { EmailStep } from "@/components/organisms/setup/EmailStep";
 import { GithubAppStep } from "@/components/organisms/setup/GithubAppStep";
 import { OrganizationStep } from "@/components/organisms/setup/OrganizationStep";
+import { SetupAccessScreen } from "@/components/organisms/setup/SetupAccessScreen";
+import { SetupStatusScreen } from "@/components/organisms/setup/SetupStatusScreen";
 import { SigninStep } from "@/components/organisms/setup/SigninStep";
 import { StepIndicator } from "@/components/organisms/setup/StepIndicator";
 import { WelcomeStep } from "@/components/organisms/setup/WelcomeStep";
 import type { Step } from "@/components/organisms/setup/types";
+import { clearSetupGateCache } from "@/components/templates/SetupGate";
+import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-type StatusResponse = {
+type GrantedStatus = {
+  access: "granted";
   needsSetup: boolean;
   needsOwner: boolean;
   missing: string[];
   values: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }>;
 };
 
+type StatusResponse =
+  | GrantedStatus
+  | {
+      access: "token-required" | "owner-required" | "complete";
+      needsSetup: boolean;
+      needsOwner: boolean;
+    };
+
 export function SetupPage() {
+  const { t } = useT();
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const [step, setStep] = useState<Step>("welcome");
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const grantedStatus = status?.access === "granted" ? status : null;
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
   const [anthropicKey, setAnthropicKey] = useState("");
   const [emailProvider, setEmailProvider] = useState<"none" | "resend" | "smtp">("none");
-  const [emailFrom, setEmailFrom] = useState("Quillra <hello@quillra.com>");
+  const [emailFrom, setEmailFrom] = useState("");
   const [resendKey, setResendKey] = useState("");
   const [smtp, setSmtp] = useState({
     host: "",
@@ -54,6 +74,13 @@ export function SetupPage() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const statusRequestIdRef = useRef(0);
+  const statusDefaultsAppliedRef = useRef(false);
+
+  function moveToStep(nextStep: Step) {
+    setError(null);
+    setStep(nextStep);
+  }
 
   // Honor deep links from the GitHub App manifest callback. When the
   // backend persists the credentials it redirects to
@@ -67,43 +94,124 @@ export function SetupPage() {
     if (deepStep === "githubApp") setStep("githubApp");
   }, [searchParams]);
 
-  // Load status on mount
   useEffect(() => {
-    (async () => {
-      try {
-        const s = await apiJson<StatusResponse>("/api/setup/status");
-        setStatus(s);
-        if (!s.needsSetup) {
-          // Already configured, nothing to do here
-          nav("/dashboard", { replace: true });
-        }
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, [nav]);
+    if (!status || status.access !== "granted" || statusLoading || statusError) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`setup-step-heading-${step}`)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [step, status, statusLoading, statusError]);
 
-  async function saveValues(values: Record<string, string | null>) {
+  const loadStatus = useCallback(async () => {
+    const requestId = ++statusRequestIdRef.current;
+    setStatusLoading(true);
+    setStatusError(null);
+    setStatus(null);
+    try {
+      const nextStatus = await apiJson<StatusResponse>("/api/setup/status");
+      if (requestId !== statusRequestIdRef.current) return;
+      setStatus(nextStatus);
+      if (nextStatus.access === "complete") {
+        nav("/dashboard", { replace: true });
+        return;
+      }
+      if (nextStatus.access !== "granted") return;
+      if (!statusDefaultsAppliedRef.current) {
+        statusDefaultsAppliedRef.current = true;
+        const configuredProvider = nextStatus.values.EMAIL_PROVIDER?.value;
+        if (
+          configuredProvider === "none" ||
+          configuredProvider === "resend" ||
+          configuredProvider === "smtp"
+        ) {
+          setEmailProvider(configuredProvider);
+        }
+        if (nextStatus.values.EMAIL_FROM?.value) {
+          setEmailFrom(nextStatus.values.EMAIL_FROM.value);
+        }
+        setSmtp((current) => ({
+          ...current,
+          host: nextStatus.values.SMTP_HOST?.value ?? current.host,
+          port: nextStatus.values.SMTP_PORT?.value ?? current.port,
+          user: nextStatus.values.SMTP_USER?.value ?? current.user,
+          secure: nextStatus.values.SMTP_SECURE?.value ?? current.secure,
+        }));
+        setOrg((current) => ({
+          ...current,
+          instanceName: nextStatus.values.INSTANCE_NAME?.value ?? current.instanceName,
+          operatorName: nextStatus.values.INSTANCE_OPERATOR_NAME?.value ?? current.operatorName,
+          company: nextStatus.values.INSTANCE_OPERATOR_COMPANY?.value ?? current.company,
+          email: nextStatus.values.INSTANCE_OPERATOR_EMAIL?.value ?? current.email,
+          address: nextStatus.values.INSTANCE_OPERATOR_ADDRESS?.value ?? current.address,
+          website: nextStatus.values.INSTANCE_OPERATOR_WEBSITE?.value ?? current.website,
+        }));
+      }
+      if (!nextStatus.needsSetup) {
+        nav("/dashboard", { replace: true });
+      }
+    } catch {
+      if (requestId !== statusRequestIdRef.current) return;
+      setStatusError(t("setup.statusRequestFailed"));
+    } finally {
+      if (requestId === statusRequestIdRef.current) setStatusLoading(false);
+    }
+  }, [nav, t]);
+
+  useEffect(() => {
+    void loadStatus();
+    return () => {
+      statusRequestIdRef.current += 1;
+    };
+  }, [loadStatus]);
+
+  async function unlockSetup(token: string) {
+    if (unlocking) return;
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      await apiJson("/api/setup/unlock", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      });
+      await loadStatus();
+    } catch {
+      setUnlockError(t("setup.serverAccessFailed"));
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  async function saveValues(values: Record<string, string | null>): Promise<GrantedStatus> {
     setSaving(true);
     setError(null);
     try {
-      await apiJson("/api/setup/save", {
+      const response = await apiJson<{ ok: true; status: GrantedStatus }>("/api/setup/save", {
         method: "POST",
         body: JSON.stringify({ values }),
       });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save");
-      throw e;
+      setStatus(response.status);
+      return response.status;
+    } catch (saveFailure) {
+      setError(t("setup.saveFailed"));
+      throw saveFailure;
     } finally {
       setSaving(false);
     }
   }
 
   async function handleAnthropicNext() {
-    if (!anthropicKey.trim()) return;
+    if (saving) return;
+    if (!anthropicKey.trim()) {
+      // Configured secrets are intentionally masked instead of copied into
+      // the browser. Let the operator keep either a DB- or env-managed key.
+      if (grantedStatus?.values.ANTHROPIC_API_KEY.set) {
+        moveToStep("githubApp");
+      }
+      return;
+    }
     try {
       await saveValues({ ANTHROPIC_API_KEY: anthropicKey.trim() });
-      setStep("githubApp");
+      moveToStep("githubApp");
     } catch {
       /* stay on step */
     }
@@ -113,35 +221,52 @@ export function SetupPage() {
   // creation flow hands off to GitHub and back, persisting credentials
   // server-side. This button just advances past the step.
   function handleGithubAppNext() {
-    setStep("email");
+    moveToStep("email");
   }
 
   async function handleEmailNext() {
+    if (saving) return;
     const values: Record<string, string | null> = {
       EMAIL_PROVIDER: emailProvider,
-      EMAIL_FROM: emailFrom.trim() || null,
+      EMAIL_FROM: emailProvider === "none" ? null : emailFrom.trim() || null,
     };
     if (emailProvider === "resend") {
-      values.RESEND_API_KEY = resendKey.trim() || null;
+      if (resendKey.trim()) {
+        values.RESEND_API_KEY = resendKey.trim();
+      } else if (!grantedStatus?.values.RESEND_API_KEY?.set) {
+        setError(t("setup.resendKeyRequired"));
+        return;
+      }
     } else if (emailProvider === "smtp") {
       values.SMTP_HOST = smtp.host.trim() || null;
       values.SMTP_PORT = smtp.port.trim() || null;
       values.SMTP_USER = smtp.user.trim() || null;
-      values.SMTP_PASSWORD = smtp.password.trim() || null;
       values.SMTP_SECURE = smtp.secure;
+      if (smtp.password.trim()) {
+        values.SMTP_PASSWORD = smtp.password.trim();
+      }
     } else {
       values.RESEND_API_KEY = null;
       values.SMTP_HOST = null;
+      values.SMTP_PORT = null;
+      values.SMTP_USER = null;
+      values.SMTP_PASSWORD = null;
+      values.SMTP_SECURE = null;
     }
     try {
       await saveValues(values);
-      setStep("organization");
+      moveToStep("organization");
     } catch {
       /* stay on step */
     }
   }
 
   async function handleOrganizationNext() {
+    if (saving) return;
+    if (!org.operatorName.trim()) {
+      setError(t("setup.operatorNameRequired"));
+      return;
+    }
     const values: Record<string, string | null> = {
       INSTANCE_NAME: org.instanceName.trim() || null,
       INSTANCE_OPERATOR_NAME: org.operatorName.trim() || null,
@@ -151,59 +276,95 @@ export function SetupPage() {
       INSTANCE_OPERATOR_WEBSITE: org.website.trim() || null,
     };
     try {
-      await saveValues(values);
-      setStep("signin");
+      const nextStatus = await saveValues(values);
+      if (nextStatus.needsOwner) {
+        moveToStep("signin");
+        return;
+      }
+      if (nextStatus.needsSetup) {
+        setError(t("setup.stillMissing", { items: nextStatus.missing.join(", ") }));
+        return;
+      }
+
+      clearSetupGateCache();
+      const email = org.email.trim();
+      window.location.href = email ? `/login?email=${encodeURIComponent(email)}` : "/login";
     } catch {
       /* stay on step */
     }
   }
 
+  if (statusLoading) {
+    return <SetupStatusScreen state="loading" />;
+  }
+
+  if (statusError) {
+    return <SetupStatusScreen state="error" detail={statusError} onRetry={loadStatus} />;
+  }
+
   if (!status) {
+    return <SetupStatusScreen state="error" onRetry={loadStatus} />;
+  }
+
+  if (status.access === "token-required") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-neutral-50">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-900" />
-      </div>
+      <SetupAccessScreen
+        mode="token"
+        working={unlocking}
+        error={unlockError}
+        onUnlock={unlockSetup}
+      />
     );
   }
 
+  if (status.access === "owner-required") {
+    return <SetupAccessScreen mode="owner" />;
+  }
+
+  if (status.access === "complete") {
+    return <SetupStatusScreen state="loading" />;
+  }
+
+  if (!grantedStatus) {
+    return <SetupStatusScreen state="error" onRetry={loadStatus} />;
+  }
+
   return (
-    <div className="flex min-h-screen flex-col bg-gradient-to-b from-neutral-50 to-neutral-100">
-      <main className="mx-auto w-full max-w-xl flex-1 px-6 py-14">
-        <div className="mb-10 flex items-center gap-3">
+    <div className="flex min-h-screen flex-col bg-canvas">
+      <main className="mx-auto w-full max-w-xl flex-1 px-4 py-8 sm:px-6 sm:py-14">
+        <div className="mb-8 flex items-center gap-3 sm:mb-10">
           <LogoMark size={28} />
-          <span className="font-brand text-xl font-bold tracking-tight">Quillra</span>
-          <span className="ml-auto text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-            Setup
+          <span className="font-brand text-xl font-bold tracking-tight text-ink">Quillra</span>
+          <span className="ml-auto text-[11px] font-semibold uppercase tracking-wider text-graphite">
+            {t("setup.badge")}
           </span>
         </div>
 
         <StepIndicator step={step} />
 
-        <div className="overflow-hidden rounded-3xl border border-neutral-200/80 bg-white shadow-sm">
-          {step === "welcome" && <WelcomeStep onNext={() => setStep("anthropic")} />}
+        <div className="overflow-hidden rounded-3xl border border-rule bg-paper shadow-sm">
+          {step === "welcome" && <WelcomeStep onNext={() => moveToStep("anthropic")} />}
 
           {step === "anthropic" && (
             <AnthropicStep
               value={anthropicKey}
               onChange={setAnthropicKey}
-              onBack={() => setStep("welcome")}
+              onBack={() => moveToStep("welcome")}
               onNext={handleAnthropicNext}
               saving={saving}
               error={error}
-              keyFromEnv={
-                status.values.ANTHROPIC_API_KEY.set &&
-                status.values.ANTHROPIC_API_KEY.source === "env"
-              }
+              keyConfigured={grantedStatus.values.ANTHROPIC_API_KEY.set}
             />
           )}
 
           {step === "githubApp" && (
             <GithubAppStep
               appConfigured={Boolean(
-                status.values.GITHUB_APP_ID?.set && status.values.GITHUB_APP_PRIVATE_KEY?.set,
+                grantedStatus.values.GITHUB_APP_ID?.set &&
+                  grantedStatus.values.GITHUB_APP_PRIVATE_KEY?.set,
               )}
-              appName={status.values.GITHUB_APP_NAME?.value}
-              onBack={() => setStep("anthropic")}
+              appName={grantedStatus.values.GITHUB_APP_NAME?.value}
+              onBack={() => moveToStep("anthropic")}
               onNext={handleGithubAppNext}
             />
           )}
@@ -215,10 +376,12 @@ export function SetupPage() {
               from={emailFrom}
               onFromChange={setEmailFrom}
               resendKey={resendKey}
+              resendKeyConfigured={Boolean(grantedStatus.values.RESEND_API_KEY?.set)}
+              smtpPasswordConfigured={Boolean(grantedStatus.values.SMTP_PASSWORD?.set)}
               onResendKeyChange={setResendKey}
               smtp={smtp}
               onSmtpChange={setSmtp}
-              onBack={() => setStep("githubApp")}
+              onBack={() => moveToStep("githubApp")}
               onNext={handleEmailNext}
               saving={saving}
               error={error}
@@ -229,14 +392,20 @@ export function SetupPage() {
             <OrganizationStep
               org={org}
               onOrgChange={setOrg}
-              onBack={() => setStep("email")}
+              onBack={() => moveToStep("email")}
               onNext={handleOrganizationNext}
               saving={saving}
               error={error}
             />
           )}
 
-          {step === "signin" && <SigninStep />}
+          {step === "signin" && (
+            <SigninStep
+              initialEmail={org.email}
+              deliveryDisabled={emailProvider === "none"}
+              onBack={() => moveToStep("organization")}
+            />
+          )}
         </div>
       </main>
     </div>

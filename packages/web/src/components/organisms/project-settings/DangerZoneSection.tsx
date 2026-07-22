@@ -78,6 +78,7 @@ export function DangerZoneSection({ projectId, projectName }: Props) {
       <Modal
         open={deleteOpen}
         onClose={() => !deleteProject.isPending && setDeleteOpen(false)}
+        ariaLabel={t("projectSettings.deleteModalTitle")}
         className="max-w-md"
       >
         <div className="mb-4 flex items-start gap-3">
@@ -106,13 +107,17 @@ export function DangerZoneSection({ projectId, projectName }: Props) {
           </div>
         </div>
         <div>
-          <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+          <label
+            htmlFor="delete-project-confirmation"
+            className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+          >
             {t("projectSettings.deleteConfirmLabel")}{" "}
             <code className="rounded bg-neutral-100 px-1 font-mono text-[11px] text-neutral-700">
               {projectName}
             </code>
           </label>
           <Input
+            id="delete-project-confirmation"
             value={deleteConfirm}
             onChange={(e) => setDeleteConfirm(e.target.value)}
             placeholder={projectName}

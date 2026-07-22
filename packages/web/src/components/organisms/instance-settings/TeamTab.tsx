@@ -61,13 +61,19 @@ export function TeamTab() {
 
   const inviteMut = useMutation({
     mutationFn: (email: string) =>
-      apiJson<{ ok: boolean; email: string }>("/api/admin/invites", {
+      apiJson<{ email: string; emailConfigured: boolean; emailed: boolean }>("/api/admin/invites", {
         method: "POST",
         body: JSON.stringify({ email }),
       }),
     onSuccess: (res) => {
       setEmail("");
-      setFeedback(`Invited ${res.email}`);
+      setFeedback(
+        res.emailed
+          ? t("instanceSettings.inviteSent", { email: res.email })
+          : res.emailConfigured
+            ? t("instanceSettings.inviteSavedDeliveryFailed")
+            : t("instanceSettings.inviteSavedNoEmail"),
+      );
       void qc.invalidateQueries({ queryKey: ["admin-invites"] });
     },
     onError: (e: Error) => setFeedback(e.message),
@@ -106,22 +112,24 @@ export function TeamTab() {
             }
           }}
         >
+          <label htmlFor="instance-team-invite-email" className="sr-only">
+            {t("instanceSettings.teamEmailLabel")}
+          </label>
           <Input
+            id="instance-team-invite-email"
             type="email"
+            required
             placeholder={t("instanceSettings.emailPlaceholder")}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="flex-1"
-          />
-          <Button
-            type="submit"
-            className="bg-brand text-white hover:bg-brand/90"
             disabled={inviteMut.isPending}
-          >
+          />
+          <Button type="submit" variant="brand" disabled={inviteMut.isPending || !email.trim()}>
             {t("instanceSettings.invite")}
           </Button>
         </form>
-        {feedback && <p className="mt-2 text-sm text-neutral-600">{feedback}</p>}
+        {feedback && <output className="mt-2 block text-sm text-neutral-600">{feedback}</output>}
       </section>
 
       {/* Pending invites */}

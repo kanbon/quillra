@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef } from "react";
 type ProjectLike =
   | {
       migrationTarget: "astro" | null;
+      role: string;
     }
   | null
   | undefined;
@@ -46,6 +47,7 @@ export function useEditorMigration(params: {
   // composer, hiding the preview in favour of the MigrationBanner).
   // Survives page reloads because it comes from the DB, not local state.
   const isMigratingToAstro = project?.migrationTarget === "astro";
+  const canManageMigration = project?.role === "admin";
 
   // Auto-send the migration kickoff prompt exactly once per project, when we
   // land on a project flagged for migration and there are no conversations
@@ -55,13 +57,13 @@ export function useEditorMigration(params: {
   // soon as the first send lands, so the condition fails forever.
   const migrationKickoffSent = useRef(false);
   useEffect(() => {
-    if (!id || !isMigratingToAstro) return;
+    if (!id || !isMigratingToAstro || !canManageMigration) return;
     if (!convList) return;
     if (convList.conversations.length > 0) return;
     if (migrationKickoffSent.current) return;
     migrationKickoffSent.current = true;
     send(ASTRO_MIGRATION_KICKOFF_PROMPT);
-  }, [id, isMigratingToAstro, convList, send]);
+  }, [id, isMigratingToAstro, canManageMigration, convList, send]);
 
   // Escape hatch for stuck migrations. Clears migration_target on the
   // project and rolls the workspace back to origin, then refetches the
@@ -76,5 +78,8 @@ export function useEditorMigration(params: {
     await qc.invalidateQueries({ queryKey: ["conversations", id] });
   }, [id, qc]);
 
-  return { isMigratingToAstro, cancelMigration };
+  return {
+    isMigratingToAstro,
+    cancelMigration: canManageMigration ? cancelMigration : undefined,
+  };
 }

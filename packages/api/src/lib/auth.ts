@@ -1,10 +1,12 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { instanceInvites } from "../db/app-schema.js";
 import { type InstanceRole, user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
+import { emailEquals, normalizeEmail } from "./email.js";
+import { findValidPendingInstanceInvite } from "./instance-invites.js";
 
 function trustedOrigins(): string[] {
   const raw =
@@ -42,33 +44,46 @@ export const auth = betterAuth({
     github: {
       clientId: process.env.GITHUB_CLIENT_ID ?? "",
       clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
-      scope: (process.env.GITHUB_OAUTH_SCOPES ?? "read:user,user:email,repo").split(","),
+      // OAuth identifies the operator. Repository access is handled only by
+      // the narrowly-scoped GitHub App installation token.
+      scope: (process.env.GITHUB_OAUTH_SCOPES ?? "read:user,user:email").split(","),
     },
   },
   databaseHooks: {
     user: {
       create: {
         async before(userData) {
-          const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(user);
+          const [{ ownerCount }] = await db
+            .select({ ownerCount: sql<number>`count(*)` })
+            .from(user)
+            .where(eq(user.instanceRole, "owner"));
 
-          if (count === 0) {
-            return { data: { ...userData, instanceRole: "owner" as InstanceRole } };
-          }
+          // The first owner is created only through the server-access-protected
+          // setup flow. A direct OAuth request must never be able to claim a
+          // fresh public instance before its operator reaches the wizard.
+          if (ownerCount === 0) return false;
 
-          const email = userData.email;
+          const email = userData.email ? normalizeEmail(userData.email) : "";
           if (email) {
-            const [invite] = await db
-              .select()
-              .from(instanceInvites)
-              .where(and(eq(instanceInvites.email, email), isNull(instanceInvites.acceptedAt)))
+            // Older installs may contain mixed-case addresses. Better Auth's
+            // exact comparison must not create a second logical account.
+            const [existingUser] = await db
+              .select({ email: user.email })
+              .from(user)
+              .where(emailEquals(user.email, email))
               .limit(1);
+            if (existingUser) return false;
+
+            const invite = await findValidPendingInstanceInvite(email);
 
             if (invite) {
               await db
                 .update(instanceInvites)
                 .set({ acceptedAt: new Date() })
                 .where(eq(instanceInvites.id, invite.id));
-              return { data: { ...userData, instanceRole: "member" as InstanceRole } };
+              return {
+                data: { ...userData, email, instanceRole: "member" as InstanceRole },
+              };
             }
           }
 

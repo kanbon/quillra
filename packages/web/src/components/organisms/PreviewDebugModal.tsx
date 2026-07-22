@@ -4,8 +4,8 @@
  * Fetches /api/projects/:id/preview-debug and renders every piece of
  * information relevant to diagnosing a broken preview: project info,
  * detected framework, resolved dev command, port + URL + stage, child
- * process status, upstream HTTP probe, subdomain mapping, workspace
- * state, and the last 120 lines of dev server stdout/stderr.
+ * process status, upstream HTTP probe, workspace state, and the last
+ * 120 lines of dev server stdout/stderr.
  *
  * Refresh button + auto-refresh every 2s while the logs are visible.
  */
@@ -13,7 +13,7 @@
 import { Modal } from "@/components/atoms/Modal";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type DebugResponse = {
   project: {
@@ -43,8 +43,6 @@ type DebugResponse = {
   preview: {
     port: number;
     previewUrl: string;
-    subdomainHost: string | null;
-    subdomainId: string | null;
     stage: string;
     stageMessage: string | null;
     stageUpdatedAt: number;
@@ -123,7 +121,7 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
   const [actionBusy, setActionBusy] = useState<null | "reinstall" | "restart">(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -134,13 +132,12 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [projectId]);
 
   useEffect(() => {
     if (!open) return;
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, projectId]);
+  }, [open, load]);
 
   useEffect(() => {
     if (!open || !autoRefresh) return;
@@ -148,8 +145,7 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
       void load();
     }, 2000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, autoRefresh, projectId]);
+  }, [open, autoRefresh, load]);
 
   const stageTone: "ok" | "warn" | "err" | "neutral" = useMemo(() => {
     if (!data) return "neutral";
@@ -202,7 +198,7 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
   }
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-3xl">
+    <Modal open={open} onClose={onClose} ariaLabel="Preview debug" className="max-w-3xl">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-neutral-900">Preview debug</h2>
@@ -226,6 +222,7 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
             disabled={loading}
             className="flex h-7 w-7 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-40"
             title="Refresh"
+            aria-label="Refresh preview diagnostics"
           >
             <svg
               className={cn("h-3.5 w-3.5", loading && "animate-spin")}
@@ -363,10 +360,6 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
                 {data.preview.previewUrl}
               </a>
             </Row>
-            {data.preview.subdomainHost && (
-              <Row label="Subdomain host">{data.preview.subdomainHost}</Row>
-            )}
-            {data.preview.subdomainId && <Row label="Subdomain id">{data.preview.subdomainId}</Row>}
             <Row label="Stage updated">
               {new Date(data.preview.stageUpdatedAt).toLocaleTimeString()}
             </Row>

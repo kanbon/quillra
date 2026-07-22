@@ -22,7 +22,12 @@ That document is the authoritative reference for what is and isn't acceptable in
 
 ## Reporting
 
-If you experience or witness behaviour that violates this Code of Conduct, email the maintainers privately. Reports are treated confidentially. We will investigate, act proportionally, and follow up with the reporter when possible.
+If you experience or witness behaviour that violates this Code of Conduct,
+open a [private GitHub advisory](https://github.com/kanbon/quillra/security/advisories/new)
+and begin the title with `Conduct report`. This gives maintainers a private,
+monitored channel without exposing the report in an issue. Reports are treated
+confidentially. We will investigate, act proportionally, and follow up with the
+reporter when possible.
 
 Maintainers can (and will) remove comments, close issues, revoke commit access, and ban contributors who repeatedly act in bad faith.
 

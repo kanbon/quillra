@@ -5,7 +5,7 @@ import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 type GitHubRepo = { fullName: string; defaultBranch: string };
 
@@ -41,6 +41,12 @@ type Step = "repo" | "framework" | "name";
  */
 export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
   const { t } = useT();
+  const fieldId = useId();
+  const repositoryId = `${fieldId}-repository`;
+  const branchId = `${fieldId}-branch`;
+  const nameId = `${fieldId}-name`;
+  const previewCommandId = `${fieldId}-preview-command`;
+  const advancedPanelId = `${fieldId}-advanced`;
   const [step, setStep] = useState<Step>("repo");
   const [search, setSearch] = useState("");
   const [pickedRepo, setPickedRepo] = useState<GitHubRepo | null>(null);
@@ -164,7 +170,12 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
   }
 
   return (
-    <Modal open={open} onClose={() => !submitting && onClose()} className="max-w-2xl">
+    <Modal
+      open={open}
+      onClose={() => !submitting && onClose()}
+      ariaLabel={t("dashboard.connectAnother")}
+      className="max-w-2xl"
+    >
       {/* Header */}
       <div className="mb-5 flex items-start justify-between">
         <div>
@@ -245,13 +256,17 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
       {step === "repo" && (
         <div className="space-y-5">
           <section>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+            <label
+              htmlFor={repositoryId}
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+            >
               {t("github.repository")}
             </label>
 
             {manualMode ? (
               <>
                 <Input
+                  id={repositoryId}
                   placeholder={t("github.repoPlaceholder")}
                   value={manualRepo}
                   onChange={(e) => setManualRepo(e.target.value.trim())}
@@ -287,6 +302,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                     />
                   </svg>
                   <input
+                    id={repositoryId}
                     type="text"
                     placeholder="Search your repositories…"
                     value={search}
@@ -324,6 +340,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                             <button
                               type="button"
                               onClick={() => setPickedRepo(r)}
+                              aria-pressed={active}
                               className={cn(
                                 "flex w-full items-center gap-2.5 border-b border-neutral-100 px-3 py-2.5 text-left text-[13px] transition-colors last:border-b-0",
                                 active
@@ -382,11 +399,15 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
 
           {(repoValid || (manualMode && manualRepo)) && (
             <section>
-              <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+              <label
+                htmlFor={branchId}
+                className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+              >
                 {t("github.branch")}
               </label>
               {manualMode || branchesQ.isError ? (
                 <Input
+                  id={branchId}
                   value={branch}
                   onChange={(e) => setBranch(e.target.value.trim())}
                   placeholder={t("github.branchPlaceholder")}
@@ -399,6 +420,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                 </div>
               ) : (
                 <select
+                  id={branchId}
                   className="block h-[42px] w-full rounded-md border border-neutral-300 bg-white px-3 text-sm focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900"
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
@@ -574,10 +596,14 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
       {step === "name" && (
         <div className="space-y-5">
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+            <label
+              htmlFor={nameId}
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+            >
               {t("connectForm.displayName")}
             </label>
             <Input
+              id={nameId}
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
@@ -665,6 +691,8 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
             <button
               type="button"
               onClick={() => setShowAdvanced((s) => !s)}
+              aria-expanded={showAdvanced}
+              aria-controls={advancedPanelId}
               className="flex items-center gap-1.5 text-xs font-medium text-neutral-500 transition-colors hover:text-neutral-800"
             >
               <svg
@@ -680,11 +708,15 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               Advanced
             </button>
             {showAdvanced && (
-              <div className="mt-3">
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+              <div id={advancedPanelId} className="mt-3">
+                <label
+                  htmlFor={previewCommandId}
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
                   {t("connectForm.devCommandLabel")}
                 </label>
                 <Textarea
+                  id={previewCommandId}
                   rows={2}
                   value={previewCmd}
                   onChange={(e) => setPreviewCmd(e.target.value)}

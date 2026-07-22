@@ -76,7 +76,12 @@ export function VersionHistoryModal({ open, onClose, projectId }: Props) {
   }, [q.data]);
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-2xl">
+    <Modal
+      open={open}
+      onClose={onClose}
+      ariaLabel={t("versionHistory.title")}
+      className="max-w-2xl"
+    >
       <div className="mb-5 flex items-start justify-between">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-neutral-900">

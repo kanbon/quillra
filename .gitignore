@@ -1,4 +1,6 @@
 node_modules
+.pnpm-store
+pnpm-debug.log*
 dist
 .turbo
 .env
@@ -6,6 +8,12 @@ dist
 *.local
 .DS_Store
 packages/api/public
+playwright-report
+test-results
+.playwright-mcp
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 /data
+/backups/

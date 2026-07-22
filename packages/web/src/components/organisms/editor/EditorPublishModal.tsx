@@ -40,7 +40,11 @@ export function EditorPublishModal({
   const { t } = useT();
 
   return (
-    <Modal open={open} onClose={() => !publishMut.isPending && onClose()}>
+    <Modal
+      open={open}
+      onClose={() => !publishMut.isPending && onClose()}
+      ariaLabel={t("publish.modalTitle")}
+    >
       <h3 className="mb-1 text-lg font-semibold text-neutral-900">{t("publish.modalTitle")}</h3>
 
       {publishStatusLoading && (

@@ -201,10 +201,14 @@ export function GeneralSection({
               id="project-form"
             >
               <div>
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+                <label
+                  htmlFor="project-display-name-mode"
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
                   Display name
                 </label>
                 <select
+                  id="project-display-name-mode"
                   className={selectLikeInputClassName()}
                   value={displayNameMode}
                   disabled={projectSubmitting || patchProject.isPending}
@@ -216,7 +220,14 @@ export function GeneralSection({
                 </select>
                 {displayNameMode === "custom" ? (
                   <div className="mt-2">
-                    <Input {...registerProject("name")} placeholder="Client homepage" />
+                    <label htmlFor="project-custom-name" className="sr-only">
+                      Custom display name
+                    </label>
+                    <Input
+                      id="project-custom-name"
+                      {...registerProject("name")}
+                      placeholder="Client homepage"
+                    />
                     {projectErrors.name && (
                       <p className="mt-1 text-xs text-red-600">{projectErrors.name.message}</p>
                     )}
@@ -258,7 +269,10 @@ export function GeneralSection({
 
           <div className="rounded-xl border border-neutral-200 bg-neutral-50/50 p-4">
             <div className="mb-2 flex items-center justify-between">
-              <label className="text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+              <label
+                htmlFor="project-preview-command"
+                className="text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+              >
                 Dev preview command
               </label>
               <button
@@ -297,6 +311,7 @@ export function GeneralSection({
               </button>
             </div>
             <Textarea
+              id="project-preview-command"
               rows={2}
               className="font-mono text-xs"
               placeholder="Leave empty to auto-detect"

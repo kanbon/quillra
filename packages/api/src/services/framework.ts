@@ -57,13 +57,7 @@ function readJson(
 function detect(repoPath: string): FrameworkInfo {
   const pkgPath = path.join(repoPath, "package.json");
   const packageJson = fs.existsSync(pkgPath) ? readJson(pkgPath) : null;
-  let rootFiles: string[] = [];
-  try {
-    rootFiles = fs.readdirSync(repoPath);
-  } catch {
-    /* ignore */
-  }
-  const def = detectFromManifest({ packageJson, rootFiles });
+  const def = detectFromManifest({ packageJson });
   return def ? defToInfo(def) : UNKNOWN;
 }
 

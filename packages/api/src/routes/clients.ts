@@ -13,39 +13,39 @@
  *   GET  /api/clients/me, returns the active client session
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
 import { user } from "../db/auth-schema.js";
-import { db } from "../db/index.js";
-import { clientLoginCodes, clientSessions, projectMembers, projects } from "../db/schema.js";
+import { db, rawSqlite } from "../db/index.js";
+import {
+  clientLoginCodes,
+  clientSessions,
+  projectMembers,
+  projects,
+  teamSessions,
+} from "../db/schema.js";
+import { invalidateBetterAuthSession } from "../lib/better-auth-session.js";
+import { shouldUseSecureCookies } from "../lib/cookies.js";
+import { normalizeEmail } from "../lib/email.js";
+import { consumeSubjectAndIpRateLimit, getRequestIp } from "../lib/fixed-window-rate-limit.js";
+import { generateOtpCode, hashOtpCode, otpCodeMatches } from "../lib/otp.js";
+import {
+  acceptClientLoginInvite,
+  findExistingClientMember,
+  hasValidPendingClientProjectInvite,
+} from "../lib/project-invites.js";
+import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "../lib/session-cookies.js";
 import { getProjectBrand } from "../services/branding.js";
 import { loginCodeEmailHtml } from "../services/email-templates.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
-const CLIENT_COOKIE = "quillra_client_session";
 const CODE_TTL_MINUTES = 15;
 const SESSION_TTL_DAYS = 30;
 const MAX_CODE_ATTEMPTS = 5;
-
-function hashCode(code: string): string {
-  return createHash("sha256").update(code).digest("hex");
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-function generateCode(): string {
-  // 6-digit numeric code, zero-padded
-  const n = Math.floor(Math.random() * 1_000_000);
-  return n.toString().padStart(6, "0");
-}
+const RATE_LIMIT_WINDOW_MS = 15 * 60_000;
 
 export const clientsRouter = new Hono()
   /**
@@ -81,54 +81,65 @@ export const clientsRouter = new Hono()
       email?: string;
     } | null;
     const projectId = body?.projectId?.trim();
-    const email = body?.email?.trim().toLowerCase();
+    const email = body?.email ? normalizeEmail(body.email) : "";
     if (!projectId || !email) return c.json({ error: "projectId and email required" }, 400);
+
+    const rateLimit = consumeSubjectAndIpRateLimit({
+      namespace: "client-login:request",
+      subject: email,
+      ip: getRequestIp(c),
+      subjectLimit: 5,
+      ipLimit: 30,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+    });
+    if (!rateLimit.allowed) {
+      c.header("Retry-After", String(rateLimit.retryAfterSeconds));
+      return c.json({ error: "Too many sign-in code requests. Try again later." }, 429);
+    }
 
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Project not found" }, 404);
 
-    // Check that this email belongs to a known client member of the project.
-    // We look it up via the user table → projectMembers join.
-    const [u] = await db.select().from(user).where(eq(user.email, email)).limit(1);
-    let clientUserId: string | null = u?.id ?? null;
-    if (clientUserId) {
-      const [m] = await db
-        .select()
-        .from(projectMembers)
-        .where(
-          and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, clientUserId)),
-        )
-        .limit(1);
-      if (!m || m.role !== "client") clientUserId = null;
+    // Client access has no server-token recovery path. Refuse before looking
+    // up membership so a disabled mailer cannot leak whether an address is a
+    // client, and never persist or return a code that was not delivered.
+    if (!isMailerEnabled()) {
+      return c.json(
+        { error: "Email sign-in is unavailable because email delivery is not configured." },
+        503,
+      );
     }
 
-    // Don't reveal whether the email is a member, always return ok.
-    // Only actually send the code if the email is a client member.
-    if (!clientUserId) {
+    const clientUserId = findExistingClientMember(email, projectId);
+    const hasPendingInvite = hasValidPendingClientProjectInvite(email, projectId);
+
+    // Don't reveal whether the email is a member or invited. A pending invite
+    // becomes a membership only after this delivered code is verified.
+    if (!clientUserId && !hasPendingInvite) {
       return c.json({ ok: true });
     }
 
-    const code = generateCode();
+    const code = generateOtpCode();
     const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60_000);
 
-    // Wipe any older pending codes for this email/project
+    const codeId = nanoid();
+    const codeHash = hashOtpCode(code);
+    const createdAt = new Date();
     await db
-      .delete(clientLoginCodes)
-      .where(and(eq(clientLoginCodes.projectId, projectId), eq(clientLoginCodes.email, email)));
-
-    await db.insert(clientLoginCodes).values({
-      id: nanoid(),
-      projectId,
-      email,
-      codeHash: hashCode(code),
-      expiresAt,
-      attempts: 0,
-    });
-
-    if (!isMailerEnabled()) {
-      // Dev fallback: surface the code in the response so the host can copy it
-      return c.json({ ok: true, devCode: code });
-    }
+      .insert(clientLoginCodes)
+      .values({
+        id: codeId,
+        projectId,
+        email,
+        codeHash,
+        expiresAt,
+        attempts: 0,
+        createdAt,
+      })
+      .onConflictDoUpdate({
+        target: [clientLoginCodes.projectId, clientLoginCodes.email],
+        set: { id: codeId, codeHash, expiresAt, attempts: 0, createdAt },
+      });
 
     const html = loginCodeEmailHtml({
       projectName: p.name,
@@ -136,19 +147,21 @@ export const clientsRouter = new Hono()
       code,
       expiresInMinutes: CODE_TTL_MINUTES,
     });
-    // Gmail / Yahoo spam heuristics require List-Unsubscribe on bulk
-    // sends. A login code isn't bulk but the filters are the same.
-    const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "");
-    await sendEmail({
+    const delivery = await sendEmail({
       to: email,
       subject: `Your ${p.name} sign-in code: ${code}`,
       html,
       text: `Your sign-in code for ${p.name} is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
-      headers: {
-        "List-Unsubscribe": `<${base || "https://cms.kanbon.at"}/c/${projectId}>, <mailto:noreply@quillra.com?subject=Unsubscribe>`,
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-      },
     });
+    if (!delivery.sent) {
+      await db
+        .delete(clientLoginCodes)
+        .where(and(eq(clientLoginCodes.id, codeId), eq(clientLoginCodes.codeHash, codeHash)));
+      return c.json(
+        { error: "Could not send the sign-in code. Check the email settings and try again." },
+        502,
+      );
+    }
     return c.json({ ok: true });
   })
 
@@ -160,10 +173,23 @@ export const clientsRouter = new Hono()
       code?: string;
     } | null;
     const projectId = body?.projectId?.trim();
-    const email = body?.email?.trim().toLowerCase();
+    const email = body?.email ? normalizeEmail(body.email) : "";
     const code = body?.code?.trim();
     if (!projectId || !email || !code)
       return c.json({ error: "projectId, email, code required" }, 400);
+
+    const rateLimit = consumeSubjectAndIpRateLimit({
+      namespace: "client-login:verify",
+      subject: email,
+      ip: getRequestIp(c),
+      subjectLimit: 10,
+      ipLimit: 50,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+    });
+    if (!rateLimit.allowed) {
+      c.header("Retry-After", String(rateLimit.retryAfterSeconds));
+      return c.json({ error: "Too many verification attempts. Try again later." }, 429);
+    }
 
     const [row] = await db
       .select()
@@ -181,41 +207,51 @@ export const clientsRouter = new Hono()
       return c.json({ error: "Too many attempts" }, 429);
     }
 
-    if (!constantTimeEqual(hashCode(code), row.codeHash)) {
+    if (!otpCodeMatches(code, row.codeHash)) {
       await db
         .update(clientLoginCodes)
-        .set({ attempts: row.attempts + 1 })
-        .where(eq(clientLoginCodes.id, row.id));
+        .set({ attempts: sql`${clientLoginCodes.attempts} + 1` })
+        .where(
+          and(eq(clientLoginCodes.id, row.id), lt(clientLoginCodes.attempts, MAX_CODE_ATTEMPTS)),
+        );
       return c.json({ error: "Invalid code" }, 400);
     }
 
-    // Code is good, find the user + verify they're still a client of this project
-    const [u] = await db.select().from(user).where(eq(user.email, email)).limit(1);
-    if (!u) return c.json({ error: "Invalid code" }, 400);
-    const [m] = await db
-      .select()
-      .from(projectMembers)
-      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, u.id)))
-      .limit(1);
-    if (!m || m.role !== "client") return c.json({ error: "Not a client of this project" }, 403);
+    // Burn the code exactly once so concurrent requests cannot mint multiple
+    // sessions from a single email code.
+    const consumed = rawSqlite
+      .prepare("DELETE FROM client_login_codes WHERE id = ? AND code_hash = ?")
+      .run(row.id, row.codeHash);
+    if (consumed.changes !== 1) return c.json({ error: "Invalid code" }, 400);
 
-    // Burn the code, mint a session
-    await db.delete(clientLoginCodes).where(eq(clientLoginCodes.id, row.id));
+    // Re-check access after consuming the OTP. A code issued before an invite
+    // was revoked or expired cannot create a user, membership, or session.
+    const clientUserId = acceptClientLoginInvite(email, projectId);
+    if (!clientUserId) return c.json({ error: "No active client invite or membership" }, 403);
+
+    await invalidateBetterAuthSession(c);
+
     const token = randomBytes(32).toString("base64url");
     const sessionId = nanoid();
     const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60_000);
     await db.insert(clientSessions).values({
       id: sessionId,
-      userId: u.id,
+      userId: clientUserId,
       projectId,
       token,
       expiresAt,
     });
 
-    setCookie(c, CLIENT_COOKIE, token, {
+    const teamToken = getCookie(c, TEAM_SESSION_COOKIE);
+    if (teamToken) {
+      await db.delete(teamSessions).where(eq(teamSessions.token, teamToken));
+    }
+    deleteCookie(c, TEAM_SESSION_COOKIE, { path: "/" });
+
+    setCookie(c, CLIENT_SESSION_COOKIE, token, {
       path: "/",
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: shouldUseSecureCookies(),
       sameSite: "Lax",
       expires: expiresAt,
     });
@@ -225,28 +261,35 @@ export const clientsRouter = new Hono()
 
   /** Returns the active client session, or 401 */
   .get("/me", async (c) => {
-    const token = getCookie(c, CLIENT_COOKIE);
-    if (!token) return c.json({ user: null }, 401);
-    const [s] = await db
-      .select()
-      .from(clientSessions)
-      .where(eq(clientSessions.token, token))
-      .limit(1);
-    if (!s || s.expiresAt.getTime() < Date.now()) return c.json({ user: null }, 401);
-    const [u] = await db.select().from(user).where(eq(user.id, s.userId)).limit(1);
-    if (!u) return c.json({ user: null }, 401);
+    const token = getCookie(c, CLIENT_SESSION_COOKIE);
+    // This is a public session probe used by the branded login page. A
+    // missing session is an expected state, not a failed page resource.
+    if (!token) return c.json({ user: null });
+    const session = await getClientSessionFromCookie(token);
+    if (!session) return c.json({ user: null });
     return c.json({
-      user: { id: u.id, email: u.email, name: u.name, image: u.image },
-      projectId: s.projectId,
+      user: {
+        id: session.user.id,
+        email: session.user.email,
+        name: session.user.name,
+        image: session.user.image,
+      },
+      projectId: session.projectId,
     });
   })
 
   .post("/logout", async (c) => {
-    const token = getCookie(c, CLIENT_COOKIE);
-    if (token) {
-      await db.delete(clientSessions).where(eq(clientSessions.token, token));
+    const clientToken = getCookie(c, CLIENT_SESSION_COOKIE);
+    const teamToken = getCookie(c, TEAM_SESSION_COOKIE);
+    if (clientToken) {
+      await db.delete(clientSessions).where(eq(clientSessions.token, clientToken));
     }
-    deleteCookie(c, CLIENT_COOKIE, { path: "/" });
+    if (teamToken) {
+      await db.delete(teamSessions).where(eq(teamSessions.token, teamToken));
+    }
+    await invalidateBetterAuthSession(c);
+    deleteCookie(c, CLIENT_SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, TEAM_SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
 
@@ -258,10 +301,26 @@ export async function getClientSessionFromCookie(token: string | undefined) {
     .from(clientSessions)
     .where(eq(clientSessions.token, token))
     .limit(1);
-  if (!s || s.expiresAt.getTime() < Date.now()) return null;
+  if (!s) return null;
+  if (s.expiresAt.getTime() < Date.now()) {
+    await db.delete(clientSessions).where(eq(clientSessions.id, s.id));
+    return null;
+  }
   const [u] = await db.select().from(user).where(eq(user.id, s.userId)).limit(1);
-  if (!u) return null;
+  if (!u) {
+    await db.delete(clientSessions).where(eq(clientSessions.id, s.id));
+    return null;
+  }
+  const [membership] = await db
+    .select({ role: projectMembers.role })
+    .from(projectMembers)
+    .where(and(eq(projectMembers.projectId, s.projectId), eq(projectMembers.userId, s.userId)))
+    .limit(1);
+  if (membership?.role !== "client") {
+    await db.delete(clientSessions).where(eq(clientSessions.id, s.id));
+    return null;
+  }
   return { user: u, projectId: s.projectId };
 }
 
-export { CLIENT_COOKIE };
+export { CLIENT_SESSION_COOKIE as CLIENT_COOKIE };

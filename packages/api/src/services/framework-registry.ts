@@ -21,9 +21,7 @@ export type FrameworkId =
   | "docusaurus"
   | "vitepress"
   | "qwik"
-  | "solidstart"
-  | "hugo"
-  | "jekyll";
+  | "solidstart";
 
 export type FrameworkDef = {
   id: FrameworkId;
@@ -41,8 +39,6 @@ export type FrameworkDef = {
   blurb: string;
   /** How to detect this framework from a package.json, match if ANY listed dep is present */
   packageDeps?: string[];
-  /** Or detect by config file at the repo root (for non-Node frameworks) */
-  configFiles?: string[];
   /** Per-framework dev command. {port} is replaced at spawn time. */
   devCommand: { binary: string; args: string[] };
 };
@@ -57,7 +53,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: true,
     blurb: "Modern static + SSR sites with islands and content collections.",
     packageDeps: ["astro"],
-    devCommand: { binary: "npx", args: ["astro", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "npx",
+      args: ["astro", "dev", "--host", "127.0.0.1", "--port", "{port}"],
+    },
   },
   {
     id: "next",
@@ -68,7 +67,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: true,
     blurb: "React framework for full-stack apps and websites.",
     packageDeps: ["next"],
-    devCommand: { binary: "npx", args: ["next", "dev", "-H", "0.0.0.0", "-p", "{port}"] },
+    devCommand: { binary: "npx", args: ["next", "dev", "-H", "127.0.0.1", "-p", "{port}"] },
   },
   {
     id: "nuxt",
@@ -79,7 +78,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: true,
     blurb: "Vue framework for full-stack apps and websites.",
     packageDeps: ["nuxt", "nuxt3"],
-    devCommand: { binary: "npx", args: ["nuxt", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: { binary: "npx", args: ["nuxt", "dev", "--host", "127.0.0.1", "--port", "{port}"] },
   },
   {
     id: "gatsby",
@@ -92,7 +91,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     packageDeps: ["gatsby"],
     devCommand: {
       binary: "npx",
-      args: ["gatsby", "develop", "--host", "0.0.0.0", "--port", "{port}"],
+      args: ["gatsby", "develop", "--host", "127.0.0.1", "--port", "{port}"],
     },
   },
   {
@@ -104,7 +103,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Svelte framework for building fast, modern web apps.",
     packageDeps: ["@sveltejs/kit"],
-    devCommand: { binary: "npx", args: ["vite", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "npx",
+      args: ["vite", "dev", "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
+    },
   },
   {
     id: "remix",
@@ -137,7 +139,10 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Frontend tooling for React, Vue, Svelte, Solid, Lit, Preact and more.",
     packageDeps: ["vite", "@vitejs/plugin-react", "@vitejs/plugin-vue", "@vitejs/plugin-svelte"],
-    devCommand: { binary: "npx", args: ["vite", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: {
+      binary: "npx",
+      args: ["vite", "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
+    },
   },
   {
     id: "cra",
@@ -151,7 +156,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     devCommand: {
       // CRA reads PORT from env; pass it inline via sh -c so it binds to our port
       binary: "sh",
-      args: ["-c", "HOST=0.0.0.0 PORT={port} BROWSER=none npx react-scripts start"],
+      args: ["-c", "HOST=127.0.0.1 PORT={port} BROWSER=none npx react-scripts start"],
     },
   },
   {
@@ -165,7 +170,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     packageDeps: ["@docusaurus/core", "@docusaurus/preset-classic"],
     devCommand: {
       binary: "npx",
-      args: ["docusaurus", "start", "--host", "0.0.0.0", "--port", "{port}"],
+      args: ["docusaurus", "start", "--host", "127.0.0.1", "--port", "{port}"],
     },
   },
   {
@@ -179,7 +184,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     packageDeps: ["vitepress"],
     devCommand: {
       binary: "npx",
-      args: ["vitepress", "dev", "--host", "0.0.0.0", "--port", "{port}"],
+      args: ["vitepress", "dev", "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
     },
   },
   {
@@ -191,7 +196,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Resumable, instant-loading framework, zero hydration.",
     packageDeps: ["@builder.io/qwik", "@builder.io/qwik-city"],
-    devCommand: { binary: "npx", args: ["qwik", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
+    devCommand: { binary: "npx", args: ["qwik", "dev", "--host", "127.0.0.1", "--port", "{port}"] },
   },
   {
     id: "solidstart",
@@ -202,31 +207,9 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Solid.js full-stack framework with file-based routing.",
     packageDeps: ["@solidjs/start", "solid-start"],
-    devCommand: { binary: "npx", args: ["vinxi", "dev", "--host", "0.0.0.0", "--port", "{port}"] },
-  },
-  {
-    id: "hugo",
-    label: "Hugo",
-    iconSlug: "hugo",
-    color: "#FF4088",
-    assetsDir: "static/images",
-    optimizes: false,
-    blurb: "The world's fastest framework for building static websites. Go-based.",
-    configFiles: ["hugo.toml", "hugo.yaml", "config.toml", "config.yaml"],
-    devCommand: { binary: "hugo", args: ["server", "--bind", "0.0.0.0", "--port", "{port}"] },
-  },
-  {
-    id: "jekyll",
-    label: "Jekyll",
-    iconSlug: "jekyll",
-    color: "#CC0000",
-    assetsDir: "assets/images",
-    optimizes: false,
-    blurb: "Ruby-based static site generator. The original GitHub Pages engine.",
-    configFiles: ["_config.yml", "_config.yaml"],
     devCommand: {
-      binary: "bundle",
-      args: ["exec", "jekyll", "serve", "--host", "0.0.0.0", "--port", "{port}"],
+      binary: "npx",
+      args: ["vinxi", "dev", "--host", "127.0.0.1", "--port", "{port}"],
     },
   },
 ];
@@ -237,30 +220,21 @@ export function getFrameworkById(id: string): FrameworkDef | null {
   return FRAMEWORKS.find((f) => f.id === id) ?? null;
 }
 
-/** Detect a framework from a parsed package.json + the list of files at the repo root */
+/** Detect a supported framework from its package dependencies. */
 export function detectFromManifest(opts: {
   packageJson?: {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
   } | null;
-  rootFiles?: string[];
 }): FrameworkDef | null {
   const pkg = opts.packageJson;
   const deps = pkg ? { ...pkg.dependencies, ...pkg.devDependencies } : null;
 
-  // 1) Try Node-based frameworks first (package.json deps)
   if (deps) {
     for (const f of FRAMEWORKS) {
       if (!f.packageDeps) continue;
       if (f.packageDeps.some((d) => d in deps)) return f;
     }
-  }
-
-  // 2) Try config-file-based frameworks (Hugo, Jekyll, etc.)
-  const files = new Set((opts.rootFiles ?? []).map((s) => s.toLowerCase()));
-  for (const f of FRAMEWORKS) {
-    if (!f.configFiles) continue;
-    if (f.configFiles.some((c) => files.has(c.toLowerCase()))) return f;
   }
 
   return null;

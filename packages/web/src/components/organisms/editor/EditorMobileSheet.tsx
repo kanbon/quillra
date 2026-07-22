@@ -21,7 +21,7 @@ type Props = {
   onClose: () => void;
 
   isMigratingToAstro: boolean;
-  cancelMigration: () => Promise<void>;
+  cancelMigration?: () => Promise<void>;
 
   previewSrc: string | null;
   previewLabel: string;

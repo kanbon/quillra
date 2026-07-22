@@ -10,7 +10,7 @@ describe("framework-registry", () => {
   describe("detectFromManifest", () => {
     it("returns null for an empty manifest", () => {
       expect(detectFromManifest({})).toBeNull();
-      expect(detectFromManifest({ packageJson: null, rootFiles: [] })).toBeNull();
+      expect(detectFromManifest({ packageJson: null })).toBeNull();
     });
 
     it("detects Astro from a dependency", () => {
@@ -27,23 +27,11 @@ describe("framework-registry", () => {
       expect(def?.id).toBe("next");
     });
 
-    it("prefers package.json deps over config files", () => {
-      // A repo with both next in deps AND hugo.toml at the root should pick Next.
+    it("uses package dependencies as the detection source", () => {
       const def = detectFromManifest({
         packageJson: { dependencies: { next: "^14" } },
-        rootFiles: ["hugo.toml"],
       });
       expect(def?.id).toBe("next");
-    });
-
-    it("falls back to config-file detection when package.json is absent", () => {
-      const def = detectFromManifest({ rootFiles: ["hugo.toml"] });
-      expect(def?.id).toBe("hugo");
-    });
-
-    it("detects Jekyll from its config file, case-insensitively", () => {
-      expect(detectFromManifest({ rootFiles: ["_config.yml"] })?.id).toBe("jekyll");
-      expect(detectFromManifest({ rootFiles: ["_CONFIG.YML"] })?.id).toBe("jekyll");
     });
 
     it("returns null for an unknown Node project", () => {
@@ -74,5 +62,17 @@ describe("framework-registry", () => {
       expect(first).not.toHaveProperty("devCommand");
       expect(first).not.toHaveProperty("packageDeps");
     });
+  });
+
+  it("keeps every managed preview server on the loopback interface", () => {
+    for (const framework of FRAMEWORK_REGISTRY) {
+      expect(framework.devCommand.args.join(" ")).not.toContain("0.0.0.0");
+    }
+  });
+
+  it("prevents direct Vite preview commands from silently changing ports", () => {
+    for (const id of ["sveltekit", "vite", "vitepress"] as const) {
+      expect(getFrameworkById(id)?.devCommand.args).toContain("--strictPort");
+    }
   });
 });

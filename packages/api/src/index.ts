@@ -26,11 +26,13 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { eq } from "drizzle-orm";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { user } from "./db/auth-schema.js";
 import { db } from "./db/index.js";
 import { type Session, type SessionUser, auth } from "./lib/auth.js";
+import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "./lib/session-cookies.js";
 import { adminRouter } from "./routes/admin.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
 import { githubRouter } from "./routes/github.js";
@@ -39,9 +41,20 @@ import { projectsRouter } from "./routes/projects/index.js";
 import { setupRouter } from "./routes/setup.js";
 import { getTeamSessionFromCookie, teamLoginRouter } from "./routes/team-login.js";
 import { teamRouter } from "./routes/team.js";
-import { describeStage, getPreviewStatus, getProjectByPort } from "./services/preview-status.js";
+import { resolveListenHost } from "./services/listen-host.js";
+import { resolvePreviewAccess } from "./services/preview-access.js";
+import {
+  resolveActivePreviewCapability,
+  resolveReservedPreviewCapability,
+} from "./services/preview-capability.js";
+import {
+  rewritePreviewResourcePaths,
+  sanitizePreviewRequestHeaders,
+  securePreviewResponse,
+} from "./services/preview-proxy.js";
+import { describeStage, getPreviewStatus, isPreviewPortActive } from "./services/preview-status.js";
 import { startReportScheduler } from "./services/report-scheduler.js";
-import { getPreviewSubdomainPort } from "./services/workspace.js";
+import { getPreviewUrl } from "./services/workspace.js";
 import { chatWsHandler } from "./ws/chat-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +66,22 @@ type Variables = {
   /** Set when the request was authenticated via the client session cookie */
   clientSession: { projectId: string } | null;
 };
+
+async function requirePreviewAccess(c: Context<{ Variables: Variables }>, rawPort: string) {
+  const result = await resolvePreviewAccess(rawPort, {
+    userId: c.get("user")?.id ?? null,
+    clientProjectId: c.get("clientSession")?.projectId ?? null,
+  });
+  if (result.ok) return result;
+
+  if (result.reason === "unauthorized") {
+    return { error: c.json({ error: "Unauthorized" }, 401) } as const;
+  }
+  if (result.reason === "invalid-port") {
+    return { error: c.json({ error: "Invalid preview port" }, 400) } as const;
+  }
+  return { error: c.json({ error: "Preview not found" }, 404) } as const;
+}
 
 function trustedOriginsList(): string[] {
   const raw =
@@ -81,7 +110,7 @@ app.onError((err, c) => {
   );
   return c.json(
     {
-      error: err instanceof Error ? err.message : "Internal server error",
+      error: "Internal server error",
       requestId,
     },
     500,
@@ -91,10 +120,10 @@ app.onError((err, c) => {
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 /**
  * Build the polling HTML shown while the preview is starting up. Includes
- * the inline JS that fetches /api/preview-status?port=… and updates the
- * stage label until the upstream is ready.
+ * the inline JS that checks the capability-protected preview status and
+ * updates the stage label until the upstream is ready.
  */
-function previewBootHtml(port: string | number): string {
+function previewBootHtml(port: number, capability: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -207,7 +236,7 @@ function previewBootHtml(port: string | number): string {
   function tick() {
     if (errored) return;
     attempts++;
-    fetch('/api/preview-status?port=${port}', { credentials: 'omit' })
+    fetch('/api/preview-status?port=${port}&cap=${encodeURIComponent(capability)}', { credentials: 'omit' })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         if (errored || !data) return;
@@ -276,47 +305,49 @@ async function injectHideToolbarCss(upstream: Response): Promise<Response> {
   }
 }
 
-/* ── Subdomain preview proxy ──────────────────────────────────────────
- * If the Host header matches {id}.PREVIEW_DOMAIN, proxy the entire
- * request to the dev server on the mapped port. Caddy terminates TLS
- * and forwards to us on :3000.
- */
-app.use("*", async (c, next) => {
-  const previewDomain = process.env.PREVIEW_DOMAIN;
-  if (!previewDomain) return next();
-  const host = (c.req.header("host") ?? "").split(":")[0];
-  const suffix = `.${previewDomain}`;
-  if (!host.endsWith(suffix)) return next();
-  const id = host.slice(0, -suffix.length);
-  if (!id) return next();
-  // Internal Quillra paths (e.g. the polling status endpoint used by the
-  // boot page) must NOT be forwarded to the user's dev server, even when
-  // requested from a preview subdomain. Pass them through to our own
-  // routers below.
-  if (c.req.path.startsWith("/api/preview-status")) return next();
-  const port = getPreviewSubdomainPort(id);
-  if (!port) return c.text("Preview not found", 404);
+function allowSandboxOrigin(c: Context): void {
+  c.res.headers.set("Access-Control-Allow-Origin", "null");
+  c.res.headers.delete("Access-Control-Allow-Credentials");
+  c.res.headers.delete("Access-Control-Expose-Headers");
+}
 
-  const target = `http://127.0.0.1:${port}${c.req.path}`;
-  const url = new URL(target);
-  url.search = new URL(c.req.url).search;
-  const headers = new Headers(c.req.raw.headers);
-  headers.delete("host");
+// Capability requests wrap global CORS so opaque-origin module/fetch requests
+// receive ACAO:null and never inherit the app's credentialed CORS policy.
+app.use("/__preview/:port{[0-9]+}/:cap/*", async (c, next) => {
+  const access = resolveReservedPreviewCapability(c.req.param("port"), c.req.param("cap"));
+  if (!access.ok) return c.text("Preview not found", 404);
 
-  try {
-    const upstream = await fetch(url.toString(), {
-      method: c.req.method,
-      headers,
-      body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
-      redirect: "manual",
-    });
-    const withCss = await injectHideToolbarCss(upstream);
-    const respHeaders = new Headers(withCss.headers);
-    respHeaders.delete("transfer-encoding");
-    return new Response(withCss.body, { status: withCss.status, headers: respHeaders });
-  } catch {
-    return c.html(previewBootHtml(port), 502);
+  if (c.req.method === "OPTIONS") {
+    const requestedMethod = (c.req.header("access-control-request-method") ?? "GET").toUpperCase();
+    const allowedMethods = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+    if (!allowedMethods.has(requestedMethod)) return c.text("Method not allowed", 405);
+
+    const response = securePreviewResponse(
+      new Response(null, { status: 204 }),
+      c.req.url,
+      access.port,
+      c.req.param("cap"),
+    );
+    response.headers.set("access-control-allow-methods", requestedMethod);
+    const requestedHeaders = c.req.header("access-control-request-headers");
+    if (requestedHeaders) response.headers.set("access-control-allow-headers", requestedHeaders);
+    response.headers.set("access-control-max-age", "600");
+    return response;
   }
+
+  await next();
+  allowSandboxOrigin(c);
+});
+
+// The boot page polls status with the same bearer capability but outside the
+// proxy path, so it needs the same narrow null-origin response override.
+app.use("/api/preview-status", async (c, next) => {
+  const capability = c.req.query("cap");
+  const access = capability
+    ? resolveReservedPreviewCapability(c.req.query("port") ?? "", capability)
+    : null;
+  await next();
+  if (access?.ok) allowSandboxOrigin(c);
 });
 
 app.use(
@@ -341,9 +372,7 @@ app.use("*", async (c, next) => {
     c.set("session", session.session);
   } else {
     // Fall through to client cookie
-    const cookieHeader = c.req.header("cookie") ?? "";
-    const mClient = /(?:^|;\s*)quillra_client_session=([^;]+)/.exec(cookieHeader);
-    const clientToken = mClient?.[1];
+    const clientToken = getCookie(c, CLIENT_SESSION_COOKIE);
     const cs = await getClientSessionFromCookie(clientToken);
     if (cs) {
       // Synthesize a SessionUser-shaped object the rest of the app can use
@@ -360,10 +389,9 @@ app.use("*", async (c, next) => {
       // Pin client session info so route guards can refuse cross-project access
       c.set("clientSession", { projectId: cs.projectId });
     } else {
-      // Final fallback: team email-code session (admins/editors/translators
+      // Final fallback: team email-code session (admins/editors
       // who don't have or don't want a GitHub account).
-      const mTeam = /(?:^|;\s*)quillra_team_session=([^;]+)/.exec(cookieHeader);
-      const teamToken = mTeam?.[1];
+      const teamToken = getCookie(c, TEAM_SESSION_COOKIE);
       const ts = await getTeamSessionFromCookie(teamToken);
       if (ts) {
         c.set("user", {
@@ -388,58 +416,58 @@ app.use("*", async (c, next) => {
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 app.get("/api/preview-status", async (c) => {
-  const portStr = c.req.query("port") ?? "";
-  const port = Number(portStr);
-  if (!Number.isFinite(port)) return c.json({ stage: "idle", label: "Preparing", detail: "" });
+  const rawPort = c.req.query("port") ?? "";
+  const capability = c.req.query("cap");
+  let port: number;
+  let projectId: string;
 
-  // Self-heal: actively probe the dev server. If it's reachable, tell the
-  // boot page to reload regardless of what our in-memory state says, the
-  // map can go stale across server restarts.
-  try {
-    const probe = await fetch(`http://127.0.0.1:${port}/`, {
-      signal: AbortSignal.timeout(1500),
-      redirect: "manual",
-    });
-    if (probe.status > 0) {
-      return c.json({ stage: "ready", label: "Ready", detail: "Loading your site…" });
+  if (capability) {
+    const access = resolveReservedPreviewCapability(rawPort, capability);
+    if (!access.ok) return c.json({ error: "Preview not found" }, 404);
+    ({ port, projectId } = access);
+    c.header("Access-Control-Allow-Origin", "null");
+    c.header("Cache-Control", "no-store");
+    c.header("Vary", "Origin");
+  } else {
+    const access = await requirePreviewAccess(c, rawPort);
+    if ("error" in access) return access.error;
+    ({ port, projectId } = access);
+  }
+
+  // Probe only after resolving this port to an authorized project. Otherwise
+  // this endpoint becomes an authenticated localhost port scanner.
+  if (isPreviewPortActive(projectId, port)) {
+    try {
+      const probe = await fetch(`http://127.0.0.1:${port}/`, {
+        signal: AbortSignal.timeout(1500),
+        redirect: "manual",
+      });
+      if (probe.status > 0) {
+        return c.json({ stage: "ready", label: "Ready", detail: "Loading your site…" });
+      }
+    } catch {
+      /* not reachable yet, fall through to status reporting */
     }
-  } catch {
-    /* not reachable yet, fall through to status reporting */
   }
 
-  const projectId = getProjectByPort(port);
-  if (!projectId) {
-    return c.json({
-      stage: "starting",
-      label: "Starting the preview",
-      detail: "Waking up the dev server…",
-    });
-  }
   const status = getPreviewStatus(projectId);
   const desc = describeStage(status.stage);
   return c.json({ stage: status.stage, label: desc.label, detail: status.message ?? desc.detail });
 });
 
-app.get("/api/caddy-check", (c) => {
-  const domain = c.req.query("domain") ?? "";
-  const previewDomain = process.env.PREVIEW_DOMAIN ?? "cms.kanbon.at";
-  const suffix = `.${previewDomain}`;
-  if (domain.endsWith(suffix)) {
-    const id = domain.slice(0, -suffix.length);
-    if (id && getPreviewSubdomainPort(id) !== undefined) return c.text("ok", 200);
-  }
-  return c.text("denied", 403);
-});
-
 app.get("/api/session", async (c) => {
   const sessionUser = c.get("user");
-  if (!sessionUser) return c.json({ user: null });
+  if (!sessionUser) return c.json({ user: null, kind: "none" as const, projectId: null });
   const [row] = await db
     .select({ instanceRole: user.instanceRole, language: user.language })
     .from(user)
     .where(eq(user.id, sessionUser.id))
     .limit(1);
+  const clientSession = c.get("clientSession");
+  const kind = clientSession ? "client" : c.get("session") ? "github" : "team";
   return c.json({
+    kind,
+    projectId: clientSession?.projectId ?? null,
     user: {
       ...sessionUser,
       instanceRole: row?.instanceRole ?? null,
@@ -469,19 +497,49 @@ app.route("/api/instance", instanceRouter);
 
 app.get("/ws/chat/:projectId", upgradeWebSocket(chatWsHandler));
 
+app.all("/__preview/:port{[0-9]+}/:cap", (c) => {
+  const rawPort = c.req.param("port");
+  const capability = c.req.param("cap");
+  const access = resolveReservedPreviewCapability(rawPort, capability);
+  if (!access.ok) return c.text("Preview not found", 404);
+  return securePreviewResponse(
+    new Response(null, {
+      status: 302,
+      headers: { location: `/__preview/${access.port}/${capability}/` },
+    }),
+    c.req.url,
+    access.port,
+    capability,
+  );
+});
+
 /* ── Preview reverse proxy ────────────────────────────────────────────
- * Proxies /__preview/:port/* → localhost:port/* so the preview iframe
- * loads over the same HTTPS origin, no mixed-content, no extra DNS.
+ * Proxies /__preview/:port/:cap/* → localhost:port/*. The opaque path
+ * capability keeps sandbox subresources authorized without app cookies.
  */
-app.all("/__preview/:port{[0-9]+}/*", async (c) => {
-  const port = c.req.param("port");
-  const rest = c.req.path.replace(`/__preview/${port}`, "") || "/";
+app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
+  const rawPort = c.req.param("port");
+  const capability = c.req.param("cap");
+  const access = resolveReservedPreviewCapability(rawPort, capability);
+  if (!access.ok) return c.text("Preview not found", 404);
+  const { port } = access;
+  if (!resolveActivePreviewCapability(rawPort, capability).ok) {
+    return securePreviewResponse(
+      new Response(previewBootHtml(port, capability), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+      }),
+      c.req.url,
+      port,
+      capability,
+    );
+  }
+  const rest = c.req.path.replace(`/__preview/${rawPort}/${capability}`, "") || "/";
   const target = `http://127.0.0.1:${port}${rest}`;
   const url = new URL(target);
   url.search = new URL(c.req.url).search;
 
-  const headers = new Headers(c.req.raw.headers);
-  headers.delete("host");
+  const headers = sanitizePreviewRequestHeaders(c.req.raw.headers);
 
   try {
     const upstream = await fetch(url.toString(), {
@@ -492,21 +550,29 @@ app.all("/__preview/:port{[0-9]+}/*", async (c) => {
     });
 
     const withCss = await injectHideToolbarCss(upstream);
-    const respHeaders = new Headers(withCss.headers);
-    respHeaders.delete("transfer-encoding");
-
-    return new Response(withCss.body, {
-      status: withCss.status,
-      headers: respHeaders,
-    });
+    const withScopedPaths = await rewritePreviewResourcePaths(withCss, port, capability);
+    return securePreviewResponse(withScopedPaths, c.req.url, port, capability);
   } catch {
-    return c.html(previewBootHtml(port), 502);
+    return securePreviewResponse(
+      new Response(previewBootHtml(port, capability), {
+        // The boot page was served successfully. It polls the protected
+        // preview-status endpoint for the actual startup result, so a 502
+        // here only produces a misleading browser-console error.
+        status: 200,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+      }),
+      c.req.url,
+      port,
+      capability,
+    );
   }
 });
 
+// Upgrade old cap-less bookmarks only while an app session is present.
 app.all("/__preview/:port{[0-9]+}", async (c) => {
-  const port = c.req.param("port");
-  return c.redirect(`/__preview/${port}/`, 302);
+  const access = await requirePreviewAccess(c, c.req.param("port"));
+  if ("error" in access) return access.error;
+  return c.redirect(new URL(getPreviewUrl(access.projectId, access.port)).pathname, 302);
 });
 
 app.use(
@@ -550,13 +616,14 @@ app.get("*", async (c) => {
   }
   const htmlPath = path.join(publicDir, "index.html");
   if (!existsSync(htmlPath)) {
-    return c.text("Run `yarn build` (web outputs to packages/api/public).", 503);
+    return c.text("Run `pnpm build` (web outputs to packages/api/public).", 503);
   }
   return c.html(readFileSync(htmlPath, "utf-8"));
 });
 
 const port = Number(process.env.PORT ?? 3000);
-const server = serve({ fetch: app.fetch, port }, (_info) => {});
+const hostname = resolveListenHost();
+const server = serve({ fetch: app.fetch, port, hostname }, (_info) => {});
 injectWebSocket(server);
 
 // Kick off the monthly-report cron + boot-time catch-up. Runs in the

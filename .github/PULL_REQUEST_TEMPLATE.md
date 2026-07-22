@@ -25,12 +25,12 @@
 ## Testing
 
 <!--
-  How did you verify this works? "Ran yarn dev and clicked through the flow" is a
+  How did you verify this works? "Ran pnpm dev and clicked through the flow" is a
   fine answer for UI changes. For backend changes, please describe what you tested.
 -->
 
-- [ ] `yarn typecheck` passes in `packages/api`
-- [ ] `yarn typecheck` passes in `packages/web`
+- [ ] `pnpm --filter @quillra/api typecheck` passes
+- [ ] `pnpm --filter @quillra/web typecheck` passes
 - [ ] I tested the happy path manually
 - [ ] I tested the error path(s) manually (or N/A)
 

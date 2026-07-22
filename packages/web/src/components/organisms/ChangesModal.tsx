@@ -180,11 +180,9 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
       // Invalidate the polling publish-status so the "N changes" pill
       // in the header flips back to hidden immediately.
       void qc.invalidateQueries({ queryKey: ["publish-status", projectId] });
-      // Tell the Editor (if mounted) to refresh its preview iframe.
-      // The dev server's file watcher should HMR most edits, but a
-      // hard reset touches a lot of files at once, a cheap iframe
-      // src bump guarantees the user sees the reverted state
-      // without having to manually refresh.
+      // Tell the Editor (if mounted) to refresh its preview iframe. A hard
+      // reset touches many files, so the explicit reload makes the reverted
+      // state visible consistently across framework dev servers.
       window.dispatchEvent(new CustomEvent("quillra:refresh-preview"));
       onClose();
     } catch (e) {
@@ -197,7 +195,7 @@ export function ChangesModal({ open, onClose, projectId }: Props) {
   const totalChanges = data ? data.files.length + data.commits.length : 0;
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-3xl">
+    <Modal open={open} onClose={onClose} ariaLabel={t("changes.modalTitle")} className="max-w-3xl">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-neutral-900">Pending changes</h2>

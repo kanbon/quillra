@@ -26,11 +26,7 @@ export type MailMessage = {
   html?: string;
   /** Optional reply-to override */
   replyTo?: string;
-  /**
-   * Optional extra headers to set on the outgoing mail. Used for things
-   * like List-Unsubscribe (required by Gmail/Yahoo for bulk senders to
-   * stay out of spam) and Message-ID.
-   */
+  /** Optional extra headers to set on the outgoing mail. */
   headers?: Record<string, string>;
 };
 
@@ -47,7 +43,7 @@ function getBackend(): Backend {
 }
 
 function getFrom(): string {
-  return getInstanceSetting("EMAIL_FROM") || "Quillra <hello@quillra.com>";
+  return getInstanceSetting("EMAIL_FROM") || "Quillra <noreply@localhost>";
 }
 
 function asArray(to: string | string[]): string[] {
@@ -61,10 +57,6 @@ export function isMailerEnabled(): boolean {
   if (backend === "resend") return Boolean(getInstanceSetting("RESEND_API_KEY"));
   if (backend === "smtp") return Boolean(getInstanceSetting("SMTP_HOST"));
   return false;
-}
-
-export function mailerStatus(): { backend: Backend; enabled: boolean; from: string } {
-  return { backend: getBackend(), enabled: isMailerEnabled(), from: getFrom() };
 }
 
 async function sendViaResend(msg: MailMessage): Promise<SendResult> {

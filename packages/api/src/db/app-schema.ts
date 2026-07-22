@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { user } from "./auth-schema.js";
 
 export const projectRoleValues = ["admin", "editor", "client"] as const;
@@ -62,8 +62,8 @@ export const projects = sqliteTable("projects", {
    * Set to "astro" while the migration agent is actively rewriting
    * the project to Astro. Server clears this to NULL when the agent
    * emits `done`. While it's set, the Editor locks the composer and
-   * hides the preview column; the server also gives the agent
-   * unrestricted tool permissions.
+   * hides the preview column; the server also gives the creating admin's
+   * migration agent unrestricted project-workspace permissions.
    */
   migrationTarget: text("migration_target"),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
@@ -105,11 +105,13 @@ export const clientLoginCodes = sqliteTable(
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),
   },
-  (table) => [index("client_login_codes_project_email_idx").on(table.projectId, table.email)],
+  (table) => [
+    uniqueIndex("client_login_codes_project_email_unique").on(table.projectId, table.email),
+  ],
 );
 
 /**
- * Team sessions, email-code login for admins / editors / translators who
+ * Team sessions, email-code login for admins and editors who
  * don't want (or don't have) a GitHub account. Unlike clientSessions these
  * are NOT project-scoped: a team member can access every project they're
  * a member of via projectMembers, identical to a Better Auth session.
@@ -141,7 +143,7 @@ export const teamLoginCodes = sqliteTable(
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),
   },
-  (table) => [index("team_login_codes_email_idx").on(table.email)],
+  (table) => [uniqueIndex("team_login_codes_email_unique").on(table.email)],
 );
 
 export const projectMembers = sqliteTable(
@@ -172,6 +174,7 @@ export const projectInvites = sqliteTable("project_invites", {
     .notNull()
     .references(() => projects.id, { onDelete: "cascade" }),
   email: text("email").notNull(),
+  name: text("name"),
   role: text("role").notNull().$type<ProjectRole>(),
   tokenHash: text("token_hash").notNull(),
   invitedByUserId: text("invited_by_user_id").notNull(),
@@ -275,7 +278,7 @@ export const usageLimits = sqliteTable(
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),
   },
-  (table) => [index("usage_limits_scope_target_idx").on(table.scope, table.target)],
+  (table) => [uniqueIndex("usage_limits_scope_target_unique").on(table.scope, table.target)],
 );
 
 /**
@@ -296,7 +299,12 @@ export const usageAlertsSent = sqliteTable(
       .notNull(),
   },
   (table) => [
-    index("usage_alerts_sent_target_month_idx").on(table.scope, table.target, table.monthYmd),
+    uniqueIndex("usage_alerts_sent_scope_target_month_kind_unique").on(
+      table.scope,
+      table.target,
+      table.monthYmd,
+      table.kind,
+    ),
   ],
 );
 
@@ -314,7 +322,7 @@ export const usageReportsSent = sqliteTable(
       .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
       .notNull(),
   },
-  (table) => [index("usage_reports_sent_user_idx").on(table.userId)],
+  (table) => [uniqueIndex("usage_reports_sent_user_month_unique").on(table.userId, table.monthYmd)],
 );
 
 /**

@@ -38,6 +38,7 @@ export const syncRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Forbidden" }, 403);
+    if (m.role === "client") return c.json({ error: "Forbidden" }, 403);
     try {
       const status = await getSyncStatus(projectId);
       return c.json(status);
@@ -51,6 +52,7 @@ export const syncRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Forbidden" }, 403);
+    if (m.role === "client") return c.json({ error: "Forbidden" }, 403);
     try {
       const result = await fastForwardPull(projectId);
       return c.json(result);
@@ -64,6 +66,7 @@ export const syncRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Forbidden" }, 403);
+    if (m.role === "client") return c.json({ error: "Forbidden" }, 403);
     try {
       const result = await mergeRemote(projectId, {
         name: r.user.name ?? r.user.email ?? "Quillra user",
@@ -80,6 +83,7 @@ export const syncRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Forbidden" }, 403);
+    if (m.role === "client") return c.json({ error: "Forbidden" }, 403);
     try {
       await discardAndReset(projectId);
       return c.json({ ok: true });

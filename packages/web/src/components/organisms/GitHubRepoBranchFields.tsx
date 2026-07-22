@@ -3,7 +3,7 @@ import { apiJson } from "@/lib/api";
 import type { GithubRepoRow } from "@/lib/github";
 import { parseRepoFullName, selectLikeInputClassName } from "@/lib/github";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useId, useMemo } from "react";
 
 type BranchPayload = { branches: string[]; defaultBranch: string };
 
@@ -28,6 +28,9 @@ export function GitHubRepoBranchFields({
   setPreferManual,
 }: Props) {
   const { t } = useT();
+  const fieldId = useId();
+  const repositoryId = `${fieldId}-repository`;
+  const branchId = `${fieldId}-branch`;
   const reposQ = useQuery({
     queryKey: ["github-repos"],
     queryFn: () => apiJson<{ repos: GithubRepoRow[] }>("/api/github/repos"),
@@ -66,10 +69,11 @@ export function GitHubRepoBranchFields({
     return (
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-1">
-          <label className="mb-1 block text-xs font-medium text-neutral-600">
+          <label htmlFor={repositoryId} className="mb-1 block text-xs font-medium text-neutral-600">
             {t("github.repository")}
           </label>
           <input
+            id={repositoryId}
             className={selectLikeInputClassName()}
             placeholder={t("github.repoPlaceholder")}
             value={repoFullName}
@@ -84,10 +88,11 @@ export function GitHubRepoBranchFields({
           ) : null}
         </div>
         <div className="sm:col-span-1">
-          <label className="mb-1 block text-xs font-medium text-neutral-600">
+          <label htmlFor={branchId} className="mb-1 block text-xs font-medium text-neutral-600">
             {t("github.branch")}
           </label>
           <input
+            id={branchId}
             className={selectLikeInputClassName()}
             placeholder={t("github.branchPlaceholder")}
             value={branch}
@@ -113,10 +118,11 @@ export function GitHubRepoBranchFields({
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="sm:col-span-1">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">
+        <label htmlFor={repositoryId} className="mb-1 block text-xs font-medium text-neutral-600">
           {t("github.repository")}
         </label>
         <select
+          id={repositoryId}
           className={selectLikeInputClassName()}
           value={repoFullName}
           disabled={disabled || reposQ.isLoading}
@@ -144,12 +150,13 @@ export function GitHubRepoBranchFields({
         </div>
       </div>
       <div className="sm:col-span-1">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">
+        <label htmlFor={branchId} className="mb-1 block text-xs font-medium text-neutral-600">
           {t("github.branch")}
         </label>
         {repoFullName && branchesQ.isError ? (
           <>
             <input
+              id={branchId}
               className={selectLikeInputClassName()}
               placeholder={t("github.branchPlaceholder")}
               value={branch}
@@ -160,6 +167,7 @@ export function GitHubRepoBranchFields({
           </>
         ) : (
           <select
+            id={branchId}
             className={selectLikeInputClassName()}
             value={branch}
             disabled={disabled || !repoFullName || branchesQ.isLoading}

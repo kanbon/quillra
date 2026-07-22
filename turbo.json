@@ -3,6 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "cache": false,
       "outputs": ["dist/**", "public/**"]
     },
     "dev": {
@@ -15,6 +16,9 @@
     "test": {
       "dependsOn": ["^build"],
       "outputs": []
+    },
+    "db:push": {
+      "cache": false
     }
   }
 }

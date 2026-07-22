@@ -202,6 +202,8 @@ export function PreviewPane({
               ref={iframeRef}
               title={t("preview.iframeTitle")}
               src={src!}
+              sandbox="allow-scripts allow-forms allow-modals allow-downloads"
+              referrerPolicy="no-referrer"
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
             />

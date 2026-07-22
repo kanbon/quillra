@@ -2,22 +2,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { simpleGit } from "simple-git";
 import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
 import { getPreviewStatus } from "../../services/preview-status.js";
 import {
   ensureRepoCloned,
+  getPackageManager,
   getPreviewLogs,
   getPreviewProcessInfo,
   getPreviewUrl,
-  getProjectSubdomainId,
-  previewPortForProject,
   projectRepoPath,
   reinstallProjectDependencies,
+  reserveAvailablePreviewPort,
   resolveDevCommand,
+  simpleGitForProject,
   startDevPreview,
+  stopPreview,
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
 
@@ -36,6 +37,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       const url = getPreviewUrl(projectId, port);
       return c.json({ url, port, previewLabel: label });
     } catch (e) {
+      stopPreview(projectId);
       return c.json({ error: e instanceof Error ? e.message : "Failed to start preview" }, 500);
     }
   })
@@ -75,7 +77,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const limit = Math.min(Number(c.req.query("limit") ?? "30"), 200);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGit(repoPath);
+      const g = simpleGitForProject(repoPath);
 
       // Current HEAD sha for "you are here" marker
       const headSha = (await g.revparse(["HEAD"])).trim();
@@ -129,7 +131,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     if (!m) return c.json({ error: "Not found" }, 404);
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
-    const port = previewPortForProject(projectId);
+    const port = await reserveAvailablePreviewPort(projectId);
     const url = getPreviewUrl(projectId, port);
     let previewLabel = "-";
     const repo = projectRepoPath(projectId);
@@ -153,7 +155,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
 
-    const port = previewPortForProject(projectId);
+    const port = await reserveAvailablePreviewPort(projectId);
     const previewUrl = getPreviewUrl(projectId, port);
     const repoPath = projectRepoPath(projectId);
     const repoExists = fs.existsSync(repoPath);
@@ -173,9 +175,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       } catch {
         /* ignore malformed */
       }
-      if (fs.existsSync(path.join(repoPath, "yarn.lock"))) packageManager = "yarn";
-      else if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) packageManager = "pnpm";
-      else packageManager = "npm";
+      packageManager = getPackageManager(repoPath);
     }
 
     let rootFiles: string[] = [];
@@ -191,8 +191,6 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
 
     const processInfo = getPreviewProcessInfo(projectId);
     const previewStatus = getPreviewStatus(projectId);
-    const subdomainId = getProjectSubdomainId(projectId);
-    const subdomainHost = process.env.PREVIEW_DOMAIN;
 
     // Probe the upstream dev server, short timeout so the modal is snappy
     type ProbeResult = { ok: boolean; status?: number; contentType?: string; error?: string };
@@ -213,7 +211,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
 
     const logs = getPreviewLogs(projectId).slice(-120);
 
-    return c.json({
+    const response = {
       project: {
         id: p.id,
         name: p.name,
@@ -244,8 +242,6 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       preview: {
         port,
         previewUrl,
-        subdomainHost: subdomainHost ?? null,
-        subdomainId,
         stage: previewStatus.stage,
         stageMessage: previewStatus.message ?? null,
         stageUpdatedAt: previewStatus.updatedAt,
@@ -254,5 +250,29 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       upstreamProbe: probe,
       logs,
       serverTime: Date.now(),
-    });
+    };
+
+    // Clients need the small health shape for the preview overlay, but host
+    // paths, commands, repository listings, PIDs, and logs are operator-only.
+    if (m.role === "client") {
+      return c.json({
+        ...response,
+        workspace: {
+          repoPath: "",
+          repoExists,
+          hasPackageJson,
+          hasNodeModules,
+          packageManager,
+          packageJsonScripts: null,
+          rootFiles: [],
+        },
+        devCommand: null,
+        childProcess: { ...processInfo, pid: null, signalCode: null },
+        upstreamProbe: probe.ok
+          ? { ok: true, status: probe.status, contentType: probe.contentType }
+          : { ok: false },
+        logs: [],
+      });
+    }
+    return c.json(response);
   });

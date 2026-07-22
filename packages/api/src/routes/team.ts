@@ -1,28 +1,32 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-import { Hono } from "hono";
+import { and, eq, gt, isNull } from "drizzle-orm";
+import { type Context, Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import type { ProjectRole } from "../db/app-schema.js";
-import { type InstanceRole, user } from "../db/auth-schema.js";
+import { user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import { projectInvites, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
+import { emailEquals, normalizeEmail } from "../lib/email.js";
+import { acceptProjectInviteToken } from "../lib/project-invites.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
+import { revokePreviewCapability } from "../services/preview-capability.js";
 
-type Variables = { user: SessionUser | null };
+type Variables = {
+  user: SessionUser | null;
+  clientSession: { projectId: string } | null;
+};
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-async function requireUser(c: {
-  get: (k: "user") => SessionUser | null;
-  json: (b: unknown, s: number) => Response;
-}) {
+async function requireUser(c: Context<{ Variables: Variables }>) {
   const user = c.get("user");
   if (!user) return { error: c.json({ error: "Unauthorized" }, 401) };
+  if (c.get("clientSession")) return { error: c.json({ error: "Forbidden" }, 403) };
   return { user };
 }
 
@@ -47,6 +51,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
       .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, r.user.id)))
       .limit(1);
     if (!any) return c.json({ error: "Not found" }, 404);
+    if (any.role === "client") return c.json({ error: "Forbidden" }, 403);
 
     const rows = await db
       .select({
@@ -78,13 +83,13 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
 
     const body = await c.req.json().catch(() => null);
     const schema = z.object({
-      email: z.string().email(),
+      email: z.string().trim().email(),
       role: z.enum(["admin", "editor", "client"]).default("editor"),
-      name: z.string().min(1).max(120).optional(),
+      name: z.string().trim().min(1).max(120).optional(),
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
-    const inviteEmail = parsed.data.email.toLowerCase();
+    const inviteEmail = normalizeEmail(parsed.data.email);
     const role = parsed.data.role as ProjectRole;
 
     const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
@@ -94,38 +99,12 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const now = new Date();
     const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 14);
 
-    // Every invite (clients AND collaborators) pre-creates the user +
-    // project membership now, so the recipient can log in with the
-    // passwordless email-code flow, no GitHub required. Clients land on
-    // the branded project login page; team members land on /login.
-    let acceptUrl: string;
+    // An invitation is not authorization. The recipient gets a user, role,
+    // and project membership only after proving control of the invited email
+    // through the team or client OTP flow.
     const base = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
-    let [existingUser] = await db.select().from(user).where(eq(user.email, inviteEmail)).limit(1);
-    if (!existingUser) {
-      const newId = nanoid();
-      await db.insert(user).values({
-        id: newId,
-        email: inviteEmail,
-        name: parsed.data.name ?? inviteEmail,
-        emailVerified: false,
-        // Pre-mark non-client invites as "member" so the email-code
-        // login flow accepts them without needing a separate
-        // instanceInvites row. Clients remain without an instance role.
-        instanceRole: role === "client" ? null : ("member" as InstanceRole),
-        createdAt: now,
-        updatedAt: now,
-      });
-      [existingUser] = await db.select().from(user).where(eq(user.id, newId)).limit(1);
-    } else if (role !== "client" && !existingUser.instanceRole) {
-      // Existing user but no instanceRole, upgrade them so they can
-      // sign into the dashboard (not just one project).
-      await db
-        .update(user)
-        .set({ instanceRole: "member" as InstanceRole })
-        .where(eq(user.id, existingUser.id));
-    }
-
-    if (existingUser) {
+    const matchingUsers = await db.select().from(user).where(emailEquals(user.email, inviteEmail));
+    for (const existingUser of matchingUsers) {
       const [memberRow] = await db
         .select()
         .from(projectMembers)
@@ -133,45 +112,59 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
           and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, existingUser.id)),
         )
         .limit(1);
-      if (!memberRow) {
-        await db.insert(projectMembers).values({
-          id: nanoid(),
-          projectId,
-          userId: existingUser.id,
-          role,
-          invitedByUserId: r.user.id,
-          createdAt: now,
-        });
-      } else if (memberRow.role !== role) {
-        // Refuse to silently change an existing non-matching role
-        return c.json(
-          { error: `User already has a different role (${memberRow.role}) on this project` },
-          409,
-        );
+      if (memberRow) {
+        return c.json({ error: `User is already a ${memberRow.role} on this project` }, 409);
       }
     }
 
-    if (role === "client") {
-      acceptUrl = `${base}/c/${projectId}?email=${encodeURIComponent(inviteEmail)}`;
+    const matchingInvites = await db
+      .select()
+      .from(projectInvites)
+      .where(
+        and(
+          eq(projectInvites.projectId, projectId),
+          emailEquals(projectInvites.email, inviteEmail),
+          isNull(projectInvites.acceptedAt),
+        ),
+      );
+    const existingInvite = matchingInvites[0];
+    if (existingInvite) {
+      await db
+        .update(projectInvites)
+        .set({
+          email: inviteEmail,
+          name: parsed.data.name ?? null,
+          role,
+          tokenHash: hashToken(token),
+          invitedByUserId: r.user.id,
+          expiresAt: expires,
+        })
+        .where(eq(projectInvites.id, existingInvite.id));
+      for (const duplicate of matchingInvites.slice(1)) {
+        await db.delete(projectInvites).where(eq(projectInvites.id, duplicate.id));
+      }
     } else {
-      // Team members land on the main login page with email pre-filled.
-      // Also insert a projectInvites row for audit / legacy token flow.
       await db.insert(projectInvites).values({
         id: nanoid(),
         projectId,
         email: inviteEmail,
+        name: parsed.data.name ?? null,
         role,
         tokenHash: hashToken(token),
         invitedByUserId: r.user.id,
         expiresAt: expires,
       });
-      acceptUrl = `${base}/login?email=${encodeURIComponent(inviteEmail)}`;
     }
+    const acceptUrl =
+      role === "client"
+        ? `${base}/c/${projectId}?email=${encodeURIComponent(inviteEmail)}`
+        : `${base}/login?email=${encodeURIComponent(inviteEmail)}`;
 
     // Try to send the email; gracefully fall back to copy-link mode
+    const emailConfigured = isMailerEnabled();
     let emailSent = false;
     let emailError: string | null = null;
-    if (isMailerEnabled()) {
+    if (emailConfigured) {
       const html = inviteEmailHtml({
         projectName: project.name,
         projectLogoUrl: project.logoUrl,
@@ -179,17 +172,8 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
         role,
         acceptUrl,
       });
-      // Deliverability: set a personal Reply-To so replies go straight
-      // to the admin who invited them (Gmail treats threaded replies as
-      // a strong engagement signal). List-Unsubscribe + List-Unsubscribe-Post
-      // are required by Gmail/Yahoo's bulk-sender rules even for
-      // transactional mail, without them we're more likely to be
-      // spam-foldered on first contact with a cold recipient.
+      // Replies go straight to the admin who invited the recipient.
       const replyTo = r.user.email ?? undefined;
-      const headers: Record<string, string> = {
-        "List-Unsubscribe": `<${base}/i/${token}/decline>, <mailto:${r.user.email ?? "noreply@quillra.com"}?subject=Unsubscribe>`,
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-      };
 
       const result = await sendEmail({
         to: inviteEmail,
@@ -197,7 +181,6 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
         html,
         text: `${r.user.name ?? "Someone"} invited you to ${project.name}. Open this link to accept: ${acceptUrl}`,
         replyTo,
-        headers,
       });
       emailSent = result.sent;
       if (!result.sent) emailError = result.reason;
@@ -206,6 +189,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     return c.json({
       inviteLink: acceptUrl,
       token: role === "client" ? null : token,
+      emailConfigured,
       emailSent,
       emailError,
       role,
@@ -219,7 +203,7 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Invalid token" }, 400);
 
-    const email = (r.user.email ?? "").toLowerCase();
+    const email = normalizeEmail(r.user.email ?? "");
     if (!email) return c.json({ error: "Your GitHub account has no verified email" }, 400);
 
     const tokenHash = hashToken(parsed.data.token);
@@ -230,29 +214,13 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
       .limit(1);
     if (!inv || inv.acceptedAt) return c.json({ error: "Invalid or used invite" }, 400);
     if (inv.expiresAt.getTime() < Date.now()) return c.json({ error: "Invite expired" }, 400);
-    if (inv.email !== email) return c.json({ error: "Signed-in email does not match invite" }, 403);
-
-    const [existing] = await db
-      .select()
-      .from(projectMembers)
-      .where(and(eq(projectMembers.projectId, inv.projectId), eq(projectMembers.userId, r.user.id)))
-      .limit(1);
-    if (!existing) {
-      await db.insert(projectMembers).values({
-        id: nanoid(),
-        projectId: inv.projectId,
-        userId: r.user.id,
-        role: inv.role,
-        invitedByUserId: inv.invitedByUserId,
-        createdAt: new Date(),
-      });
+    if (normalizeEmail(inv.email) !== email) {
+      return c.json({ error: "Signed-in email does not match invite" }, 403);
     }
-    await db
-      .update(projectInvites)
-      .set({ acceptedAt: new Date() })
-      .where(eq(projectInvites.id, inv.id));
 
-    return c.json({ projectId: inv.projectId });
+    const accepted = acceptProjectInviteToken(tokenHash, email, r.user.id);
+    if (!accepted) return c.json({ error: "Invalid, used, or expired invite" }, 400);
+    return c.json(accepted);
   })
   .patch("/projects/:projectId/members/:memberId", async (c) => {
     const r = await requireUser(c);
@@ -290,7 +258,11 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     if (!target) return c.json({ error: "Not found" }, 404);
     if (target.userId === r.user.id) return c.json({ error: "Cannot remove yourself" }, 400);
 
-    await db.delete(projectMembers).where(eq(projectMembers.id, memberId));
+    const deleted = await db
+      .delete(projectMembers)
+      .where(eq(projectMembers.id, memberId))
+      .returning({ id: projectMembers.id });
+    if (deleted.length > 0) revokePreviewCapability(projectId);
     return c.newResponse(null, 204);
   })
   /** List pending (not-yet-accepted) invites for a project */
@@ -303,15 +275,19 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const rows = await db
       .select()
       .from(projectInvites)
-      .where(eq(projectInvites.projectId, projectId));
-    const pending = rows
-      .filter((r) => r.acceptedAt === null)
-      .map((r) => ({
-        id: r.id,
-        email: r.email,
-        role: r.role,
-        expiresAt: r.expiresAt.getTime(),
-      }));
+      .where(
+        and(
+          eq(projectInvites.projectId, projectId),
+          isNull(projectInvites.acceptedAt),
+          gt(projectInvites.expiresAt, new Date()),
+        ),
+      );
+    const pending = rows.map((r) => ({
+      id: r.id,
+      email: r.email,
+      role: r.role,
+      expiresAt: r.expiresAt.getTime(),
+    }));
     return c.json({ invites: pending });
   })
   /** Revoke a pending invite */

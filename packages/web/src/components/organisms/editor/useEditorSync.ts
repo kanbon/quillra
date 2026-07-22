@@ -59,7 +59,7 @@ export type SyncController = {
   recheck: () => Promise<void>;
 };
 
-export function useEditorSync(projectId: string): SyncController {
+export function useEditorSync(projectId: string, enabled = true): SyncController {
   const [phase, setPhase] = useState<SyncPhase>("idle");
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [mergeResult, setMergeResult] = useState<MergeOutcome | null>(null);
@@ -67,7 +67,7 @@ export function useEditorSync(projectId: string): SyncController {
   const [error, setError] = useState<string | null>(null);
 
   const recheck = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || !enabled) return;
     setPhase("checking");
     setError(null);
     try {
@@ -98,11 +98,19 @@ export function useEditorSync(projectId: string): SyncController {
       setError(e instanceof Error ? e.message : "Sync check failed");
       setPhase("failed");
     }
-  }, [projectId]);
+  }, [enabled, projectId]);
 
   useEffect(() => {
+    if (!enabled) {
+      setPhase("idle");
+      setStatus(null);
+      setMergeResult(null);
+      setToast(null);
+      setError(null);
+      return;
+    }
     void recheck();
-  }, [recheck]);
+  }, [enabled, recheck]);
 
   useEffect(() => {
     if (!toast) return;

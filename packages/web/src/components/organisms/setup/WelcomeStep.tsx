@@ -1,18 +1,21 @@
 /**
  * Welcome step: intro screen that lists what the wizard will collect
- * (Anthropic key, GitHub App, optional email delivery) and hands the
- * user off to the Anthropic step via a single CTA. Owns no values.
+ * (Anthropic key, GitHub App, optional email delivery, owner account) and
+ * hands the user off to the Anthropic step via a single CTA. Owns no values.
  */
 export function WelcomeStep({ onNext }: { onNext: () => void }) {
+  const { t } = useT();
+
   return (
-    <div className="p-8">
-      <h1 className="text-[22px] font-semibold tracking-tight text-neutral-900">
-        Welcome to Quillra
+    <div className="p-5 sm:p-8">
+      <h1
+        id="setup-step-heading-welcome"
+        tabIndex={-1}
+        className="text-[22px] font-semibold tracking-tight text-neutral-900 outline-none"
+      >
+        {t("setup.welcome.title")}
       </h1>
-      <p className="mt-2 text-sm leading-relaxed text-neutral-600">
-        A few short steps to get this instance running. You'll connect Claude for the AI editor and
-        install a GitHub App so Quillra can push to your repos. Email delivery is optional.
-      </p>
+      <p className="mt-2 text-sm leading-relaxed text-neutral-600">{t("setup.welcome.body")}</p>
       <ul className="mt-6 divide-y divide-neutral-100 rounded-xl border border-neutral-200/70 bg-neutral-50/50">
         <li className="flex items-center gap-3 px-4 py-3">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-neutral-700 ring-1 ring-neutral-200">
@@ -31,8 +34,10 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
             </svg>
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold text-neutral-900">Anthropic API key</p>
-            <p className="text-[12px] text-neutral-500">Powers the chat-based editor</p>
+            <p className="text-[13px] font-semibold text-neutral-900">
+              {t("setup.welcome.anthropicTitle")}
+            </p>
+            <p className="text-[12px] text-neutral-500">{t("setup.welcome.anthropicBody")}</p>
           </div>
         </li>
         <li className="flex items-center gap-3 px-4 py-3">
@@ -42,10 +47,10 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
             </svg>
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold text-neutral-900">GitHub App</p>
-            <p className="text-[12px] text-neutral-500">
-              Scoped access to the repos you pick. Revoke anytime.
+            <p className="text-[13px] font-semibold text-neutral-900">
+              {t("setup.welcome.githubTitle")}
             </p>
+            <p className="text-[12px] text-neutral-500">{t("setup.welcome.githubBody")}</p>
           </div>
         </li>
         <li className="flex items-center gap-3 px-4 py-3">
@@ -66,11 +71,10 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-semibold text-neutral-900">
-              Email delivery <span className="ml-1 font-normal text-neutral-400">· optional</span>
+              {t("setup.welcome.emailTitle")}{" "}
+              <span className="font-normal text-neutral-400">· {t("setup.welcome.optional")}</span>
             </p>
-            <p className="text-[12px] text-neutral-500">
-              Send real invite emails instead of shareable links
-            </p>
+            <p className="text-[12px] text-neutral-500">{t("setup.welcome.emailBody")}</p>
           </div>
         </li>
       </ul>
@@ -79,7 +83,7 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
         onClick={onNext}
         className="mt-8 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-neutral-900 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-neutral-800"
       >
-        Get started
+        {t("setup.welcome.getStarted")}
         <svg
           className="h-4 w-4"
           viewBox="0 0 24 24"
@@ -96,3 +100,4 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
     </div>
   );
 }
+import { useT } from "@/i18n/i18n";

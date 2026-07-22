@@ -1,4 +1,5 @@
 import { Input } from "@/components/atoms/Input";
+import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
 /**
@@ -24,6 +25,8 @@ export function EmailStep({
   from,
   onFromChange,
   resendKey,
+  resendKeyConfigured,
+  smtpPasswordConfigured,
   onResendKeyChange,
   smtp,
   onSmtpChange,
@@ -37,6 +40,8 @@ export function EmailStep({
   from: string;
   onFromChange: (v: string) => void;
   resendKey: string;
+  resendKeyConfigured: boolean;
+  smtpPasswordConfigured: boolean;
   onResendKeyChange: (v: string) => void;
   smtp: SmtpFields;
   onSmtpChange: (s: SmtpFields) => void;
@@ -45,13 +50,26 @@ export function EmailStep({
   saving: boolean;
   error: string | null;
 }) {
+  const { t } = useT();
+
   return (
-    <div className="p-8">
-      <h2 className="text-[20px] font-semibold tracking-tight text-neutral-900">Email delivery</h2>
-      <p className="mt-2 text-sm text-neutral-500">
-        Real emails for invites and client logins. You can change this later in settings.
-      </p>
-      <div className="mt-5 grid gap-2">
+    <form
+      className="p-5 sm:p-8"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onNext();
+      }}
+    >
+      <h2
+        id="setup-step-heading-email"
+        tabIndex={-1}
+        className="text-[20px] font-semibold tracking-tight text-neutral-900 outline-none"
+      >
+        {t("setup.email.title")}
+      </h2>
+      <p className="mt-2 text-sm text-neutral-500">{t("setup.email.intro")}</p>
+      <fieldset className="mt-5 grid gap-2">
+        <legend className="sr-only">{t("instanceSettings.emailProvider")}</legend>
         {(["none", "resend", "smtp"] as const).map((p) => (
           <label
             key={p}
@@ -64,133 +82,195 @@ export function EmailStep({
           >
             <input
               type="radio"
+              name="setup-email-provider"
               checked={provider === p}
               onChange={() => onProviderChange(p)}
+              disabled={saving}
               className="mt-1 accent-brand"
             />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-neutral-900">
-                {p === "none" ? "Disabled" : p === "resend" ? "Resend" : "SMTP"}
+                {p === "none"
+                  ? t("instanceSettings.emailProviderNone")
+                  : p === "resend"
+                    ? t("instanceSettings.emailProviderResend")
+                    : t("instanceSettings.emailProviderSmtp")}
               </p>
               <p className="mt-0.5 text-[12px] leading-snug text-neutral-500">
                 {p === "none"
-                  ? "Skip for now. Invites become shareable links you copy and send yourself."
+                  ? t("instanceSettings.emailProviderNoneHelp")
                   : p === "resend"
-                    ? "Cloud email via Resend. Paste an API key from resend.com."
-                    : "Universal SMTP. Works with Gmail, Postfix, SendGrid SMTP, AWS SES, Postmark, etc."}
+                    ? t("instanceSettings.emailProviderResendHelp")
+                    : t("instanceSettings.emailProviderSmtpHelp")}
               </p>
             </div>
           </label>
         ))}
-      </div>
+      </fieldset>
 
       {provider !== "none" && (
         <div className="mt-5 space-y-3">
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-              From address
+            <label
+              htmlFor="setup-email-from"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+            >
+              {t("instanceSettings.emailFromLabel")}
             </label>
             <Input
+              id="setup-email-from"
+              required
               value={from}
               onChange={(e) => onFromChange(e.target.value)}
-              placeholder="Your Name <you@example.com>"
+              placeholder={t("setup.email.fromPlaceholder")}
+              disabled={saving}
             />
           </div>
           {provider === "resend" && (
             <div>
-              <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-                Resend API key
+              <label
+                htmlFor="setup-resend-key"
+                className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+              >
+                {t("instanceSettings.resendApiKey")}
               </label>
               <Input
+                id="setup-resend-key"
                 type="password"
+                required={!resendKeyConfigured}
                 value={resendKey}
                 onChange={(e) => onResendKeyChange(e.target.value)}
-                placeholder="re_…"
+                placeholder={resendKeyConfigured ? t("setup.email.configuredPlaceholder") : "re_…"}
+                disabled={saving}
               />
+              {resendKeyConfigured && !resendKey && (
+                <p className="mt-1.5 text-xs text-graphite">{t("setup.email.keyConfigured")}</p>
+              )}
             </div>
           )}
           {provider === "smtp" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Host
+                <label
+                  htmlFor="setup-smtp-host"
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
+                  {t("instanceSettings.smtpHost")}
                 </label>
                 <Input
+                  id="setup-smtp-host"
+                  required
                   value={smtp.host}
                   onChange={(e) => onSmtpChange({ ...smtp, host: e.target.value })}
                   placeholder="smtp.example.com"
+                  disabled={saving}
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Port
+                <label
+                  htmlFor="setup-smtp-port"
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
+                  {t("instanceSettings.smtpPort")}
                 </label>
                 <Input
+                  id="setup-smtp-port"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  required
                   value={smtp.port}
                   onChange={(e) => onSmtpChange({ ...smtp, port: e.target.value })}
                   placeholder="587"
+                  disabled={saving}
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Secure (TLS)
+                <label
+                  htmlFor="setup-smtp-secure"
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
+                  {t("instanceSettings.smtpSecure")}
                 </label>
                 <select
+                  id="setup-smtp-secure"
                   className="block h-[42px] w-full rounded-md border border-neutral-300 bg-white px-3 text-sm"
                   value={smtp.secure}
                   onChange={(e) => onSmtpChange({ ...smtp, secure: e.target.value })}
+                  disabled={saving}
                 >
                   <option value="false">STARTTLS (587)</option>
                   <option value="true">SSL/TLS (465)</option>
                 </select>
               </div>
               <div>
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-                  User
+                <label
+                  htmlFor="setup-smtp-user"
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
+                  {t("instanceSettings.smtpUser")}
                 </label>
                 <Input
+                  id="setup-smtp-user"
                   value={smtp.user}
                   onChange={(e) => onSmtpChange({ ...smtp, user: e.target.value })}
-                  placeholder="apikey or username"
+                  placeholder={t("setup.email.userPlaceholder")}
+                  disabled={saving}
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Password
+                <label
+                  htmlFor="setup-smtp-password"
+                  className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+                >
+                  {t("instanceSettings.smtpPassword")}
                 </label>
                 <Input
+                  id="setup-smtp-password"
                   type="password"
                   value={smtp.password}
                   onChange={(e) => onSmtpChange({ ...smtp, password: e.target.value })}
-                  placeholder="••••••••"
+                  placeholder={
+                    smtpPasswordConfigured ? t("setup.email.configuredPlaceholder") : "••••••••"
+                  }
+                  disabled={saving}
                 />
+                {smtpPasswordConfigured && !smtp.password && (
+                  <p className="mt-1.5 text-xs text-graphite">
+                    {t("setup.email.passwordConfigured")}
+                  </p>
+                )}
               </div>
             </div>
           )}
         </div>
       )}
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p className="mt-3 text-sm text-red-600" role="alert">
+          {error}
+        </p>
+      )}
       <div className="mt-6 flex items-center justify-between">
         <button
           type="button"
           onClick={onBack}
-          className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-900"
+          disabled={saving}
+          className="rounded-lg px-4 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-900 disabled:cursor-wait disabled:opacity-50"
         >
-          Back
+          {t("common.back")}
         </button>
         <button
-          type="button"
-          onClick={onNext}
+          type="submit"
           disabled={saving}
           className={cn(
             "inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm",
             saving ? "cursor-not-allowed opacity-50" : "hover:bg-brand/90",
           )}
         >
-          {saving ? "Saving…" : "Continue"}
+          {saving ? t("common.saving") : t("common.continue")}
         </button>
       </div>
-    </div>
+    </form>
   );
 }

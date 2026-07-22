@@ -1,7 +1,9 @@
+import { Button } from "@/components/atoms/Button";
+import { LogoMark } from "@/components/atoms/LogoMark";
 import { Spinner } from "@/components/atoms/Spinner";
-import { apiJson } from "@/lib/api";
-import { authClient } from "@/lib/auth-client";
-import { type ReactNode, useEffect, useState } from "react";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useT } from "@/i18n/i18n";
+import type { ReactNode } from "react";
 import { Navigate, useParams } from "react-router-dom";
 
 /**
@@ -9,86 +11,59 @@ import { Navigate, useParams } from "react-router-dom";
  * valid, and historically this component only knew about two of them
  * which produced an infinite redirect loop for the third:
  *
- *  1. Better Auth session, the GitHub OAuth owner flow. Detected via
- *     the authClient.useSession() hook.
+ *  1. Better Auth session, the GitHub OAuth owner flow.
  *  2. Team session, email-code login for admins / editors / owners
  *     who don't use GitHub. Lives in its own cookie, validated by the
  *     server middleware, surfaces through GET /api/session.
  *  3. Client session, branded email-code login scoped to one project.
- *     Exposed via GET /api/clients/me because we need the projectId to
- *     route clients away from other projects' URLs.
  *
- * The unified /api/session endpoint covers 1 and 2 (and 3, but without
- * the project scope). /api/clients/me is kept as a secondary probe
- * only to discover the client's projectId when they're authed that
- * way. Hitting both in parallel keeps the component fast, the
- * branded-portal path adds no extra latency for team users.
+ * GET /api/session identifies all three kinds and includes the client
+ * project scope, so the gate has one source of truth and one request.
  */
 
-type SessionUser = { id: string; email?: string | null };
-
-type UnifiedAuth =
-  | { status: "pending" }
-  | { status: "unauth" }
-  | { status: "authed"; clientProjectId: string | null };
-
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { data: betterAuth, isPending: betterAuthPending } = authClient.useSession();
   const params = useParams<{ projectId?: string }>();
-  const [unified, setUnified] = useState<UnifiedAuth>({ status: "pending" });
+  const me = useCurrentUser();
 
-  useEffect(() => {
-    if (betterAuthPending) return;
-    // Better Auth already says we're in. No extra probing needed.
-    if (betterAuth?.user) {
-      setUnified({ status: "authed", clientProjectId: null });
-      return;
-    }
-    // Neither Better Auth session nor loading, probe the unified
-    // session endpoint AND the client-scope endpoint in parallel.
-    let cancelled = false;
-    void (async () => {
-      const [sessionRes, clientRes] = await Promise.all([
-        apiJson<{ user: SessionUser | null }>("/api/session").catch(
-          () => ({ user: null }) as { user: SessionUser | null },
-        ),
-        apiJson<{ user: SessionUser | null; projectId?: string }>("/api/clients/me").catch(
-          () => ({ user: null }) as { user: SessionUser | null; projectId?: string },
-        ),
-      ]);
-      if (cancelled) return;
-      // Any signal of a valid user → authed. The client endpoint is
-      // the only one that knows the project scope; if it didn't come
-      // back, clientProjectId stays null and the user gets whatever
-      // route they asked for.
-      if (sessionRes.user || clientRes.user) {
-        setUnified({
-          status: "authed",
-          clientProjectId: clientRes.user && clientRes.projectId ? clientRes.projectId : null,
-        });
-      } else {
-        setUnified({ status: "unauth" });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [betterAuthPending, betterAuth?.user]);
-
-  if (betterAuthPending || unified.status === "pending") {
+  if (me.kind === "loading") {
     return <AuthLoading />;
   }
 
-  if (unified.status === "unauth") {
+  if (me.kind === "error") {
+    return <AuthError retrying={me.retrying} onRetry={me.retry} />;
+  }
+
+  if (me.kind === "none") {
     return <Navigate to="/login" replace />;
   }
 
   // Client on the wrong project's URL, bounce them back to their own.
-  if (unified.clientProjectId && params.projectId && params.projectId !== unified.clientProjectId) {
-    return <Navigate to={`/p/${unified.clientProjectId}`} replace />;
+  if (me.kind === "client" && params.projectId && params.projectId !== me.projectId) {
+    return <Navigate to={`/p/${me.projectId}`} replace />;
   }
 
   return <>{children}</>;
+}
+
+function AuthError({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+  const { t } = useT();
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-neutral-50 px-5 py-10">
+      <section className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white p-8 text-center shadow-sm sm:p-10">
+        <LogoMark className="mx-auto mb-6 size-11" />
+        <h1 className="text-balance text-2xl font-semibold tracking-tight text-neutral-950">
+          {t("auth.sessionErrorTitle")}
+        </h1>
+        <p className="mx-auto mt-3 max-w-sm text-pretty text-sm leading-6 text-neutral-600">
+          {t("auth.sessionErrorDescription")}
+        </p>
+        <Button className="mt-7 min-w-36 gap-2" disabled={retrying} onClick={onRetry}>
+          {retrying ? <Spinner className="size-4" /> : null}
+          {retrying ? t("auth.retrying") : t("common.tryAgain")}
+        </Button>
+      </section>
+    </main>
+  );
 }
 
 function AuthLoading() {

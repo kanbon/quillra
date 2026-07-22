@@ -8,11 +8,11 @@
 
 export type Step = "welcome" | "anthropic" | "githubApp" | "email" | "organization" | "signin";
 
-export const STEPS: { id: Step; label: string }[] = [
-  { id: "welcome", label: "Welcome" },
-  { id: "anthropic", label: "Anthropic" },
-  { id: "githubApp", label: "GitHub App" },
-  { id: "email", label: "Email" },
-  { id: "organization", label: "Organisation" },
-  { id: "signin", label: "Sign in" },
+export const STEPS: Step[] = [
+  "welcome",
+  "anthropic",
+  "githubApp",
+  "email",
+  "organization",
+  "signin",
 ];

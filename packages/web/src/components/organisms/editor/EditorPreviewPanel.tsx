@@ -14,6 +14,7 @@
 
 import { MigrationBanner } from "@/components/organisms/MigrationBanner";
 import { PreviewPane } from "@/components/organisms/PreviewPane";
+import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 import { buildPreviewDebugPrompt } from "@/lib/preview-debug-prompt";
 import type { PreviewStatus } from "@/lib/use-preview-status";
@@ -22,7 +23,7 @@ import { useState } from "react";
 type Props = {
   projectId: string;
   isMigratingToAstro: boolean;
-  cancelMigration: () => Promise<void>;
+  cancelMigration?: () => Promise<void>;
 
   previewSrc: string | null;
   previewLabel: string;
@@ -54,6 +55,7 @@ export function EditorPreviewPanel({
   setSplit,
   send,
 }: Props) {
+  const { t } = useT();
   const [dragging, setDragging] = useState(false);
 
   return (
@@ -91,8 +93,23 @@ export function EditorPreviewPanel({
           target.addEventListener("pointerup", onUp);
           target.addEventListener("pointercancel", onUp);
         }}
+        onKeyDown={(e) => {
+          let next = split;
+          if (e.key === "ArrowLeft") next = Math.max(28, split - 2);
+          else if (e.key === "ArrowRight") next = Math.min(72, split + 2);
+          else if (e.key === "Home") next = 28;
+          else if (e.key === "End") next = 72;
+          else return;
+          e.preventDefault();
+          setSplit(next);
+        }}
         role="separator"
         aria-orientation="vertical"
+        aria-label={t("preview.resizePanels")}
+        aria-valuemin={28}
+        aria-valuemax={72}
+        aria-valuenow={Math.round(split)}
+        tabIndex={0}
       />
       {/* Block iframe + selection while dragging so the cursor doesn't get eaten */}
       {dragging && (

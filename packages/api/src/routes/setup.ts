@@ -12,17 +12,36 @@
  *                                              them, then redirects the user
  *                                              to the install-on-repos step
  *
- * Save is protected by a "bootstrap secret": on a clean install, anyone
- * can save once (needsSetup = true). After the instance is configured,
- * only the instance owner can change settings.
+ * First-run writes require proof of server access. Once an owner exists,
+ * setup reads and writes require that authenticated owner instead.
  */
 
 import { eq } from "drizzle-orm";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
+import { shouldUseSecureCookies } from "../lib/cookies.js";
+import {
+  fixedWindowRateLimiter,
+  getRequestIp,
+  rateLimitFingerprint,
+} from "../lib/fixed-window-rate-limit.js";
+import {
+  GITHUB_MANIFEST_FLOW_COOKIE,
+  GITHUB_MANIFEST_FLOW_COOKIE_PATH,
+  githubAppManifestName,
+  githubManifestFlowStore,
+} from "../lib/github-manifest-flow.js";
+import {
+  SERVER_ACCESS_COOKIE,
+  issueServerAccessSession,
+  logServerAccessInstructions,
+  verifyServerAccessSession,
+  verifyServerAccessToken,
+} from "../lib/server-access.js";
 import { exchangeManifestCode } from "../services/github-app.js";
 import {
   SETTABLE_KEYS,
@@ -38,6 +57,42 @@ const saveSchema = z.object({
   values: z.record(z.string().min(1).max(64), z.string().nullable()),
 });
 
+const unlockSchema = z.object({ token: z.string().trim().min(1).max(512) });
+
+type SetupContext = Context<{ Variables: Variables }>;
+
+async function isOwner(c: SetupContext): Promise<boolean> {
+  const sessionUser = c.get("user");
+  if (!sessionUser) return false;
+  const [row] = await db
+    .select({ instanceRole: user.instanceRole })
+    .from(user)
+    .where(eq(user.id, sessionUser.id))
+    .limit(1);
+  return row?.instanceRole === "owner";
+}
+
+function hasServerAccess(c: SetupContext): boolean {
+  return verifyServerAccessSession(getCookie(c, SERVER_ACCESS_COOKIE));
+}
+
+async function requireSetupAccess(
+  c: SetupContext,
+): Promise<{ allowed: true } | { allowed: false; status: 401 | 403; message: string }> {
+  const status = getSetupStatus();
+  if (status.needsOwner) {
+    if (hasServerAccess(c)) return { allowed: true };
+    logServerAccessInstructions();
+    return { allowed: false, status: 401, message: "Server access token required" };
+  }
+  if (await isOwner(c)) return { allowed: true };
+  return {
+    allowed: false,
+    status: c.get("user") ? 403 : 401,
+    message: c.get("user") ? "Owner only" : "Owner sign-in required",
+  };
+}
+
 function originFromRequest(c: {
   req: { url: string; header: (k: string) => string | undefined };
 }): string {
@@ -51,12 +106,7 @@ function originFromRequest(c: {
   return `${proto}://${host}`;
 }
 
-/**
- * Heuristic for "GitHub can reach this host". Used to decide whether to
- * subscribe to webhooks in the App manifest. RFC1918 + loopback + .local
- * mDNS hosts are private to the operator's machine or LAN; everything
- * else we assume is public.
- */
+/** Identify loopback and private hosts for local-development redirects. */
 function isLoopbackHost(hostname: string): boolean {
   if (hostname === "localhost" || hostname === "0.0.0.0") return true;
   if (hostname === "::1" || hostname === "[::1]") return true;
@@ -79,7 +129,7 @@ function isLoopbackHost(hostname: string): boolean {
  *
  * Local dev: the API runs on `:3000` but the SPA is served by Vite
  * on `:5173`. A redirect to `:3000/setup` hits the API's "no built
- * SPA" placeholder (the "Run `yarn build`" message). We detect the
+ * SPA" placeholder (the "Run `pnpm build`" message). We detect the
  * dev port and swap it for the Vite port so post-OAuth redirects
  * land on the SPA the user is actually looking at. Operators can
  * override with WEB_ORIGIN if they run a non-default Vite port.
@@ -100,20 +150,75 @@ function webOriginFromRequest(c: {
 
 export const setupRouter = new Hono<{ Variables: Variables }>()
   .get("/status", async (c) => {
-    return c.json(getSetupStatus());
+    const status = getSetupStatus();
+    if (await isOwner(c)) return c.json({ ...status, access: "granted" as const });
+    if (status.needsOwner && hasServerAccess(c)) {
+      return c.json({ ...status, access: "granted" as const });
+    }
+    if (status.needsOwner) {
+      logServerAccessInstructions();
+      return c.json({
+        needsSetup: status.needsSetup,
+        needsOwner: true,
+        access: "token-required" as const,
+      });
+    }
+    if (status.needsSetup) {
+      return c.json({
+        needsSetup: true,
+        needsOwner: false,
+        access: "owner-required" as const,
+      });
+    }
+    return c.json({
+      needsSetup: false,
+      needsOwner: false,
+      access: "complete" as const,
+    });
+  })
+  .post("/unlock", async (c) => {
+    const status = getSetupStatus();
+    if (!status.needsOwner) {
+      return c.json({ error: "The instance owner must manage setup now." }, 409);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = unlockSchema.safeParse(body);
+    const ipKey = rateLimitFingerprint(getRequestIp(c));
+    const perIp = fixedWindowRateLimiter.consume({
+      key: `setup-unlock:ip:${ipKey}`,
+      limit: 10,
+      windowMs: 15 * 60_000,
+    });
+    const global = fixedWindowRateLimiter.consume({
+      key: "setup-unlock:global",
+      limit: 200,
+      windowMs: 15 * 60_000,
+    });
+    if (!perIp.allowed || !global.allowed) {
+      const retryAfter = Math.max(perIp.retryAfterSeconds, global.retryAfterSeconds);
+      c.header("Retry-After", String(retryAfter));
+      return c.json({ error: "Too many attempts. Try again later." }, 429);
+    }
+    if (!parsed.success || !verifyServerAccessToken(parsed.data.token)) {
+      logServerAccessInstructions();
+      return c.json({ error: "Invalid server access token" }, 401);
+    }
+    const session = issueServerAccessSession();
+    setCookie(c, SERVER_ACCESS_COOKIE, session.value, {
+      path: "/",
+      httpOnly: true,
+      secure: shouldUseSecureCookies(),
+      sameSite: "Lax",
+      expires: session.expires,
+    });
+    return c.json({ ok: true });
   })
   .post("/save", async (c) => {
-    const status = getSetupStatus();
-    // Once setup is done, only owners can change settings
-    if (!status.needsSetup) {
-      const sessionUser = c.get("user");
-      if (!sessionUser) return c.json({ error: "Unauthorized" }, 401);
-      const [row] = await db
-        .select({ instanceRole: user.instanceRole })
-        .from(user)
-        .where(eq(user.id, sessionUser.id))
-        .limit(1);
-      if (row?.instanceRole !== "owner") return c.json({ error: "Forbidden" }, 403);
+    const access = await requireSetupAccess(c);
+    if (!access.allowed) {
+      return access.status === 401
+        ? c.json({ error: access.message }, 401)
+        : c.json({ error: access.message }, 403);
     }
 
     const body = await c.req.json().catch(() => null);
@@ -132,7 +237,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     // Mailer may have new SMTP/Resend config, reset its cached transport
     resetMailer();
 
-    return c.json({ ok: true, status: getSetupStatus() });
+    return c.json({ ok: true, status: { ...getSetupStatus(), access: "granted" as const } });
   })
   /**
    * GitHub App Manifest flow, step 1: emit an HTML page with a form that
@@ -146,42 +251,32 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
    * renders its "Create GitHub App" preview, and the user clicks approve.
    */
   .get("/github-app/start", async (c) => {
-    const status = getSetupStatus();
-    // Allow during first-run setup OR for the existing owner re-running the flow
-    if (!status.needsSetup) {
-      const sessionUser = c.get("user");
-      if (!sessionUser) return c.text("Unauthorized", 401);
-      const [row] = await db
-        .select({ instanceRole: user.instanceRole })
-        .from(user)
-        .where(eq(user.id, sessionUser.id))
-        .limit(1);
-      if (row?.instanceRole !== "owner") return c.text("Owner only", 403);
+    const access = await requireSetupAccess(c);
+    if (!access.allowed) {
+      return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
     }
 
     const origin = originFromRequest(c);
-    const instanceName = (getSetupStatus().values.INSTANCE_NAME?.value ?? "Quillra").slice(0, 34);
-    // GitHub App names must be globally unique; append the host as a
-    // disambiguator so multiple self-hosted instances don't fight over
-    // the same name in the user's App list.
-    const originUrl = new URL(origin);
-    const host = originUrl.host;
-    const appName = `${instanceName} @ ${host}`.slice(0, 34);
-
-    // GitHub validates the manifest's webhook URL against "reachable
-    // over the public Internet" and rejects loopback / RFC1918
-    // addresses. Locally, that means the manifest creation step 500s on
-    // GitHub's side before the App ever exists. Quillra also doesn't
-    // currently handle GitHub webhook events (no POST handler under
-    // /api/github-app/webhook), so subscribing was speculative anyway.
-    // Drop hook_attributes entirely for non-public origins; production
-    // instances on a real domain still register it normally.
-    const isPublicOrigin = !isLoopbackHost(originUrl.hostname);
+    const instanceName = getSetupStatus().values.INSTANCE_NAME?.value ?? "Quillra";
+    const installationSecret = process.env.BETTER_AUTH_SECRET;
+    if (!installationSecret) throw new Error("BETTER_AUTH_SECRET is required");
+    // GitHub App names are global. The readable host helps owners identify the
+    // App, while a stable installation-specific suffix also disambiguates the
+    // many local installs that share localhost:3000.
+    const appName = githubAppManifestName(instanceName, origin, installationSecret);
+    const manifestFlow = githubManifestFlowStore.issue();
+    setCookie(c, GITHUB_MANIFEST_FLOW_COOKIE, manifestFlow.value, {
+      path: GITHUB_MANIFEST_FLOW_COOKIE_PATH,
+      httpOnly: true,
+      secure: shouldUseSecureCookies(),
+      sameSite: "Lax",
+      expires: manifestFlow.expires,
+    });
 
     const manifest: Record<string, unknown> = {
       name: appName,
       url: origin,
-      redirect_url: `${origin}/api/setup/github-app/callback`,
+      redirect_url: `${origin}${GITHUB_MANIFEST_FLOW_COOKIE_PATH}`,
       // After install GitHub redirects here so Quillra learns the
       // installation id and can immediately start using the App.
       setup_url: `${origin}/api/setup/github-app/installed`,
@@ -202,31 +297,16 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
         contents: "write",
         // required by every GitHub App
         metadata: "read",
-        // needed to open and comment on pull requests
-        pull_requests: "write",
-        // GitHub blocks edits to files under .github/workflows/ without
-        // this, even when contents:write is already granted.
-        workflows: "write",
-        // lets the agent create/close issues when the chat asks for it
-        issues: "write",
-        // lets the agent read the installation's own metadata (list
-        // repos it can see, etc.) without needing a separate call
-        administration: "read",
       },
     };
-    if (isPublicOrigin) {
-      manifest.hook_attributes = {
-        url: `${origin}/api/github-app/webhook`,
-        active: true,
-      };
-      manifest.default_events = ["push", "pull_request", "issues"];
-    }
+    // No webhook is requested: Quillra does not expose a webhook receiver.
+    // Omitting it also keeps first-run setup functional on private/local hosts.
     const manifestJson = JSON.stringify(manifest).replace(/</g, "\\u003c");
 
-    // The form posts to github.com's "new app from manifest" endpoint. A
-    // tiny inline script submits it automatically so the user doesn't see
-    // an intermediate page, they just click "Create GitHub App" on
-    // github.com and come back.
+    // GitHub reflects the unguessable `state` action parameter into the
+    // redirect_url callback. A tiny inline script submits the form so the
+    // user doesn't see an intermediate page; they approve on github.com and
+    // come back with both `code` and `state`.
     const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -241,7 +321,7 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
   </style>
 </head>
 <body>
-  <form class="card" method="post" action="https://github.com/settings/apps/new">
+  <form class="card" method="post" action="https://github.com/settings/apps/new?state=${encodeURIComponent(manifestFlow.value)}">
     <p><strong>One more step.</strong></p>
     <p>GitHub will ask you to create a <strong>${appName.replace(/</g, "&lt;")}</strong> App. Click approve and we'll handle the rest.</p>
     <input type="hidden" name="manifest" value='${manifestJson.replace(/'/g, "&apos;")}'>
@@ -265,8 +345,29 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
    * github.com, nothing to click in between.
    */
   .get("/github-app/callback", async (c) => {
+    const access = await requireSetupAccess(c);
+    if (!access.allowed) {
+      return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
+    }
     const code = c.req.query("code");
     if (!code) return c.text("Missing code", 400);
+    const manifestState = githubManifestFlowStore.consume(
+      c.req.query("state"),
+      getCookie(c, GITHUB_MANIFEST_FLOW_COOKIE),
+    );
+    if (!manifestState.ok) {
+      if (manifestState.reason === "expired" || manifestState.reason === "invalid") {
+        deleteCookie(c, GITHUB_MANIFEST_FLOW_COOKIE, {
+          path: GITHUB_MANIFEST_FLOW_COOKIE_PATH,
+          secure: shouldUseSecureCookies(),
+        });
+      }
+      return c.text("Invalid or expired GitHub App setup state. Start the flow again.", 400);
+    }
+    deleteCookie(c, GITHUB_MANIFEST_FLOW_COOKIE, {
+      path: GITHUB_MANIFEST_FLOW_COOKIE_PATH,
+      secure: shouldUseSecureCookies(),
+    });
     try {
       const data = await exchangeManifestCode(code);
       // Bypass the wizard entirely and send them to GitHub's
@@ -292,6 +393,10 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
    * Organization Settings.
    */
   .get("/github-app/installed", async (c) => {
+    const access = await requireSetupAccess(c);
+    if (!access.allowed) {
+      return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
+    }
     const origin = webOriginFromRequest(c);
     const installationId = c.req.query("installation_id") ?? "";
     const status = getSetupStatus();

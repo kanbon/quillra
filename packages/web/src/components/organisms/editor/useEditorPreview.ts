@@ -21,7 +21,7 @@ import { apiJson } from "@/lib/api";
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export function useEditorPreview(projectId: string) {
+export function useEditorPreview(projectId: string, autoStart = true) {
   const { t } = useT();
   const id = projectId;
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -29,7 +29,7 @@ export function useEditorPreview(projectId: string) {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewStarted = useRef(false);
 
-  const previewMut = useMutation({
+  const { mutate: startPreview, isPending: previewStarting } = useMutation({
     mutationFn: async () => {
       return apiJson<{ url: string; previewLabel: string }>(`/api/projects/${id}/preview`, {
         method: "POST",
@@ -49,10 +49,8 @@ export function useEditorPreview(projectId: string) {
 
   // Listen for refresh events fired by components that don't have
   // direct access to Editor state (e.g. ChangesModal after discarding
-  // changes). The dev server's file watcher should pick up most file
-  // edits automatically, but a hard reset can change a lot of files
-  // at once and some frameworks batch-drop HMR updates under that
-  // load, reloading the iframe is the belt-and-suspenders fix.
+  // changes). Chat turns and bulk Git operations explicitly reload the
+  // iframe when they finish, which works consistently across frameworks.
   useEffect(() => {
     const handler = () => refreshPreview();
     window.addEventListener("quillra:refresh-preview", handler);
@@ -63,7 +61,7 @@ export function useEditorPreview(projectId: string) {
   // (deterministic) preview URL so the user sees the proxy boot page with no
   // intermediate spinners. The dev server is started in the background.
   useEffect(() => {
-    if (!id || previewStarted.current) return;
+    if (!id || !autoStart || previewStarted.current) return;
     previewStarted.current = true;
     void (async () => {
       try {
@@ -75,10 +73,9 @@ export function useEditorPreview(projectId: string) {
       } catch {
         /* not critical */
       }
-      previewMut.mutate();
+      startPreview();
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [autoStart, id, startPreview]);
 
   const startLabel =
     previewLabel && previewLabel !== "-"
@@ -91,7 +88,7 @@ export function useEditorPreview(projectId: string) {
     previewError,
     startLabel,
     refreshPreview,
-    startPreview: () => previewMut.mutate(),
-    starting: previewMut.isPending,
+    startPreview,
+    starting: previewStarting,
   };
 }

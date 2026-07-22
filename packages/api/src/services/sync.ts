@@ -30,8 +30,15 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { projects } from "../db/schema.js";
+import { buildConflictResolverCanUseTool } from "./agent-permissions.js";
+import { createSafeSdkEnv } from "./child-process-env.js";
 import { getInstanceSetting } from "./instance-settings.js";
-import { ensureRepoCloned, runInProjectLock, simpleGitForProject } from "./workspace.js";
+import {
+  authenticatedGitForProject,
+  ensureRepoCloned,
+  runInProjectLock,
+  simpleGitForProject,
+} from "./workspace.js";
 
 export type LocalFileChange = {
   path: string;
@@ -88,7 +95,7 @@ export async function getSyncStatus(projectId: string): Promise<SyncStatus> {
   const p = await loadProject(projectId);
   const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
   return runInProjectLock(p.id, async () => {
-    const g = simpleGitForProject(repoPath);
+    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
 
     try {
       await g.fetch("origin", p.defaultBranch);
@@ -184,7 +191,7 @@ export async function fastForwardPull(projectId: string): Promise<{ pulled: numb
   const p = await loadProject(projectId);
   const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
   return runInProjectLock(p.id, async () => {
-    const g = simpleGitForProject(repoPath);
+    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
     await g.fetch("origin", p.defaultBranch);
     const before = (await g.revparse(["HEAD"])).trim();
     await g.raw(["merge", "--ff-only", `origin/${p.defaultBranch}`]);
@@ -205,7 +212,7 @@ export async function discardAndReset(projectId: string): Promise<void> {
   const p = await loadProject(projectId);
   const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
   await runInProjectLock(p.id, async () => {
-    const g = simpleGitForProject(repoPath);
+    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
     await g.fetch("origin", p.defaultBranch);
     await g.reset(["--hard", `origin/${p.defaultBranch}`]);
     await g.clean("fd");
@@ -232,7 +239,7 @@ export async function mergeRemote(projectId: string, actor: GitActor): Promise<M
   const p = await loadProject(projectId);
   const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
   return runInProjectLock(p.id, async () => {
-    const g = simpleGitForProject(repoPath);
+    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
     await configureGitActor(g, actor);
     await g.fetch("origin", p.defaultBranch);
 
@@ -281,7 +288,6 @@ export async function mergeRemote(projectId: string, actor: GitActor): Promise<M
     }
 
     const resolved = await resolveMergeConflictsWithOpus({
-      projectId,
       repoPath,
       conflictedFiles: conflicted,
     });
@@ -305,14 +311,14 @@ export async function mergeRemote(projectId: string, actor: GitActor): Promise<M
 /**
  * One-shot agent run dedicated to rewriting files with conflict markers.
  * Uses the strongest Opus available since these are rare, high-stakes,
- * and benefit from the extra reasoning. Tools are intentionally narrow:
- * Read, Edit, Write, Bash (for `git add`).
+ * and benefit from the extra reasoning. Tools are intentionally limited to
+ * Read, Edit, and Write on the exact conflicted files. Trusted server code
+ * stages those paths after the agent finishes.
  *
  * Returns `{ ok: true }` if every conflicted file is now clean and
  * staged, `{ ok: false, reason }` otherwise.
  */
 async function resolveMergeConflictsWithOpus(opts: {
-  projectId: string;
   repoPath: string;
   conflictedFiles: string[];
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -321,7 +327,9 @@ async function resolveMergeConflictsWithOpus(opts: {
     return { ok: false, reason: "No Anthropic API key configured." };
   }
 
-  const listing = opts.conflictedFiles.map((f) => `  - ${f}`).join("\n");
+  const listing = opts.conflictedFiles
+    .map((filePath) => `  - ${JSON.stringify(filePath)}`)
+    .join("\n");
   const prompt = `You are resolving a git merge conflict for the Quillra website editor.
 
 Repository: ${opts.repoPath}
@@ -336,10 +344,9 @@ For each file above:
      - For config/build files (package.json, lock files, *.config.*, CI configs) prefer
        the remote side unless the local side is clearly the newer, intended change.
      - Never leave conflict markers in the file.
-  3. Write the resolved file.
-  4. Stage it with: git add <file>
+  3. Write the resolved file. Quillra will stage the exact conflicted paths after you finish.
 
-After every file above is resolved and staged, stop. Do not run git commit. Do not touch
+After every file above is resolved, stop. Do not run git commands. Do not touch
 files that aren't in the list. Do not change unrelated lines in the conflicted files.
 
 When done, reply with a single short confirmation line like "Resolved N files.". No
@@ -359,13 +366,13 @@ explanation of individual changes; we just need to know you finished.`;
           append:
             "You are a careful merge-conflict resolver. Do exactly what the user asked, nothing else. No commentary during tool use.",
         },
-        env: {
-          ...process.env,
+        env: createSafeSdkEnv({
           ANTHROPIC_API_KEY: apiKey,
           CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms-conflict-resolver",
           IS_SANDBOX: "1",
-        },
-        tools: { type: "preset", preset: "claude_code" },
+        }),
+        tools: ["Read", "Edit", "Write"],
+        canUseTool: buildConflictResolverCanUseTool(opts.repoPath, opts.conflictedFiles),
       },
     })) {
       // We don't care about intermediate events; the sentinel is that the
@@ -390,15 +397,23 @@ explanation of individual changes; we just need to know you finished.`;
       }
     }
   }
+  // Stage only the server-supplied conflict list. `--` prevents unusual file
+  // names from being interpreted as git options, and the agent never gets a
+  // shell merely to perform this deterministic operation.
+  const g = simpleGitForProject(opts.repoPath);
+  try {
+    await g.add(["--", ...opts.conflictedFiles]);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : "Failed to stage resolved files.",
+    };
+  }
+
   // Confirm the index has no unmerged paths remaining.
-  const unresolved = (
-    await (async () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { simpleGit } = await import("simple-git");
-      const g = simpleGit(opts.repoPath);
-      return (await g.raw(["diff", "--name-only", "--diff-filter=U"])).split("\n").filter(Boolean);
-    })()
-  ).length;
+  const unresolved = (await g.raw(["diff", "--name-only", "--diff-filter=U"]))
+    .split("\n")
+    .filter(Boolean).length;
   if (unresolved > 0) {
     return { ok: false, reason: "Some files were not staged by the resolver." };
   }

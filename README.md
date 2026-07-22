@@ -46,7 +46,7 @@ Quillra is the missing layer. Your repo stays the source of truth. Your client o
 The editing loop is chat on the left, live preview on the right. The client types what they want in plain language; the agent edits the real files in your repo; the preview reloads; they hit **Publish** and your existing CI deploys it.
 
 - **Chat-first editing**: describe changes in plain language, no Markdown, no file paths
-- **Live preview**: per-project dev server with hot reload. When it errors out, one click hands the error straight to the assistant
+- **Live preview**: isolated per-project dev server that refreshes after edits. When it errors out, one click hands the error straight to the assistant
 - **Real Git history**: every change is a real commit, attributed and reviewable
 - **Your existing pipeline**: Pages, Vercel, Netlify, Cloudflare, your VPS; Quillra never touches hosting
 
@@ -87,16 +87,16 @@ The end result: you hand the customer a clean, fast site and a chat-based editor
 
 ## Frameworks we know
 
-Auto-detected from `package.json` / config files. The agent is told which framework it's editing so it edits things the way that framework expects.
+Auto-detected from `package.json`. The agent is told which framework it is editing so it follows that framework's conventions.
 
-Astro · Next.js · Nuxt · Gatsby · SvelteKit · Remix · Eleventy · Vite · Hugo · Jekyll · plain HTML
+Astro · Next.js · Nuxt · Gatsby · SvelteKit · Remix · Eleventy · Vite · Create React App · Docusaurus · VitePress · Qwik · SolidStart
 
 Your dev server command is auto-detected, or you can override it per project.
 
 ## How it works (in practice)
 
 1. Connect a **GitHub repository** and branch, Quillra clones it on your server
-2. Invite people by email; they sign in with **GitHub** and only see projects they belong to
+2. Invite people by email; they use a **passwordless email code** and only see projects they belong to
 3. They **chat** with the assistant, it reads and edits files in the workspace under role-aware rules
 4. **Publish** runs `git push` so your existing pipeline deploys, exactly as if a developer pushed
 
@@ -110,19 +110,152 @@ You deploy **one Quillra instance** (VPS, internal server, Docker). There are no
 
 | Variable | Purpose |
 |----------|---------|
-| `BETTER_AUTH_URL` | Public URL of the API (OAuth callbacks and cookies) |
-| `BETTER_AUTH_SECRET` | Session encryption secret (`openssl rand -base64 32`) |
+| `BETTER_AUTH_URL` | Public URL of the app (redirects and cookies) |
+| `BETTER_AUTH_SECRET` | Session signing secret (`openssl rand -base64 32`) |
+| `QUILLRA_ENCRYPTION_KEY` | Encrypts credentials stored in SQLite (`openssl rand -hex 32`) |
+| `QUILLRA_SETUP_TOKEN` | Optional operator-chosen token that protects first-run setup and no-email recovery |
 | `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth for the owner's sign-in |
 | `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server |
-| `PREVIEW_DOMAIN` | Wildcard subdomain for per-project preview URLs |
 | `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`, powers invites, warnings, and monthly reports |
 
-All other settings, GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields, are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them.
+All other settings, GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields, are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them and creates the owner account with a passwordless email code.
 
-Copy `packages/api/.env.example` → `.env`, fill the values above, and start the container. The SQLite schema bootstraps itself on first run. Set the GitHub OAuth callback to `{BETTER_AUTH_URL}/api/auth/callback/github`.
+Copy `packages/api/.env.example` to `packages/api/.env`, set the public URL,
+origins, and production secrets, then start the container. Keep
+`QUILLRA_ENCRYPTION_KEY` stable: it protects API keys and other credentials in
+SQLite, so it belongs in the same backup plan as the data volume. The SQLite
+schema bootstraps itself on first run; the browser wizard collects the remaining
+values. Setup first asks for `QUILLRA_SETUP_TOKEN`. If you leave it empty,
+Quillra derives an installation-specific token and prints it only to the server
+logs (`docker compose logs cms`). With email delivery disabled, that same proof
+is required before a one-time owner or recovery code can be shown in the browser.
 
-**Server prerequisites:** Node.js, `git`, and a package manager on `PATH` so installs and dev previews work inside cloned workspaces.
+Live previews are served through a capability-protected, sandboxed path on the
+Quillra origin. Built-in framework commands bind their dev servers to loopback.
+If you configure a custom preview command, keep it on `127.0.0.1`; never expose
+workspace ports or wildcard preview subdomains publicly.
+
+Quillra installs dependencies and runs development commands from connected
+repositories inside the application container. The browser preview is
+sandboxed, but repository code is not a host-security boundary. Connect only
+repositories and dependency trees you trust; use separate Quillra instances
+when mutually untrusted teams need isolation.
+
+**Server prerequisites:** Docker Engine with Compose, Git, OpenSSL, a text
+editor, and curl for the health check. Caddy or another TLS reverse proxy is
+optional but recommended for an internet-facing install. A source installation
+additionally needs Node.js 22 and Corepack on `PATH`. The image includes Node.js,
+Corepack, npm, pnpm, Yarn Classic, and Git for the supported JavaScript
+frameworks above. Non-Node generators such as Hugo and Jekyll are outside the
+stock registry and image.
+
+The Docker image builds Quillra with its pinned pnpm 10 release. For cloned
+projects, Corepack honors an explicit `packageManager`; older pnpm projects
+without that field use pnpm 9 so dependency lifecycle scripts keep working.
+
+### Docker quickstart
+
+```bash
+git clone https://github.com/kanbon/quillra.git
+cd quillra
+cp packages/api/.env.example packages/api/.env
+chmod 600 packages/api/.env
+
+# Generate each value once, then paste it into packages/api/.env.
+openssl rand -base64 32  # BETTER_AUTH_SECRET
+openssl rand -hex 32     # QUILLRA_ENCRYPTION_KEY
+openssl rand -base64 24  # QUILLRA_SETUP_TOKEN
+
+# Also set BETTER_AUTH_URL, TRUSTED_ORIGINS, and ANTHROPIC_API_KEY.
+${EDITOR:-vi} packages/api/.env
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 cms
+curl -fsS http://127.0.0.1:3000/api/setup/status
+```
+
+Compose publishes Quillra only on host loopback. To terminate TLS with Caddy,
+copy the `cms.example.com` site block from [`Caddyfile`](./Caddyfile) into the
+host's Caddy configuration, replace the example domain, and keep the upstream
+as `127.0.0.1:3000`. On a shared Caddy host, merge the block instead of replacing
+the whole configuration.
+
+```bash
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+curl -fsS https://cms.yourdomain.com/api/setup/status
+```
+
+### Safe upgrades and rollback
+
+Back up the entire named data volume while the app is stopped. This captures
+SQLite's database, WAL files, and project workspaces together. The commands
+below restart the old container before downloading and building the upgrade, so
+a failed build does not extend the backup downtime.
+
+```bash
+set -euo pipefail
+mkdir -p backups
+chmod 700 backups
+previous_commit="$(git rev-parse HEAD)"
+container_id="$(docker compose ps -q cms)"
+volume_name="$(docker inspect "$container_id" --format '{{range .Mounts}}{{if eq .Destination "/app/packages/api/data"}}{{.Name}}{{end}}{{end}}')"
+backup_name="quillra-data-$(date +%Y%m%d-%H%M%S).tgz"
+test -n "$volume_name"
+docker pull alpine:3.22
+
+docker compose stop cms
+docker run --rm \
+  --mount "type=volume,src=$volume_name,dst=/data,readonly" \
+  --mount "type=bind,src=$PWD/backups,dst=/backup" \
+  alpine:3.22 tar -C /data -czf "/backup/$backup_name" .
+docker compose start cms
+printf '%s\n' "$previous_commit" > "backups/$backup_name.commit"
+install -m 600 packages/api/.env "backups/$backup_name.env"
+sha256sum "backups/$backup_name" "backups/$backup_name.env" > "backups/$backup_name.sha256"
+
+git pull --ff-only
+docker compose build cms
+docker compose up -d cms
+docker compose ps
+docker compose logs --tail=100 cms
+curl -fsS http://127.0.0.1:3000/api/setup/status
+```
+
+Keep the archive, checksum, environment backup, and commit marker until the
+upgraded instance has been verified. To roll back, stop Quillra, restore the
+complete archive and environment, and build the recorded source revision. The
+restore command below intentionally replaces everything in the data volume.
+
+```bash
+set -euo pipefail
+backup_name=quillra-data-YYYYMMDD-HHMMSS.tgz
+previous_commit="$(cat "backups/$backup_name.commit")"
+sha256sum -c "backups/$backup_name.sha256"
+container_id="$(docker compose ps -q cms)"
+volume_name="$(docker inspect "$container_id" --format '{{range .Mounts}}{{if eq .Destination "/app/packages/api/data"}}{{.Name}}{{end}}{{end}}')"
+test -n "$volume_name"
+
+docker compose down
+docker run --rm \
+  -e BACKUP_NAME="$backup_name" \
+  --mount "type=volume,src=$volume_name,dst=/data" \
+  --mount "type=bind,src=$PWD/backups,dst=/backup,readonly" \
+  alpine:3.22 sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar -C /data -xzf "/backup/$BACKUP_NAME"'
+install -m 600 "backups/$backup_name.env" packages/api/.env
+git switch --detach "$previous_commit"
+docker compose up -d --build
+curl -fsS http://127.0.0.1:3000/api/setup/status
+```
+
+The rollback intentionally leaves the checkout detached at the recorded
+revision. Before attempting a later upgrade, return to the tracked branch:
+
+```bash
+git switch main
+git pull --ff-only
+```
 
 The **Sites** dashboard lists every project you can access; from the editor, use the logo to return and connect more repositories. Organization Settings (owner only) covers email, API keys, team invites, usage, and spend controls.
 
@@ -135,22 +268,31 @@ We're rolling out a managed SaaS, same product, we run the box. **Join the waitl
 ## For developers
 
 ```bash
-yarn install
+corepack enable
+pnpm install
 cp packages/api/.env.example packages/api/.env   # fill secrets
-cd packages/api && DATABASE_URL=file:./data/cms.sqlite yarn db:push && cd ../..
-yarn dev    # API :3000 + Vite :5173 (Turbo)
+pnpm dev    # API :3000 + Vite :5173 (Turbo)
 ```
 
 Production build (SPA is copied into `packages/api/public`):
 
 ```bash
-yarn build
-node packages/api/dist/index.js
+pnpm build
+pnpm --filter @quillra/api start
 ```
 
-Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` for SQLite and workspaces.
+Docker: see `Dockerfile` and `docker-compose.yml`; the Compose service publishes
+port 3000 on host loopback for the included Caddy pattern and persists
+`packages/api/data` for SQLite and workspaces.
 
-**Stack:** Hono, Better Auth, Drizzle + SQLite, Claude Agent SDK, sharp (API); React, Vite, React Router, TanStack Query, Tailwind (web). Yarn workspaces and Turborepo.
+Automated checks:
+
+```bash
+pnpm test       # Vitest unit and API integration tests
+pnpm test:e2e   # production build + owner, collaborator, and client signup in Playwright
+```
+
+**Stack:** Hono, Better Auth, Drizzle + SQLite, Claude Agent SDK, sharp (API); React, Vite, React Router, TanStack Query, Tailwind (web). pnpm workspaces and Turborepo.
 
 **UI:** Light, minimal chrome; accent `#C1121F` used sparingly.
 
@@ -158,7 +300,7 @@ Docker: see `Dockerfile` and `docker-compose.yml`; persist `packages/api/data` f
 
 **Architecture:** the full map of how the pieces fit together is in [ARCHITECTURE.md](./ARCHITECTURE.md). That's the document to read before your first non-trivial change.
 
-**Code quality:** Biome formats and lints (`yarn lint`, `yarn format`). TypeScript is strict. A tiny guard script fails the build if any em-dash (U+2014) lands in source or prose: keep punctuation ASCII.
+**Code quality:** Biome formats and lints (`pnpm lint`, `pnpm format`). TypeScript is strict. A tiny guard script fails the build if any em-dash (U+2014) lands in source or prose: keep punctuation ASCII.
 
 ---
 
@@ -178,7 +320,7 @@ What's next, grouped by theme. Order is rough priority, not commitment. PRs that
 
 How commits land in the repo and how downstream pipelines react.
 
-- **Optional commit-as-user.** Today, Quillra's GitHub App pushes commits as `quillra[bot]` (signed by the App's private key). Vercel, Netlify, Cloudflare Pages, and GitHub Actions all build on those pushes the same way they would on a human push, so customers can already hit Publish and ship. The roadmap item is letting an editor or client paste a fine-grained personal access token in their settings so their commits show up under their own GitHub identity instead of the bot, for repos with stricter contributor-graph or signed-commit rules.
+- **Optional commit-as-user.** Today, Quillra authenticates pushes through its GitHub App and uses the App bot's GitHub noreply identity for commits when available. These commits are not cryptographically signed. Vercel, Netlify, Cloudflare Pages, and GitHub Actions still build on those pushes the same way they would on a human push. The roadmap item is optional per-user attribution for repositories with stricter contributor or signed-commit rules.
 
 - **Branch-based environments.** A "Publish to staging" toggle alongside the current Publish, so the agency's existing `staging` branch gets its own preview URL and the client signs off there before promoting.
 

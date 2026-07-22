@@ -36,7 +36,7 @@ quillra/
     api/                backend (Hono, Drizzle, Claude Agent SDK)
     web/                frontend (React, Vite, TailwindCSS)
   scripts/              one-shot maintenance scripts
-  .github/workflows/    CI: typecheck, lint, em-dash check
+  .github/workflows/    CI: checks, signup E2E, and container smoke tests
   biome.json            formatter + linter config (shared by both packages)
   turbo.json            task runner config
   ARCHITECTURE.md       this file
@@ -62,7 +62,7 @@ because `projects/` alone would be 1,200 lines otherwise.
 routes/
   admin.ts              owner-only endpoints (usage reports, user list)
   clients.ts            public-ish endpoints for the branded client login
-  github.ts             GitHub App webhook receivers
+  github.ts             GitHub App repository discovery and metadata
   instance.ts           public instance metadata (/impressum etc)
   setup.ts              first-run wizard API
   team-login.ts         passwordless 6-digit email code flow
@@ -147,11 +147,14 @@ by `user.instanceRole = "owner"`.
 
 ### Workspace model
 
-Every project has exactly one clone on disk under `/opt/quillra/data/repos/<projectId>/`
+Every project has exactly one clone on disk under
+`$WORKSPACE_DIR/<projectId>/` (default: `packages/api/data/workspaces/<projectId>/`)
 and, while active, one preview dev server. The preview is a child process
 the backend starts on demand; the user's browser talks to it through a
-reverse proxy keyed by subdomain so every project has its own hot-reload
-context.
+capability-protected path on the Quillra origin. Built-in framework commands
+bind the child process to loopback, and the browser renders the proxy response
+inside a restricted iframe. Workspace ports and wildcard preview subdomains
+must never be exposed publicly.
 
 Git operations are serialised per project with an in-process mutex because
 concurrent chat turns used to race on `.git/index.lock`.
@@ -165,13 +168,14 @@ concurrent chat turns used to race on `.git/index.lock`.
 ```
 /                 -> Login (if no session) or Dashboard (if session)
 /setup            -> first-run wizard, gated by /api/setup/status
+/impressum         -> public legal page
+/login             -> passwordless owner and team login
+/accept-invite     -> legacy token invite acceptance
+/c/:projectId      -> branded client email-code login
 /dashboard        -> project list
-/projects/:id     -> Editor (chat + preview)
-/projects/:id/settings  -> ProjectSettings
-/settings         -> InstanceSettings (owner-only tabs)
-/login, /login-client   -> passwordless login variants
-/invite/:token    -> accept invite flow
-/impressum        -> public legal page
+/p/:projectId     -> Editor (chat + preview)
+/p/:projectId/settings  -> ProjectSettings
+/admin            -> InstanceSettings (owner-only tabs)
 ```
 
 Session state is checked centrally in `components/templates/SetupGate.tsx`
@@ -238,8 +242,9 @@ goes through a dictionary key.
 
 Three session types flow through the same middleware:
 
-- **Owner / team** sessions from Better Auth cookies (GitHub OAuth for the
-  owner, passwordless email codes for everyone else).
+- **Owner / team** sessions from passwordless email-code cookies. On an empty
+  instance, the first verified address becomes the owner; later addresses must
+  already belong to a member or have a pending invite.
 - **Client** sessions from a custom cookie issued by `/api/clients/verify-code`.
   Scoped to one project; no GitHub account required.
 - **Anonymous** for public endpoints like `/api/instance` and
@@ -251,10 +256,10 @@ client session themselves.
 
 ### Permissions
 
-Every project member has a role (`admin`, `editor`, `translator`, or `client`).
+Every project member has a role (`admin`, `editor`, or `client`).
 The agent's tool allow-list is derived from the role in
 `services/agent-permissions.ts`, so clients can edit content files but can't
-run arbitrary shell commands, and translators can only edit strings files.
+run arbitrary shell commands.
 
 ### Usage and spend caps
 
@@ -273,10 +278,11 @@ repos the customer picked. `services/github-app.ts` handles app JWTs;
 
 ### Email
 
-The mailer supports Resend and any SMTP provider. Setup is optional: with no
-provider configured, invites become shareable URLs the operator copies and
-sends themselves. All mail renders through a single branded template with
-a text fallback so it survives Outlook and Gmail rendering.
+The mailer supports Resend and any SMTP provider. A solo owner can run without
+one by proving server access during sign-in. Invited team members and clients
+need a configured provider so their one-time codes can be delivered. All mail
+renders through a single branded template with a text fallback so it survives
+Outlook and Gmail rendering.
 
 ## Tooling
 
@@ -288,8 +294,9 @@ a text fallback so it survives Outlook and Gmail rendering.
   caching.
 - **`scripts/check-em-dashes.mjs`** fails the build if any source file
   contains a U+2014 character. The project style is ASCII punctuation only.
-- **GitHub Actions** (`.github/workflows/ci.yml`) runs typecheck, lint, and
-  the em-dash guard on every push and pull request.
+- **GitHub Actions** (`.github/workflows/ci.yml`) runs typecheck, lint, the
+  prose-style guard, unit tests, production signup E2E, a Docker build, and a
+  container startup smoke test on every push and pull request.
 
 ## Where to add things
 
@@ -313,7 +320,8 @@ a text fallback so it survives Outlook and Gmail rendering.
 - **A build step on publish.** Publish is `git push`, and the customer's
   existing CI handles the rest.
 - **A multi-tenant cloud service from this codebase.** The managed SaaS at
-  quillra.com runs this same code plus deployment glue we don't open-source.
+  quillra.com runs this same code plus deployment glue we do not publish in
+  this repository.
   Single-tenant self-host is the primary shape.
 ## Tests
 
@@ -326,9 +334,8 @@ services/framework-registry.test.ts  manifest and config-file detection
 services/agent-humanizer.test.ts     tool-call to plain-language translation
 ```
 
-`yarn test` runs them across the workspace via Turbo. The suites are pure
-(no database, no filesystem, no network) so they run in under a second and
-execute on every PR via the CI workflow.
-
-Frontend tests are not set up yet; the first one will likely be a
-Playwright smoke run of the setup wizard.
+`pnpm test` runs the Vitest suites across the workspace via Turbo, including
+fresh-database and passwordless-auth integration coverage. `pnpm test:e2e`
+builds the production application, launches it against an empty temporary
+SQLite database and local SMTP server, and uses Playwright to complete owner,
+collaborator, and client signup. Both run on every PR via the CI workflow.

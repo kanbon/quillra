@@ -28,20 +28,24 @@ By submitting a pull request you confirm that:
 1. You have the right to license your contribution under the same FSL-1.1-MIT terms, and
 2. You're submitting your work under those terms.
 
-No CLA signing required. We use the [Developer Certificate of Origin](https://developercertificate.org/), if that's unfamiliar, the short version is: only contribute code you actually wrote or have the right to contribute, and don't include anything you'd be embarrassed to have your name on.
+No separate CLA or sign-off trailer is required. Only contribute code you
+actually wrote or have the right to contribute under the terms above.
 
 ## Reporting bugs
 
 1. **Search [existing issues](https://github.com/kanbon/quillra/issues) first.** Someone may already be tracking it.
 2. If it's new, open a **Bug report** using the issue template. Fill every field you can, the more we know up front, the faster it gets fixed.
-3. For **security-sensitive** issues, please email the maintainers directly instead of filing a public issue. We'll acknowledge within a few working days.
+3. For **security-sensitive** issues, follow the private reporting steps in
+   [SECURITY.md](./SECURITY.md) and open a
+   [GitHub security advisory](https://github.com/kanbon/quillra/security/advisories/new).
+   Never include a vulnerability or secret in a public issue.
 
 Good bug reports include:
 
 - A one-line summary of what went wrong
 - Minimal reproduction steps
 - What you expected vs what happened
-- Your environment: OS, browser, Node version, which version of Quillra (commit SHA from `/api/setup/status` or the git log)
+- Your environment: OS, browser, Node version, and the Quillra commit SHA from the deployment checkout or Git log
 - Console / server logs if relevant
 - Screenshots or screen recordings if it's a UI issue
 
@@ -60,23 +64,26 @@ Large PRs that come out of nowhere often need major rework before they can land.
 **Prerequisites**
 
 - Node.js 22+
-- `yarn` 1.22+ (`corepack prepare yarn@1.22.22 --activate`)
+- pnpm 10.34+ (`corepack enable` uses the version pinned by this repository)
 - `git` on your `PATH`
-- A GitHub OAuth app (for sign-in) and an Anthropic API key (for the chat editor)
+- An Anthropic API key (for the chat editor); the setup wizard creates the GitHub App
 
 **Clone & install**
 
 ```bash
 git clone https://github.com/kanbon/quillra.git
 cd quillra
-yarn install
-yarn db:push     # creates the SQLite schema (one-shot on a fresh checkout)
-yarn dev         # API :3000 + Vite :5173 via Turbo
+pnpm install
+pnpm dev         # API :3000 + Vite :5173 via Turbo
 ```
+
+Both API commands load `packages/api/.env` when it exists. A production build
+can be started from the repository root with `pnpm --filter @quillra/api start`.
 
 That's it. Open `http://localhost:5173/setup` in your browser and the
 first-run wizard walks you through the rest (Anthropic API key, GitHub
-App, optional email, owner account).
+App, optional email, owner account). If `QUILLRA_SETUP_TOKEN` is unset,
+copy the installation-specific setup token printed by the API process.
 
 The session-signing secret is generated automatically on first boot
 (written to `packages/api/data/.boot-secret`, gitignored, mode 0600) so
@@ -102,34 +109,38 @@ packages/web/       React 19 + Vite + Tailwind + React Query
 Run the full check from the repo root:
 
 ```bash
-yarn check
+pnpm check
 ```
 
-This runs typecheck, Biome (format + lint), and the em-dash guard in one
-shot. All three must pass or CI will fail on your PR. Individual scripts
-are also available: `yarn typecheck`, `yarn lint`, `yarn lint:fix`,
-`yarn format`, `yarn check:em-dashes`.
+This runs typecheck, Biome (format + lint), the em-dash guard, and unit tests in
+one shot. Every check must pass or CI will fail on your PR. Individual scripts
+are also available: `pnpm typecheck`, `pnpm lint`, `pnpm lint:fix`,
+`pnpm format`, `pnpm check:em-dashes`.
 
 <a id="tests"></a>
 **Running tests**
 
 ```bash
-yarn test           # run once
-yarn workspace @quillra/api test:watch   # watch mode for the API package
+pnpm test                                  # run once
+pnpm test:e2e                              # build and test owner, collaborator, and client signup in Chromium
+pnpm --filter @quillra/api test:watch      # watch mode for the API package
 ```
 
-Tests run with Vitest. The seed suites cover the secret-encryption wrapper
-(`services/crypto.ts`), the framework detector (`services/framework-registry.ts`),
-and the chat-transcript humanizer (`services/agent-humanizer.ts`). If you
-touch anything with non-trivial logic, especially in `services/` or
-`routes/`, please add tests alongside your change. Test files sit next to
-the module they cover, as `*.test.ts`.
+Vitest covers isolated backend logic and API/database integration. Playwright
+builds the production SPA, starts it against an empty temporary SQLite database
+and local SMTP server, and walks through first-run setup, owner recovery,
+collaborator signup, and project-scoped client signup. If you touch
+anything with non-trivial logic, especially in `services/` or `routes/`, add a
+focused test alongside the change. Test files sit next to the module they cover,
+as `*.test.ts`.
 
 ## Code style & conventions
 
 - **TypeScript strict mode** is on everywhere. Don't widen types with `any` to silence errors, fix the root cause.
-- **Biome** formats and lints everything. Run `yarn lint:fix` before you push. The config is at `biome.json` at the repo root and covers both packages.
-- **No em-dashes.** The project style is ASCII punctuation only: `. , : ( )`. A pre-commit CI check rejects the U+2014 character in source files and prose. Long dashes belong in typography, not in source.
+- **Biome** formats and lints everything. Run `pnpm lint:fix` before you push. The config is at `biome.json` at the repo root and covers both packages.
+- **No em-dashes in English code and docs.** The CI style check scans the
+  project source and Markdown while excluding localized dictionaries and
+  license text.
 - **React components** follow atomic design: `atoms/`, `molecules/`, `organisms/`, `templates/`. Primitives go in `atoms/` or `molecules/`, feature-sized blocks go in `organisms/`. Pages stay thin.
 - **Tailwind** for all styling. No CSS-in-JS. `cn()` from `@/lib/cn` for conditional classes.
 - **Small files, small functions.** If you find yourself needing a comment block to explain what a function does, it probably wants to be split up. The 200-line heuristic in [ARCHITECTURE.md](./ARCHITECTURE.md) is a good pressure gauge.
@@ -142,12 +153,15 @@ the module they cover, as `*.test.ts`.
 
 1. Fork the repo, branch from `main`, name your branch something descriptive (`fix/preview-flicker`, `feat/smtp-backend`).
 2. Make your change. Keep it focused, if you find unrelated cleanup that's tempting, do it in a separate PR.
-3. Run `yarn check` (typecheck + lint + em-dash guard). Everything must pass.
+3. Run `pnpm check` (typecheck + lint + em-dash guard + tests). Everything must pass.
 4. **If you touched anything that reads secrets or env files**, scan your diff:
    ```bash
-   git diff --staged | grep -E 'sk-|ghp_|github_pat_|re_[a-z0-9]|API_KEY=[^$]|TOKEN=[^$]|PASSWORD=[^$]'
+   secret_pattern='(sk''-[A-Za-z0-9_-]{20,}|ghp_''[A-Za-z0-9]{20,}|github_pat_''[A-Za-z0-9_]{20,}|re_''[A-Za-z0-9]{20,}|(API_''KEY|TOKEN|PASSWORD)=[^[:space:]$<])'
+   git diff --staged --no-ext-diff -U0 | grep -E '^\+[^+]' | grep -E "$secret_pattern" | grep -Eiv '(example|placeholder|x{6,}|your[_-])'
    ```
-   Should be empty. Quillra is a public repo.
+   No output after placeholder filtering is expected. If anything remains,
+   inspect it and rotate any exposed credential before pushing. This heuristic
+   complements review; it does not replace a dedicated secret scanner.
 5. Push and open a PR against `main` using the template. Fill it out, describe the user problem and how your change fixes it.
 6. A maintainer will review. If changes are requested, push follow-up commits to the same branch (no force-push, we squash on merge).
 

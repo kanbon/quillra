@@ -22,6 +22,7 @@ import { buildCanUseTool } from "./agent-permissions.js";
 import { DIAGNOSTICS_TOOL_HINT, LANGUAGE_NAMES, QUILLRA_SYSTEM_PROMPT } from "./agent-prompts.js";
 import { mapSdkMessageToClient } from "./agent-stream-mapper.js";
 import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
+import { createSafeSdkEnv } from "./child-process-env.js";
 import { getInstanceSetting } from "./instance-settings.js";
 import { type RoleName, getRolePrompt } from "./role-prompts.js";
 
@@ -69,6 +70,7 @@ export async function* runProjectAgent(params: {
     yield { type: "error", message: "Quillra is not configured yet, finish the setup wizard." };
     return;
   }
+  const anthropicApiKey = apiKey;
 
   // Migrations are the one workflow where picking the most capable
   // model pays for itself many times over: the agent has to rewrite
@@ -159,19 +161,18 @@ export async function* runProjectAgent(params: {
         abortController,
         ...(sessionId ? { resume: sessionId } : {}),
         systemPrompt: { type: "preset", preset: "claude_code", append: systemPromptText },
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: apiKey,
+        env: createSafeSdkEnv({
+          ANTHROPIC_API_KEY: anthropicApiKey,
           CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
           // IS_SANDBOX=1 bypasses the CLI's refusal to run
           // --dangerously-skip-permissions as root. We legitimately
-          // run as root inside a Docker container (which *is* a
-          // sandbox), setting this env tells the CLI so. Without it
+          // run as root inside a Docker container. This flag tells the CLI it
+          // is in the product's containerized execution context. Without it
           // the subprocess exits 1 on startup with "cannot be used
           // with root/sudo privileges for security reasons" and the
           // whole chat falls over.
           IS_SANDBOX: "1",
-        },
+        }),
         tools: { type: "preset", preset: "claude_code" },
         ...(diagnosticsServer ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } } : {}),
         // Opus 4.7 (and the Claude 4.6+ line) requires BOTH adaptive
@@ -190,7 +191,10 @@ export async function* runProjectAgent(params: {
         // anything that isn't a file edit) stays out of the way.
         // bypassPermissions requires allowDangerouslySkipPermissions
         //, without the pair, the CLI subprocess exits 1 on startup.
-        canUseTool: buildCanUseTool(params.role, { migrationMode: params.migrationMode }),
+        canUseTool: buildCanUseTool(params.role, {
+          migrationMode: params.migrationMode,
+          workspaceRoot: params.cwd,
+        }),
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         // Forward the CLI subprocess's stderr to our docker logs so

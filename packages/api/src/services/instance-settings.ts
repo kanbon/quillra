@@ -197,8 +197,8 @@ export function getOrganizationInfo(): OrganizationInfo {
 export function getSetupStatus(): {
   needsSetup: boolean;
   missing: string[];
-  /** True when no user rows exist yet, the wizard must drive the
-   *  owner through the mandatory GitHub OAuth step. */
+  /** True when no owner exists yet, so the protected wizard must create
+   *  the first owner through passwordless email verification. */
   needsOwner: boolean;
   values: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }>;
 } {
@@ -228,13 +228,13 @@ export function getSetupStatus(): {
     missing.push("GITHUB_APP");
   }
 
-  // Bootstrap check: is there at least one user row? If not, the setup
-  // wizard must also walk the new owner through the GitHub OAuth step.
+  // Bootstrap check: is there an actual owner? Stray or pre-seeded member
+  // rows must not permanently strand an installation without an operator.
   let needsOwner = false;
   try {
-    const row = rawSqlite.prepare("SELECT count(*) as c FROM user").get() as
-      | { c: number }
-      | undefined;
+    const row = rawSqlite
+      .prepare("SELECT count(*) as c FROM user WHERE instance_role = 'owner'")
+      .get() as { c: number } | undefined;
     needsOwner = !row || row.c === 0;
   } catch {
     needsOwner = true;

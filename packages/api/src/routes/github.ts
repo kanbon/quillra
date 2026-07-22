@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import type { SessionUser } from "../lib/auth.js";
 import { detectFromManifest, publicFrameworkList } from "../services/framework-registry.js";
 import {
@@ -8,14 +8,15 @@ import {
   listBranches,
 } from "../services/github-rest.js";
 
-type Variables = { user: SessionUser | null };
+type Variables = {
+  user: SessionUser | null;
+  clientSession: { projectId: string } | null;
+};
 
-async function requireUser(c: {
-  get: (k: "user") => SessionUser | null;
-  json: (b: unknown, s: number) => Response;
-}) {
+async function requireUser(c: Context<{ Variables: Variables }>) {
   const user = c.get("user");
   if (!user) return { error: c.json({ error: "Unauthorized" }, 401) };
+  if (c.get("clientSession")) return { error: c.json({ error: "Forbidden" }, 403) };
   return { user };
 }
 

@@ -92,10 +92,14 @@ export function GeneralTab({ status, onSaved }: Props) {
 
       <div className="space-y-4">
         <div>
-          <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+          <label
+            htmlFor="instance-name"
+            className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+          >
             {t("instanceSettings.instanceNameLabel")}
           </label>
           <Input
+            id="instance-name"
             value={form.instanceName}
             onChange={(e) => setForm({ ...form, instanceName: e.target.value })}
             placeholder="Quillra"
@@ -103,20 +107,28 @@ export function GeneralTab({ status, onSaved }: Props) {
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+            <label
+              htmlFor="instance-operator-name"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+            >
               {t("instanceSettings.operatorNameLabel")}
             </label>
             <Input
+              id="instance-operator-name"
               value={form.operatorName}
               onChange={(e) => setForm({ ...form, operatorName: e.target.value })}
               placeholder="Jane Doe"
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+            <label
+              htmlFor="instance-company"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+            >
               {t("instanceSettings.companyLabel")}
             </label>
             <Input
+              id="instance-company"
               value={form.company}
               onChange={(e) => setForm({ ...form, company: e.target.value })}
               placeholder="Acme Studio GmbH"
@@ -124,10 +136,14 @@ export function GeneralTab({ status, onSaved }: Props) {
           </div>
         </div>
         <div>
-          <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+          <label
+            htmlFor="instance-contact-email"
+            className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+          >
             {t("instanceSettings.contactEmailLabel")}
           </label>
           <Input
+            id="instance-contact-email"
             type="email"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -135,10 +151,14 @@ export function GeneralTab({ status, onSaved }: Props) {
           />
         </div>
         <div>
-          <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+          <label
+            htmlFor="instance-postal-address"
+            className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+          >
             {t("instanceSettings.postalAddressLabel")}
           </label>
           <textarea
+            id="instance-postal-address"
             rows={3}
             value={form.address}
             onChange={(e) => setForm({ ...form, address: e.target.value })}
@@ -147,10 +167,14 @@ export function GeneralTab({ status, onSaved }: Props) {
           />
         </div>
         <div>
-          <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+          <label
+            htmlFor="instance-website"
+            className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+          >
             {t("instanceSettings.websiteLabel")}
           </label>
           <Input
+            id="instance-website"
             type="url"
             value={form.website}
             onChange={(e) => setForm({ ...form, website: e.target.value })}

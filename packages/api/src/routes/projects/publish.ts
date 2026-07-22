@@ -2,11 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { simpleGit } from "simple-git";
 import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { getInstanceSetting } from "../../services/instance-settings.js";
-import { ensureRepoCloned, projectRepoPath, pushToGitHub } from "../../services/workspace.js";
+import {
+  authenticatedGitForProject,
+  ensureRepoCloned,
+  projectRepoPath,
+  pushToGitHub,
+  simpleGitForProject,
+} from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
 
 export const publishRouter = new Hono<{ Variables: Variables }>()
@@ -20,7 +25,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGit(repoPath);
+      const g = simpleGitForProject(repoPath);
       const status = await g.status();
       const dirty = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
       let unpushed = 0;
@@ -102,7 +107,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGit(repoPath);
+      const g = simpleGitForProject(repoPath);
       const status = await g.status();
 
       type FileChange = {
@@ -202,7 +207,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
    * register that folder with the local exclude in ensureQuillraTempIgnored()
    * precisely so that chat scratch assets don't get nuked by a discard.
    *
-   * Permission: admin or editor. Clients and translators can't
+   * Permission: admin or editor. Clients can't
    * discard published work they didn't author.
    */
   .post("/:id/discard-changes", async (c) => {
@@ -217,7 +222,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGit(repoPath);
+      const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
       // Make sure we know the latest state of the remote before resetting
       // onto it. Failure here is non-fatal, we can still hard-reset to
       // whatever HEAD's upstream was when we cloned.
@@ -277,7 +282,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
       try {
         const repoPath = projectRepoPath(projectId);
         if (fs.existsSync(path.join(repoPath, ".git"))) {
-          const g = simpleGit(repoPath);
+          const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
           await g.fetch("origin", p.defaultBranch).catch(() => undefined);
           const branches = await g.branch(["-r"]).catch(() => ({ all: [] as string[] }));
           if (branches.all.includes(`origin/${p.defaultBranch}`)) {
@@ -298,7 +303,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     if ("error" in r) return r.error;
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
-    // Every project member can publish. Clients and translators see the
+    // Every project member can publish. Clients see the
     // button too: "I'm done, put it live" is the end of their workflow.
     // The security boundary remains the per-role agent tool allow-list,
     // publish itself is just a git push of whatever the agent already
@@ -316,7 +321,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
       // errors out or the Anthropic key isn't set.
       let commitMessage: string | null = null;
       try {
-        const g = simpleGit(repoPath);
+        const g = simpleGitForProject(repoPath);
         const status = await g.status();
         const dirtyList = [
           ...status.modified,

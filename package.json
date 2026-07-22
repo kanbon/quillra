@@ -1,26 +1,28 @@
 {
   "name": "quillra",
   "private": true,
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "workspaces": ["packages/*"],
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
-    "db:push": "yarn workspace @quillra/api db:push",
+    "db:push": "turbo run db:push --filter=@quillra/api",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:e2e": "turbo run build && playwright test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "check:em-dashes": "node scripts/check-em-dashes.mjs",
-    "check": "yarn typecheck && yarn lint && yarn check:em-dashes && yarn test"
+    "check": "turbo run typecheck && biome check . && node scripts/check-em-dashes.mjs && turbo run test"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@playwright/test": "1.61.1",
     "@vitest/ui": "1.6.0",
-    "turbo": "^2.8.20",
+    "turbo": "2.8.20",
     "typescript": "~5.7.3",
     "vitest": "1.6.0"
   },
-  "packageManager": "yarn@1.22.22"
+  "packageManager": "pnpm@10.34.0"
 }

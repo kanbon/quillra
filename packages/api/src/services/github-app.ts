@@ -12,10 +12,8 @@
  *
  * Push flow: mint a JWT → call
  *   POST /app/installations/{id}/access_tokens
- * with the JWT → get back a string token that can be used as the
- * password in `https://x-access-token:{token}@github.com/…` clone URLs.
- * Exactly the same URL shape as a PAT, so the rest of workspace.ts
- * doesn't need to change its calling pattern.
+ * with the JWT → get back a string token injected as a transient HTTP
+ * authorization header. Repository origin URLs remain credential-free.
  *
  * Why hand-roll the JWT instead of pulling in `@octokit/app`?
  *   - Adds zero dependencies to a package that already has a lot
@@ -56,6 +54,7 @@ export function clearGithubAppCredentials(): void {
   setInstanceSetting("GITHUB_APP_PRIVATE_KEY", null);
   setInstanceSetting("GITHUB_APP_WEBHOOK_SECRET", null);
   installationTokenCache.clear();
+  botIdentityPromise = null;
 }
 
 type InstallationTokenResponse = {
@@ -129,6 +128,31 @@ async function ghApp<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(`GitHub App API ${res.status}: ${text.slice(0, 400)}`);
   }
   return res.json() as Promise<T>;
+}
+
+let botIdentityPromise: Promise<{ name: string; email: string } | null> | null = null;
+
+/** Resolve GitHub's real bot user id so commit attribution uses its noreply address. */
+export function getGithubAppBotIdentity(): Promise<{ name: string; email: string } | null> {
+  if (botIdentityPromise) return botIdentityPromise;
+  botIdentityPromise = (async () => {
+    const creds = getGithubAppCredentials();
+    if (!creds?.slug) return null;
+    const name = `${creds.slug}[bot]`;
+    try {
+      const account = await ghApp<{ id: number; login: string }>(
+        `/users/${encodeURIComponent(name)}`,
+      );
+      if (!Number.isInteger(account.id) || account.id <= 0) return null;
+      return {
+        name: account.login || name,
+        email: `${account.id}+${name}@users.noreply.github.com`,
+      };
+    } catch {
+      return null;
+    }
+  })();
+  return botIdentityPromise;
 }
 
 /**

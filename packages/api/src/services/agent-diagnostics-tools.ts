@@ -17,13 +17,13 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { detectFramework } from "./framework.js";
-import { setPreviewStatus } from "./preview-status.js";
-import { getPreviewStatus } from "./preview-status.js";
+import { getPreviewStatus, setPreviewStatus } from "./preview-status.js";
 import {
+  getPackageManager,
   getPreviewLogs,
   getPreviewProcessInfo,
   getPreviewUrl,
-  previewPortForProject,
+  reserveAvailablePreviewPort,
   resolveDevCommand,
   startDevPreview,
   stopPreview,
@@ -83,7 +83,7 @@ type StatusSnapshot = {
 };
 
 async function buildStatusSnapshot(params: Params): Promise<StatusSnapshot> {
-  const port = previewPortForProject(params.projectId);
+  const port = await reserveAvailablePreviewPort(params.projectId);
   const status = getPreviewStatus(params.projectId);
   const child = getPreviewProcessInfo(params.projectId);
   const probe = await probeUpstream(port);
@@ -98,12 +98,7 @@ async function buildStatusSnapshot(params: Params): Promise<StatusSnapshot> {
     .filter((l) => l.stream === "stdout")
     .slice(-10)
     .map((l) => l.line);
-  // Best-effort package manager detection mirroring the UI.
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  let packageManager: "npm" | "yarn" | "pnpm" = "npm";
-  if (fs.existsSync(path.join(params.repoPath, "yarn.lock"))) packageManager = "yarn";
-  else if (fs.existsSync(path.join(params.repoPath, "pnpm-lock.yaml"))) packageManager = "pnpm";
+  const packageManager = getPackageManager(params.repoPath);
 
   return {
     stage: status.stage,

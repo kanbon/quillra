@@ -1,12 +1,12 @@
 # Copy packages/api/.env.example → packages/api/.env and set secrets before `docker compose up`.
-# First-time DB schema (SQLite volume): docker compose run --rm cms sh -lc \
-#   'cd /app/packages/api && DATABASE_URL=file:./data/cms.sqlite npx --yes drizzle-kit@0.31.10 push'
-# Previews use high ports (see PREVIEW_PORT_BASE in .env); allow that range in your firewall if editors load preview in the browser.
+# The API creates the SQLite schema automatically on first boot.
+# Caddy or another host reverse proxy should forward to http://localhost:3000.
 
 services:
   cms:
     build: .
-    network_mode: host
+    ports:
+      - "127.0.0.1:3000:3000"
     env_file:
       - packages/api/.env
     volumes:

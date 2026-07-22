@@ -27,13 +27,19 @@
 
 import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
+import { getCookie } from "hono/cookie";
 import { nanoid } from "nanoid";
 import type { ProjectRole } from "../db/app-schema.js";
 import { user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import { agentRuns, conversations, messages, projectMembers, projects } from "../db/schema.js";
-import type { SessionUser } from "../lib/auth.js";
+import { type Session, type SessionUser, auth } from "../lib/auth.js";
+import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "../lib/session-cookies.js";
+import { getClientSessionFromCookie } from "../routes/clients.js";
+import { clientSessionCanAccessProject } from "../routes/projects/shared.js";
+import { getTeamSessionFromCookie } from "../routes/team-login.js";
 import { runProjectAgent } from "../services/agent.js";
+import { claimMigrationRun } from "../services/migration-run-lock.js";
 import {
   monthLabelFromYmd,
   sendHardCapAlert,
@@ -52,6 +58,7 @@ import { ensureRepoCloned } from "../services/workspace.js";
 
 type ChatVariables = {
   user: SessionUser | null;
+  session: Session | null;
   clientSession: { projectId: string } | null;
 };
 
@@ -151,6 +158,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
   // session cookie. Clients are auth'd this way and failed to chat
   // because the old code only checked better-auth.
   const wsUser = c.get("user");
+  const wsBetterAuthSession = c.get("session");
   const wsClientSession = c.get("clientSession");
   if (!wsUser) {
     return {
@@ -159,9 +167,38 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
       },
     };
   }
+  if (!clientSessionCanAccessProject(wsClientSession, projectId)) {
+    return {
+      onOpen(_evt: unknown, ws: { close: (code: number, reason: string) => void }) {
+        ws.close(4403, "Forbidden");
+      },
+    };
+  }
+
+  // Capture which credential authenticated this upgrade. Every message
+  // resolves that credential again, so logout, expiry, or explicit session
+  // deletion also revokes already-open sockets.
+  const clientToken = getCookie(c, CLIENT_SESSION_COOKIE);
+  const teamToken = getCookie(c, TEAM_SESSION_COOKIE);
+  const sessionIsStillActive = async (): Promise<boolean> => {
+    if (wsBetterAuthSession) {
+      const current = await auth.api.getSession({ headers: c.req.raw.headers });
+      return current?.user.id === wsUser.id && current.session.id === wsBetterAuthSession.id;
+    }
+    if (wsClientSession) {
+      const current = await getClientSessionFromCookie(clientToken);
+      return current?.user.id === wsUser.id && current.projectId === projectId;
+    }
+    const current = await getTeamSessionFromCookie(teamToken);
+    return current?.user.id === wsUser.id;
+  };
 
   return {
-    async onMessage(evt: { data: unknown }, ws: { send: (s: string) => void }) {
+    async onMessage(
+      evt: { data: unknown },
+      ws: { send: (s: string) => void; close?: (code: number, reason: string) => void },
+    ) {
+      let releaseMigrationRun: (() => void) | null = null;
       try {
         const raw = typeof evt.data === "string" ? evt.data : "";
         const parsed = JSON.parse(raw) as {
@@ -180,28 +217,23 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         }
         const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : [];
 
-        // Project access check: either (a) a projectMembers row (team
-        // members) or (b) a client session pinned to this project.
-        // Clients don't get a projectMembers row, their access is
-        // represented by the session cookie alone.
-        let m = await db
+        if (!(await sessionIsStillActive())) {
+          ws.send(
+            JSON.stringify({ type: "error", message: "Session expired. Please sign in again." }),
+          );
+          ws.close?.(4401, "Session expired");
+          return;
+        }
+
+        // Re-check the persisted membership for every message, not only when
+        // the socket opens. Removing a member must revoke an already-open
+        // WebSocket before it can start another agent run.
+        const m = await db
           .select()
           .from(projectMembers)
           .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, wsUser.id)))
           .limit(1)
           .then((rows) => rows[0]);
-        if (!m && wsClientSession && wsClientSession.projectId === projectId) {
-          // Synthesize a client "member" row so the rest of the handler
-          // can run unchanged. Not persisted, just a local value.
-          m = {
-            id: `client-${wsUser.id}-${projectId}`,
-            projectId,
-            userId: wsUser.id,
-            role: "client" as ProjectRole,
-            invitedByUserId: null,
-            createdAt: new Date(),
-          };
-        }
         if (!m) {
           ws.send(JSON.stringify({ type: "error", message: "Not a project member" }));
           return;
@@ -211,6 +243,43 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         if (!p) {
           ws.send(JSON.stringify({ type: "error", message: "Project not found" }));
           return;
+        }
+
+        if (p.migrationTarget === "astro") {
+          if (m.role !== "admin") {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "A project admin must run the migration before editing can continue.",
+              }),
+            );
+            return;
+          }
+          releaseMigrationRun = claimMigrationRun(projectId);
+          if (!releaseMigrationRun) {
+            ws.send(
+              JSON.stringify({ type: "error", message: "This migration is already running." }),
+            );
+            return;
+          }
+        }
+
+        // Scope a supplied conversation to this project and, for clients, to
+        // its creator. An opaque id from another project/client must never
+        // resume that agent session or receive new messages.
+        let convId = parsed.conversationId;
+        let agentSessionId: string | null = null;
+        if (convId) {
+          const [conv] = await db
+            .select()
+            .from(conversations)
+            .where(and(eq(conversations.id, convId), eq(conversations.projectId, projectId)))
+            .limit(1);
+          if (!conv || (m.role === "client" && conv.createdByUserId !== wsUser.id)) {
+            ws.send(JSON.stringify({ type: "error", message: "Conversation not found" }));
+            return;
+          }
+          agentSessionId = conv.agentSessionId ?? null;
         }
 
         let repoPath: string;
@@ -230,7 +299,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           // OOM-killing the container before the agent ever runs.
           // The agent will run `npm install` itself once it's
           // written the new Astro package.json.
-          const isMigrating = p.migrationTarget === "astro";
+          const isMigrating = p.migrationTarget === "astro" && m.role === "admin";
           repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
             skipInstall: isMigrating,
             onInstallFailed: (err: string) => {
@@ -250,17 +319,8 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           return;
         }
 
-        // Get or create conversation
-        let convId = parsed.conversationId;
-        let agentSessionId: string | null = null;
-        if (convId) {
-          const [conv] = await db
-            .select()
-            .from(conversations)
-            .where(eq(conversations.id, convId))
-            .limit(1);
-          agentSessionId = conv?.agentSessionId ?? null;
-        } else {
+        // Create a conversation only after repository preparation succeeds.
+        if (!convId) {
           convId = nanoid();
           await db.insert(conversations).values({
             id: convId,
@@ -389,12 +449,12 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         }
         const preRunSpend = block.spend;
         // Server-authoritative migration mode: if the project row has
-        // migration_target set, this invocation runs unrestricted and
-        // with the Astro skill injected into the system prompt.
+        // migration_target set, an admin invocation runs unrestricted inside
+        // the project workspace and receives the Astro migration prompt.
         // Re-reading from the row (not the old cached value) means a
         // DELETE of the row or a manual SQL clear flips the next
         // message back to normal behaviour immediately.
-        const migrationMode = p.migrationTarget === "astro";
+        const migrationMode = p.migrationTarget === "astro" && role === "admin";
 
         // Streaming filter for `<ask>` blocks. Agent responses that
         // contain a complete `<ask>{...}</ask>` block are rewritten on
@@ -669,12 +729,15 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
 
         ws.send(JSON.stringify({ type: "refresh_preview" }));
       } catch (e) {
+        console.error("[chat] WebSocket message failed:", e);
         ws.send(
           JSON.stringify({
             type: "error",
-            message: e instanceof Error ? e.message : String(e),
+            message: "Chat request failed. Please try again.",
           }),
         );
+      } finally {
+        releaseMigrationRun?.();
       }
     },
   };

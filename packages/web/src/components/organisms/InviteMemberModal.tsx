@@ -62,6 +62,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     inviteLink: string;
+    emailConfigured: boolean;
     emailSent: boolean;
   } | null>(null);
 
@@ -77,42 +78,64 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
   }, [open]);
 
   async function submit() {
+    if (submitting || !email.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await apiJson<{ inviteLink: string; emailSent: boolean }>(
-        `/api/team/projects/${projectId}/invites`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            email: email.trim().toLowerCase(),
-            role,
-            name: name.trim() || undefined,
-          }),
-        },
-      );
-      setResult({ inviteLink: res.inviteLink, emailSent: res.emailSent });
+      const res = await apiJson<{
+        inviteLink: string;
+        emailConfigured: boolean;
+        emailSent: boolean;
+      }>(`/api/team/projects/${projectId}/invites`, {
+        method: "POST",
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          role,
+          name: name.trim() || undefined,
+        }),
+      });
+      setResult({
+        inviteLink: res.inviteLink,
+        emailConfigured: res.emailConfigured,
+        emailSent: res.emailSent,
+      });
       setStep("sent");
       onInvited?.();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send");
+    } catch {
+      setError(t("invite.sendFailed"));
     } finally {
       setSubmitting(false);
     }
   }
 
+  const dialogTitle =
+    step === "sent"
+      ? result?.emailSent
+        ? t("invite.sent")
+        : t("invite.inviteCreated")
+      : t("invite.title");
+  const dialogSubtitle =
+    step === "role"
+      ? t("invite.stepRoleSubtitle")
+      : step === "details"
+        ? t("invite.stepDetailsSubtitle")
+        : result?.emailSent
+          ? t("invite.stepSentSubtitle")
+          : result?.emailConfigured
+            ? t("invite.stepDeliveryFailedSubtitle")
+            : t("invite.stepEmailSetupRequiredSubtitle");
+
   return (
-    <Modal open={open} onClose={() => !submitting && onClose()} className="max-w-xl">
+    <Modal
+      open={open}
+      onClose={() => !submitting && onClose()}
+      ariaLabel={dialogTitle}
+      className="max-w-xl"
+    >
       <div className="mb-5 flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
-            {step === "sent" ? t("invite.sent") : t("invite.title")}
-          </h2>
-          <p className="mt-0.5 text-[13px] text-neutral-500">
-            {step === "role" && t("invite.stepRoleSubtitle")}
-            {step === "details" && t("invite.stepDetailsSubtitle")}
-            {step === "sent" && t("invite.stepSentSubtitle")}
-          </p>
+          <h2 className="text-lg font-semibold tracking-tight text-neutral-900">{dialogTitle}</h2>
+          <p className="mt-0.5 text-[13px] text-neutral-500">{dialogSubtitle}</p>
         </div>
         <button
           type="button"
@@ -133,11 +156,13 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
       </div>
 
       {step === "role" && (
-        <div className="space-y-2">
+        <fieldset className="space-y-2 border-0 p-0">
+          <legend className="sr-only">{t("invite.stepRoleSubtitle")}</legend>
           {ROLES.map((r) => (
             <button
               key={r.value}
               type="button"
+              aria-pressed={role === r.value}
               onClick={() => setRole(r.value)}
               className={cn(
                 "flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors",
@@ -156,6 +181,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
                   viewBox="0 0 24 24"
                   stroke="currentColor"
                   strokeWidth={2}
+                  aria-hidden="true"
                 >
                   {r.value === "client" && (
                     <path
@@ -190,6 +216,7 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
                       viewBox="0 0 24 24"
                       stroke="currentColor"
                       strokeWidth={2.5}
+                      aria-hidden="true"
                     >
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
@@ -202,74 +229,123 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
               </div>
             </button>
           ))}
-        </div>
+        </fieldset>
       )}
 
       {step === "details" && (
-        <div className="space-y-4">
+        <form
+          id="invite-member-details"
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+            <label
+              htmlFor="invite-member-email"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+            >
               {t("invite.emailLabel")}
             </label>
             <Input
+              id="invite-member-email"
               type="email"
               placeholder={t("projectSettings.emailPlaceholder")}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoFocus
+              required
+              disabled={submitting}
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500">
+            <label
+              htmlFor="invite-member-name"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-500"
+            >
               {t("invite.nameLabel")}
             </label>
             <Input
+              id="invite-member-name"
               placeholder={t("invite.namePlaceholder")}
               value={name}
               onChange={(e) => setName(e.target.value)}
+              disabled={submitting}
             />
           </div>
-          <div
-            className="rounded-lg bg-neutral-50 px-3 py-2 text-[12px] text-neutral-600"
-            // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{
-              __html: t("invite.addAs", {
-                role: `<strong>${ROLES.find((r) => r.value === role)?.title ?? ""}</strong>`,
-              }),
-            }}
-          />
-          {error && <p className="text-sm text-red-600">{error}</p>}
-        </div>
+          <p className="rounded-lg bg-neutral-50 px-3 py-2 text-[12px] text-neutral-600">
+            {t("invite.addAs", {
+              role: ROLES.find((candidate) => candidate.value === role)?.title ?? "",
+            })}
+          </p>
+          {error && (
+            <p className="text-sm text-red-600" role="alert">
+              {error}
+            </p>
+          )}
+        </form>
       )}
 
       {step === "sent" && result && (
         <div className="space-y-4">
-          <div className="flex items-start gap-3 rounded-2xl border border-green-200 bg-green-50/50 p-4">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-green-100 text-green-700">
+          <div
+            aria-live="polite"
+            aria-atomic="true"
+            className={cn(
+              "flex items-start gap-3 rounded-2xl border p-4",
+              result.emailSent
+                ? "border-green-200 bg-green-50/50"
+                : "border-amber-200 bg-amber-50/70",
+            )}
+          >
+            <div
+              className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                result.emailSent ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700",
+              )}
+            >
               <svg
                 className="h-5 w-5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
                 strokeWidth={2.2}
+                aria-hidden="true"
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[14px] font-semibold text-green-900">
-                {result.emailSent ? t("invite.emailDelivered") : t("invite.inviteCreated")}
+              <p
+                className={cn(
+                  "text-[14px] font-semibold",
+                  result.emailSent ? "text-green-900" : "text-amber-900",
+                )}
+              >
+                {result.emailSent
+                  ? t("invite.emailDelivered")
+                  : result.emailConfigured
+                    ? t("invite.inviteCreated")
+                    : t("invite.emailSetupRequired")}
               </p>
-              <p className="mt-0.5 text-[12px] leading-relaxed text-green-800/80">
+              <p
+                className={cn(
+                  "mt-0.5 text-[12px] leading-relaxed",
+                  result.emailSent ? "text-green-800/80" : "text-amber-900/80",
+                )}
+              >
                 {result.emailSent
                   ? t("invite.deliveredDescription", {
                       email,
                       linkType:
                         role === "client"
                           ? t("invite.brandedSignInLink")
-                          : t("invite.githubSignInLink"),
+                          : t("invite.emailSignInLink"),
                     })
-                  : t("invite.copyFallback")}
+                  : result.emailConfigured
+                    ? t("invite.deliveryFailed")
+                    : t("invite.deliveryRequired")}
               </p>
             </div>
           </div>
@@ -328,8 +404,8 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
 
         {step === "details" && (
           <button
-            type="button"
-            onClick={submit}
+            type="submit"
+            form="invite-member-details"
             disabled={submitting || !email.trim()}
             className={cn(
               "inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm",
@@ -338,7 +414,10 @@ export function InviteMemberModal({ open, onClose, projectId, onInvited }: Props
           >
             {submitting ? (
               <>
-                <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                <span
+                  className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                  aria-hidden="true"
+                />
                 {t("invite.sending")}
               </>
             ) : (

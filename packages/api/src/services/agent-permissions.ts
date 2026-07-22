@@ -5,25 +5,134 @@
  * tool use, we decide allow/deny based on (project role, migration
  * mode, tool name, tool input).
  *
- * Migration mode short-circuits to "allow everything" because the
- * migration agent has to delete old lockfiles, rewrite package.json,
- * and run arbitrary shell commands; the user is locked out of the
- * composer while it runs so there's no interactive risk.
+ * Every SDK file tool is confined to the project root first. Migration mode
+ * then short-circuits the role-specific rules because it has to delete old
+ * lockfiles, rewrite package.json, and run arbitrary project commands.
  *
  * Roles (defined in db/app-schema.ts):
- *  - admin, full control of the project workspace
- *  - editor, read everything; write non-src/config files; run
- *              git/npm/yarn/pnpm/npx/node (no `git push`); full access
- *              to the diagnostics MCP server
- *  - client, non-technical end user: read everything; write only
+ *  - admin, full control inside the project workspace
+ *  - editor, read the workspace; write non-src/config files; use the
+ *              diagnostics MCP server; no general-purpose shell
+ *  - client, non-technical end user: read the workspace; write only
  *              to content/ and assets/ with content/image extensions;
  *              no shell, no MCP tools
  *
  * Anything else is denied. That includes any tool the SDK adds in
  * future that we haven't explicitly thought about, fail closed.
  */
+import fs from "node:fs";
+import path from "node:path";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
+
+const FILE_TOOLS = new Set(["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep"]);
+
+function isInside(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+}
+
+function requestedFilePath(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName === "NotebookEdit") {
+    return String(input.notebook_path ?? input.file_path ?? input.path ?? "").trim() || null;
+  }
+  return String(input.file_path ?? input.path ?? "").trim() || null;
+}
+
+function hasEscapingGlobPattern(toolName: string, input: Record<string, unknown>): boolean {
+  if (toolName !== "Glob") return false;
+  const pattern = String(input.pattern ?? "").replace(/\\/g, "/");
+  return (
+    pattern.includes("\0") ||
+    pattern.includes("..") ||
+    pattern.startsWith("~") ||
+    pattern.startsWith("/") ||
+    /^[A-Za-z]:\//.test(pattern)
+  );
+}
+
+/**
+ * Resolve a requested file path to its canonical workspace-relative target.
+ * Walking each path component lets us reject both existing and dangling
+ * symlinks that point outside the workspace. It also gives role checks the
+ * resolved target, so `content/../package.json` and an in-workspace symlink to
+ * `package.json` cannot masquerade as client-editable content.
+ */
+function canonicalWorkspacePath(workspaceRoot: string, requested: string): string | null {
+  const rootAbsolute = path.resolve(workspaceRoot);
+  const candidate = path.resolve(rootAbsolute, requested);
+  if (!isInside(rootAbsolute, candidate)) return null;
+
+  try {
+    const rootReal = fs.realpathSync.native(rootAbsolute);
+    const relative = path.relative(rootAbsolute, candidate);
+    let current = rootReal;
+    let pending = relative === "" ? [] : relative.split(path.sep);
+    let followedSymlinks = 0;
+
+    while (pending.length > 0) {
+      const segment = pending.shift();
+      if (!segment) continue;
+      const next = path.resolve(current, segment);
+      if (!isInside(rootReal, next)) return null;
+
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(next);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        const missingTarget = path.resolve(next, ...pending);
+        if (!isInside(rootReal, missingTarget)) return null;
+        return path.relative(rootReal, missingTarget).replace(/\\/g, "/");
+      }
+
+      if (!stat.isSymbolicLink()) {
+        current = next;
+        continue;
+      }
+
+      followedSymlinks += 1;
+      if (followedSymlinks > 40) return null;
+      const target = path.resolve(path.dirname(next), fs.readlinkSync(next));
+      if (!isInside(rootReal, target)) return null;
+      const targetRelative = path.relative(rootReal, target);
+      pending = [...(targetRelative === "" ? [] : targetRelative.split(path.sep)), ...pending];
+      current = rootReal;
+    }
+
+    return path.relative(rootReal, current).replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+}
+
+function literalGlobPrefix(input: Record<string, unknown>): string | null {
+  const pattern = String(input.pattern ?? "").replace(/\\/g, "/");
+  const parts: string[] = [];
+  for (const segment of pattern.split("/")) {
+    if (!segment || /[*?[\]{}()!+@]/.test(segment)) break;
+    parts.push(segment);
+  }
+  return parts.length > 0 ? parts.join(path.sep) : null;
+}
+
+function canonicalFileToolPath(
+  toolName: string,
+  input: Record<string, unknown>,
+  workspaceRoot: string,
+): string | null | undefined {
+  if (hasEscapingGlobPattern(toolName, input)) return undefined;
+
+  const requested = requestedFilePath(toolName, input);
+  if (requested) return canonicalWorkspacePath(workspaceRoot, requested) ?? undefined;
+  if (toolName === "Glob") {
+    const prefix = literalGlobPrefix(input);
+    if (prefix && canonicalWorkspacePath(workspaceRoot, prefix) === null) return undefined;
+    return null;
+  }
+  if (toolName === "Grep") return null;
+  return undefined;
+}
 
 /** True for paths an editor role is not allowed to write. Keeps
  *  editors out of source + config, which is what separates them from
@@ -38,7 +147,10 @@ function editorBlockedPath(filePath: string): boolean {
   );
 }
 
-export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: boolean }) {
+export function buildCanUseTool(
+  role: ProjectRole,
+  opts: { workspaceRoot: string; migrationMode?: boolean },
+) {
   return async (
     toolName: string,
     input: Record<string, unknown>,
@@ -48,26 +160,35 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
     },
   ): Promise<PermissionResult> => {
     const id = callOpts.toolUseID;
+    const canonicalFilePath = FILE_TOOLS.has(toolName)
+      ? canonicalFileToolPath(toolName, input, opts.workspaceRoot)
+      : null;
 
-    // Migration mode: bypass every role's guardrails. The migration
+    if (FILE_TOOLS.has(toolName) && canonicalFilePath === undefined) {
+      return {
+        behavior: "deny",
+        message: "File tools are limited to this project workspace.",
+        toolUseID: id,
+      };
+    }
+
+    // Migration mode: bypass every role rule after the file-tool workspace
+    // boundary above. The migration
     // agent has to delete old build configs, remove lockfiles, blow
     // away source trees, rewrite package.json, and run arbitrary
     // commands. The user is locked out of the composer while this
-    // runs (isMigratingToAstro flag in the Editor), so there's no
-    // risk of an interactive user fighting with the agent for
-    // control. The project-level authorization to kick this off
-    // happened at project creation; once migration_target is set
-    // on the row, the agent gets free rein until it clears the flag.
-    if (opts?.migrationMode) {
+    // runs (isMigratingToAstro flag in the Editor). The project-level
+    // authorization to kick this off happened at project creation, and the
+    // WebSocket handler enables this mode only for a current project admin.
+    if (opts.migrationMode) {
       return { behavior: "allow", toolUseID: id };
     }
 
     if (role === "admin") {
       // Admins have full control of their own project workspace, every
-      // tool, every command, no paternalistic blocks. The workspace is
-      // isolated (per-project clone on disk, git-backed so nothing is
-      // truly unrecoverable) and the admin asked for Claude Code to
-      // run. Recovering from a broken install often means
+      // tool, every command, no paternalistic blocks. File tools remain
+      // confined above and the per-project clone is git-backed. Recovering
+      // from a broken install often means
       // `rm -rf node_modules` and we shouldn't be the thing standing in
       // the way.
       return { behavior: "allow", toolUseID: id };
@@ -84,23 +205,14 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
         return { behavior: "allow", toolUseID: id };
       }
       if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
-        const fp = String(
-          (input as { file_path?: string }).file_path ?? (input as { path?: string }).path ?? "",
-        );
+        const fp = canonicalFilePath ?? "";
         if (editorBlockedPath(fp)) {
           return { behavior: "deny", message: "Editors cannot change this path.", toolUseID: id };
         }
         return { behavior: "allow", toolUseID: id };
       }
       if (toolName === "Bash") {
-        const cmd = String((input as { command?: string }).command ?? "").trim();
-        if (!/^(git|npm|yarn|pnpm|npx|node)\s/i.test(cmd)) {
-          return { behavior: "deny", message: "Command not allowed for editors.", toolUseID: id };
-        }
-        if (/\bgit\s+push\b/i.test(cmd)) {
-          return { behavior: "deny", message: "git push requires confirmation.", toolUseID: id };
-        }
-        return { behavior: "allow", toolUseID: id };
+        return { behavior: "deny", message: "Editors cannot run shell commands.", toolUseID: id };
       }
       return { behavior: "deny", message: "Tool not allowed for editors.", toolUseID: id };
     }
@@ -114,9 +226,7 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
         return { behavior: "allow", toolUseID: id };
       }
       if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
-        const fp = String(
-          (input as { file_path?: string }).file_path ?? (input as { path?: string }).path ?? "",
-        ).replace(/\\/g, "/");
+        const fp = canonicalFilePath ?? "";
         // Allow content paths and asset paths only
         const isContentPath =
           /(^|\/)(content|data|public|src\/content|src\/data|src\/assets|assets)\//i.test(fp);
@@ -139,5 +249,52 @@ export function buildCanUseTool(role: ProjectRole, opts?: { migrationMode?: bool
     }
 
     return { behavior: "deny", message: "Unknown role.", toolUseID: id };
+  };
+}
+
+/**
+ * The merge-conflict agent is narrower than every interactive role: it may
+ * only read or rewrite the exact conflicted targets. Git staging happens in
+ * trusted server code after the agent exits, so it never receives Bash.
+ */
+export function buildConflictResolverCanUseTool(workspaceRoot: string, conflictedFiles: string[]) {
+  const allowedPaths = new Set(
+    conflictedFiles
+      .map((filePath) => {
+        const canonical = canonicalWorkspacePath(workspaceRoot, filePath);
+        const lexical = path
+          .relative(path.resolve(workspaceRoot), path.resolve(workspaceRoot, filePath))
+          .replace(/\\/g, "/");
+        // File tools follow symlinks. A conflicted symlink must not turn an
+        // otherwise exact allowlist entry into permission to edit its target.
+        return canonical === lexical ? canonical : null;
+      })
+      .filter((filePath): filePath is string => filePath !== null),
+  );
+
+  return async (
+    toolName: string,
+    input: Record<string, unknown>,
+    callOpts: { toolUseID: string; signal: AbortSignal },
+  ): Promise<PermissionResult> => {
+    const id = callOpts.toolUseID;
+    if (toolName !== "Read" && toolName !== "Edit" && toolName !== "Write") {
+      return {
+        behavior: "deny",
+        message: "The conflict resolver can only read or edit conflicted files.",
+        toolUseID: id,
+      };
+    }
+
+    const requested = requestedFilePath(toolName, input);
+    const canonical = requested ? canonicalWorkspacePath(workspaceRoot, requested) : null;
+    if (!canonical || !allowedPaths.has(canonical)) {
+      return {
+        behavior: "deny",
+        message: "The conflict resolver can only touch the listed conflicted files.",
+        toolUseID: id,
+      };
+    }
+    return { behavior: "allow", toolUseID: id };
   };
 }

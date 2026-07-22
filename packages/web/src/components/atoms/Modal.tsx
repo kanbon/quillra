@@ -1,48 +1,69 @@
 import { cn } from "@/lib/cn";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 type Props = {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  ariaLabel: string;
   className?: string;
 };
 
-export function Modal({ open, onClose, children, className }: Props) {
+export function Modal({ open, onClose, children, ariaLabel, className }: Props) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const handleCancel = (event: Event) => {
+      event.preventDefault();
+      onCloseRef.current();
     };
-    document.addEventListener("keydown", handler);
-    // Lock body scroll while a modal is open
+    dialog.addEventListener("cancel", handleCancel);
+
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    if (!dialog.open) dialog.showModal();
+
     return () => {
-      document.removeEventListener("keydown", handler);
+      dialog.removeEventListener("cancel", handleCancel);
+      if (dialog.open) dialog.close();
       document.body.style.overflow = prevOverflow;
+      if (previouslyFocused?.isConnected) previouslyFocused.focus({ preventScroll: true });
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open || typeof document === "undefined") return null;
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center"
-      role="dialog"
-      aria-modal="true"
+  const modal = (
+    <dialog
+      ref={dialogRef}
+      className="fixed inset-0 z-[1000] m-0 hidden h-dvh max-h-none w-full max-w-none items-center justify-center border-0 bg-transparent p-0 open:flex"
+      aria-label={ariaLabel}
     >
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div
+        className="fixed inset-0 bg-black/40 backdrop-blur-[2px]"
+        onClick={() => onCloseRef.current()}
+      />
       <div
         className={cn(
-          "relative mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl",
+          "relative mx-4 max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl",
           className,
         )}
       >
         {children}
       </div>
-    </div>,
-    document.body,
+    </dialog>
   );
+  return createPortal(modal, document.body);
 }

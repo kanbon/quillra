@@ -120,10 +120,13 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
   const scrollKey = `${lines.length}-${busy}-${lastLine && "text" in lastLine ? (lastLine as { text: string }).text.length : 0}`;
 
   useEffect(() => {
-    const el = bottomRef.current;
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
+    const frame = window.requestAnimationFrame(() => {
+      const el = bottomRef.current;
+      if (el?.dataset.scrollKey === scrollKey) {
+        el.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [scrollKey]);
 
   // Group consecutive tool events together
@@ -359,7 +362,7 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
             {t("chat.working")}
           </div>
         )}
-      <div ref={bottomRef} />
+      <div ref={bottomRef} data-scroll-key={scrollKey} />
     </div>
   );
 }

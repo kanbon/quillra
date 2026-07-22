@@ -6,9 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    name: Typecheck, lint, format
+    name: Check, E2E, container
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,19 +24,72 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: yarn
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@10.34.0 --activate
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: yarn typecheck
+      - name: Check
+        run: pnpm check
 
-      - name: Lint (Biome)
-        run: yarn lint
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
 
-      - name: Check for em-dashes in prose
-        run: yarn check:em-dashes
+      - name: Fresh-install signup E2E
+        run: pnpm test:e2e
 
-      - name: Unit tests
-        run: yarn test
+      - name: Build Docker image
+        run: docker build --tag quillra-ci:test .
+
+      - name: Smoke-test Docker startup
+        run: |
+          docker run --detach --name quillra-ci-smoke --publish 3000:3000 \
+            --env PORT=3000 \
+            --env DATABASE_URL=file:/tmp/quillra-ci.sqlite \
+            --env WORKSPACE_DIR=/tmp/quillra-workspaces \
+            --env BETTER_AUTH_URL=http://127.0.0.1:3000 \
+            --env TRUSTED_ORIGINS=http://127.0.0.1:3000 \
+            --env BETTER_AUTH_SECRET=quillra-ci-only-secret-at-least-32-bytes \
+            --env ANTHROPIC_API_KEY=quillra-ci-placeholder \
+            quillra-ci:test
+          trap 'docker rm --force quillra-ci-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/api/setup/status > /dev/null; then
+              break
+            fi
+            if [ "$(docker inspect --format '{{.State.Running}}' quillra-ci-smoke)" != "true" ]; then
+              docker logs quillra-ci-smoke
+              exit 1
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs quillra-ci-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec quillra-ci-smoke node --input-type=module -e '
+            const { readFileSync } = await import("node:fs");
+            const status = readFileSync("/proc/1/status", "utf8");
+            const uid = Number(status.match(/^Uid:\s+(\d+)/m)?.[1]);
+            if (uid !== 1000) throw new Error(`API is running as uid ${uid}`);
+            await Promise.all([import("better-sqlite3"), import("sharp")]);
+          '
+          docker exec --user node quillra-ci-smoke sh -lc '
+            test "$HOME" = /home/node
+            test -w "$HOME"
+            test "$XDG_CACHE_HOME" = /home/node/.cache
+            test -w "$XDG_CACHE_HOME"
+            test -w "$COREPACK_HOME"
+            test "$(pnpm --version)" = 9.15.9
+            fixture="$(mktemp -d)"
+            printf "%s\n" '\''{"name":"customer-install-smoke","private":true,"scripts":{"postinstall":"node -p 1 > installed"}}'\'' > "$fixture/package.json"
+            cd "$fixture"
+            NODE_ENV=development NPM_CONFIG_PRODUCTION=false pnpm install --prod=false
+            test "$(cat installed)" = 1
+            pinned_fixture="$(mktemp -d)"
+            printf "%s\n" '\''{"name":"customer-pinned-pnpm-smoke","private":true,"packageManager":"pnpm@10.34.0"}'\'' > "$pinned_fixture/package.json"
+            cd "$pinned_fixture"
+            test "$(pnpm --version)" = 10.34.0
+          '

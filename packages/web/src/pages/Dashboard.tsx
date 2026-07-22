@@ -18,6 +18,8 @@ type ProjectRow = {
   updatedAt: number;
 };
 
+const NO_PROJECTS: ProjectRow[] = [];
+
 function ProjectCardSkeleton({ index }: { index: number }) {
   return (
     <div
@@ -40,18 +42,13 @@ export function DashboardPage() {
   const [search, setSearch] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiJson<{ projects: ProjectRow[] }>("/api/projects"),
-    enabled: me.kind !== "client",
+    enabled: me.kind === "github" || me.kind === "team",
   });
 
-  // Clients have no Dashboard, bounce them to their project
-  if (me.kind === "client") {
-    return <Navigate to={`/p/${me.projectId}`} replace />;
-  }
-
-  const projects = data?.projects ?? [];
+  const projects = data?.projects ?? NO_PROJECTS;
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -61,7 +58,13 @@ export function DashboardPage() {
     );
   }, [projects, search]);
 
-  const empty = !isLoading && projects.length === 0;
+  // Keep every hook above this conditional: the identity begins in a
+  // loading state and can resolve to a client after the first render.
+  if (me.kind === "client") {
+    return <Navigate to={`/p/${me.projectId}`} replace />;
+  }
+
+  const empty = !isLoading && !isError && projects.length === 0;
 
   return (
     <div className="min-h-screen bg-neutral-50">
@@ -77,7 +80,7 @@ export function DashboardPage() {
         </div>
 
         {/* Toolbar: search + new */}
-        {!empty && (
+        {!empty && !isError && (
           <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative max-w-sm flex-1">
               <svg
@@ -86,6 +89,7 @@ export function DashboardPage() {
                 viewBox="0 0 24 24"
                 stroke="currentColor"
                 strokeWidth={1.8}
+                aria-hidden="true"
               >
                 <path
                   strokeLinecap="round"
@@ -93,11 +97,15 @@ export function DashboardPage() {
                   d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"
                 />
               </svg>
+              <label htmlFor="dashboard-site-search" className="sr-only">
+                {t("dashboard.searchSites")}
+              </label>
               <input
+                id="dashboard-site-search"
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search sites…"
+                placeholder={t("dashboard.searchSites")}
                 className="block h-10 w-full rounded-xl border border-neutral-200 bg-white pl-10 pr-3 text-sm shadow-sm transition-colors placeholder:text-neutral-400 focus:border-neutral-300 focus:outline-none focus:ring-0"
               />
             </div>
@@ -115,17 +123,42 @@ export function DashboardPage() {
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              New site
+              {t("dashboard.newSite")}
             </button>
           </div>
         )}
 
         {/* Loading state, skeleton grid */}
         {isLoading && (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <output
+            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            aria-label={t("dashboard.loadingSites")}
+          >
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <ProjectCardSkeleton key={i} index={i} />
             ))}
+          </output>
+        )}
+
+        {isError && !isLoading && (
+          <div
+            className="rounded-2xl border border-rule border-l-2 border-l-brand bg-paper p-6 shadow-sm"
+            role="alert"
+          >
+            <Heading as="h2" className="text-lg font-semibold tracking-tight text-ink">
+              {t("dashboard.loadErrorTitle")}
+            </Heading>
+            <p className="mt-1 max-w-xl text-sm leading-relaxed text-graphite">
+              {t("dashboard.loadErrorDescription")}
+            </p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="mt-4 inline-flex h-10 items-center rounded-lg bg-ink px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-neutral-800 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isFetching ? t("common.loading") : t("common.retry")}
+            </button>
           </div>
         )}
 
@@ -174,10 +207,11 @@ export function DashboardPage() {
 
         {/* Projects grid */}
         {!isLoading &&
+          !isError &&
           !empty &&
           (filtered.length === 0 ? (
             <div className="mt-2 rounded-2xl border border-dashed border-neutral-200 bg-white px-6 py-10 text-center text-sm text-neutral-400">
-              No sites match "<span className="font-medium text-neutral-600">{search}</span>"
+              {t("dashboard.noSitesMatch", { search })}
             </div>
           ) : (
             <div className={cn("grid gap-4 sm:grid-cols-2 lg:grid-cols-3")}>

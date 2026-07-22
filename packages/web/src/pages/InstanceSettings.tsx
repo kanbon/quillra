@@ -79,14 +79,14 @@ export function InstanceSettingsPage() {
     [setSearchParams],
   );
 
-  async function refetchStatus() {
+  const refetchStatus = useCallback(async () => {
     try {
       const s = await apiJson<StatusResponse>("/api/setup/status");
       setStatus(s);
     } catch {
       /* ignore */
     }
-  }
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -101,7 +101,7 @@ export function InstanceSettingsPage() {
         setSessionChecked(true);
       }
     })();
-  }, []);
+  }, [refetchStatus]);
 
   const tabs: TabItem[] = [
     {

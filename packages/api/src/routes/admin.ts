@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -7,6 +7,7 @@ import { instanceInvites, projectGroups, projectMembers, projects } from "../db/
 import { user } from "../db/auth-schema.js";
 import { db, rawSqlite } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
+import { emailEquals, normalizeEmail } from "../lib/email.js";
 import { inviteEmailHtml } from "../services/email-templates.js";
 import {
   clearGithubAppCredentials,
@@ -18,6 +19,7 @@ import {
   setInstanceSetting,
 } from "../services/instance-settings.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
+import { revokePreviewCapability } from "../services/preview-capability.js";
 import { reconcileMonthlyReports } from "../services/report-scheduler.js";
 import {
   ROLE_NAMES,
@@ -92,30 +94,48 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     const r = await requireOwner(c);
     if ("error" in r) return r.error;
     const body = await c.req.json().catch(() => null);
-    const parsed = z.object({ email: z.string().email() }).safeParse(body);
+    const parsed = z.object({ email: z.string().trim().email() }).safeParse(body);
     if (!parsed.success) return c.json({ error: "Valid email required" }, 400);
 
+    const email = normalizeEmail(parsed.data.email);
     const token = randomBytes(32).toString("hex");
     const tokenHash = createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const matchingInvites = await db
+      .select()
+      .from(instanceInvites)
+      .where(and(emailEquals(instanceInvites.email, email), isNull(instanceInvites.acceptedAt)));
+    const existingInvite = matchingInvites[0];
 
-    await db.insert(instanceInvites).values({
-      id: nanoid(),
-      email: parsed.data.email,
-      tokenHash,
-      invitedByUserId: r.user.id,
-      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-    });
+    if (existingInvite) {
+      await db
+        .update(instanceInvites)
+        .set({ email, tokenHash, invitedByUserId: r.user.id, expiresAt })
+        .where(eq(instanceInvites.id, existingInvite.id));
+      for (const duplicate of matchingInvites.slice(1)) {
+        await db.delete(instanceInvites).where(eq(instanceInvites.id, duplicate.id));
+      }
+    } else {
+      await db.insert(instanceInvites).values({
+        id: nanoid(),
+        email,
+        tokenHash,
+        invitedByUserId: r.user.id,
+        expiresAt,
+      });
+    }
 
-    // Fire-and-forget invite email. The invited user doesn't need the
+    // The invited user doesn't need the
     // token to accept, the email-code login flow looks up the email
-    // against instanceInvites automatically. Email is purely a nudge.
+    // against instanceInvites automatically. Delivery still matters because
+    // their later sign-in code uses the same mailer.
+    const emailConfigured = isMailerEnabled();
     let emailed = false;
-    if (isMailerEnabled()) {
+    if (emailConfigured) {
       try {
         const org = getOrganizationInfo();
-        const base =
-          (process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "") || "https://cms.kanbon.at";
-        const loginUrl = `${base}/login?email=${encodeURIComponent(parsed.data.email)}`;
+        const base = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
+        const loginUrl = `${base}/login?email=${encodeURIComponent(email)}`;
         const html = inviteEmailHtml({
           projectName: org.instanceName,
           projectLogoUrl: null,
@@ -124,14 +144,10 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
           acceptUrl: loginUrl,
         });
         const result = await sendEmail({
-          to: parsed.data.email,
+          to: email,
           subject: `You're invited to ${org.instanceName}`,
           html,
           text: `${r.user.name ?? r.user.email ?? "Someone"} invited you to ${org.instanceName}. Sign in at ${loginUrl} with your email, no GitHub account required.`,
-          headers: {
-            "List-Unsubscribe": `<${base}/login>, <mailto:noreply@quillra.com?subject=Unsubscribe>`,
-            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-          },
         });
         emailed = result.sent;
       } catch {
@@ -139,7 +155,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       }
     }
 
-    return c.json({ ok: true, email: parsed.data.email, emailed });
+    return c.json({ ok: true, email, emailConfigured, emailed });
   })
   .get("/invites", async (c) => {
     const r = await requireOwner(c);
@@ -147,7 +163,7 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     const invites = await db
       .select()
       .from(instanceInvites)
-      .where(isNull(instanceInvites.acceptedAt));
+      .where(and(isNull(instanceInvites.acceptedAt), gt(instanceInvites.expiresAt, new Date())));
     return c.json({
       invites: invites.map((i) => ({
         id: i.id,
@@ -163,7 +179,14 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     if (userId === r.user.id) {
       return c.json({ error: "Cannot remove yourself" }, 400);
     }
-    await db.delete(user).where(eq(user.id, userId));
+    const affectedProjects = await db
+      .select({ projectId: projectMembers.projectId })
+      .from(projectMembers)
+      .where(eq(projectMembers.userId, userId));
+    const deleted = await db.delete(user).where(eq(user.id, userId)).returning({ id: user.id });
+    if (deleted.length > 0) {
+      for (const { projectId } of affectedProjects) revokePreviewCapability(projectId);
+    }
     return c.newResponse(null, 204);
   })
   .delete("/invites/:inviteId", async (c) => {

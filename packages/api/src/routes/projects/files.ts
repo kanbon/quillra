@@ -57,6 +57,7 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
+    if (m.role === "client") return c.json({ error: "Forbidden" }, 403);
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
@@ -212,6 +213,7 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
+    if (m.role === "client") return c.json({ error: "Forbidden" }, 403);
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     const body = (await c.req.json().catch(() => null)) as { path?: string } | null;

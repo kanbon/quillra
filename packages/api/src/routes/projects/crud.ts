@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -11,6 +11,12 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
   .get("/", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;
+    const membershipFilter = r.clientSession
+      ? and(
+          eq(projectMembers.userId, r.user.id),
+          eq(projectMembers.projectId, r.clientSession.projectId),
+        )
+      : eq(projectMembers.userId, r.user.id);
     const rows = await db
       .select({
         project: projects,
@@ -18,7 +24,7 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
       })
       .from(projectMembers)
       .innerJoin(projects, eq(projectMembers.projectId, projects.id))
-      .where(eq(projectMembers.userId, r.user.id))
+      .where(membershipFilter)
       .orderBy(desc(projects.updatedAt));
 
     return c.json({
@@ -35,6 +41,7 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
   .post("/", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;
+    if (r.clientSession) return c.json({ error: "Forbidden" }, 403);
     const body = await c.req.json().catch(() => null);
     const schema = z.object({
       name: z.string().min(1).max(200),

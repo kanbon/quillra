@@ -63,23 +63,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
   const { t } = useT();
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedFile[]>([]);
+  const stagedRef = useRef(staged);
+  stagedRef.current = staged;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Cleanup object URLs on unmount
   useEffect(() => {
     return () => {
-      staged.forEach((s) => {
+      stagedRef.current.forEach((s) => {
         if (s.imageThumbUrl) URL.revokeObjectURL(s.imageThumbUrl);
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current;
-    if (!el) return;
+    if (!el || el.value !== text) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [text]);

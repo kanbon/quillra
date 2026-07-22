@@ -166,10 +166,14 @@ export function UsageLimitsPanel({ users }: { users: UserOption[] }) {
       </div>
 
       <div className="mb-5">
-        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-neutral-500">
+        <label
+          htmlFor="usage-limits-alert-email"
+          className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-neutral-500"
+        >
           {t("usage.limitsAlertEmail")}
         </label>
         <Input
+          id="usage-limits-alert-email"
           type="email"
           value={alertEmail}
           onChange={(e) => setAlertEmail(e.target.value)}

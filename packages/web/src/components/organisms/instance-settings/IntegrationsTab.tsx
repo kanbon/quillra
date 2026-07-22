@@ -73,7 +73,7 @@ export function IntegrationsTab({ status, onSaved }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [appConfigured, status, onSaved]);
+  }, [appConfigured, onSaved]);
 
   async function resetGithubApp() {
     if (!confirm(t("instanceSettings.ghAppResetConfirm"))) return;
@@ -277,11 +277,19 @@ export function IntegrationsTab({ status, onSaved }: Props) {
 
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+            <label
+              htmlFor="github-oauth-callback"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+            >
               {t("instanceSettings.ghOauthCallback")}
             </label>
             <div className="flex items-center gap-2">
-              <Input value={callbackUrl} readOnly className="flex-1 font-mono text-[12px]" />
+              <Input
+                id="github-oauth-callback"
+                value={callbackUrl}
+                readOnly
+                className="flex-1 font-mono text-[12px]"
+              />
               <button
                 type="button"
                 onClick={copyCallback}

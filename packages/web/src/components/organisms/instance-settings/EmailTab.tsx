@@ -179,10 +179,10 @@ export function EmailTab({ status, onSaved }: Props) {
         {t("instanceSettings.tabEmail")}
       </h2>
 
-      <div className="space-y-2">
-        <label className="text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+      <fieldset className="min-w-0 space-y-2 border-0 p-0">
+        <legend className="text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
           {t("instanceSettings.emailProvider")}
-        </label>
+        </legend>
         <div className="grid gap-2">
           {(["none", "resend", "smtp"] as const).map((p) => (
             <label
@@ -196,6 +196,8 @@ export function EmailTab({ status, onSaved }: Props) {
             >
               <input
                 type="radio"
+                name="email-provider"
+                value={p}
                 checked={provider === p}
                 onChange={() => setProvider(p)}
                 className="mt-1 accent-neutral-900"
@@ -219,15 +221,19 @@ export function EmailTab({ status, onSaved }: Props) {
             </label>
           ))}
         </div>
-      </div>
+      </fieldset>
 
       {provider !== "none" && (
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+            <label
+              htmlFor="instance-email-from"
+              className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+            >
               {t("instanceSettings.emailFromLabel")}
             </label>
             <Input
+              id="instance-email-from"
               value={emailFrom}
               onChange={(e) => setEmailFrom(e.target.value)}
               placeholder="Your Name <you@example.com>"
@@ -257,30 +263,42 @@ export function EmailTab({ status, onSaved }: Props) {
             <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+                  <label
+                    htmlFor="instance-smtp-host"
+                    className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+                  >
                     {t("instanceSettings.smtpHost")}
                   </label>
                   <Input
+                    id="instance-smtp-host"
                     value={smtpHost}
                     onChange={(e) => setSmtpHost(e.target.value)}
                     placeholder="smtp.example.com"
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+                  <label
+                    htmlFor="instance-smtp-port"
+                    className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+                  >
                     {t("instanceSettings.smtpPort")}
                   </label>
                   <Input
+                    id="instance-smtp-port"
                     value={smtpPort}
                     onChange={(e) => setSmtpPort(e.target.value)}
                     placeholder="587"
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+                  <label
+                    htmlFor="instance-smtp-secure"
+                    className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+                  >
                     {t("instanceSettings.smtpSecure")}
                   </label>
                   <select
+                    id="instance-smtp-secure"
                     className="block h-[42px] w-full rounded-md border border-neutral-300 bg-white px-3 text-sm"
                     value={smtpSecure}
                     onChange={(e) => setSmtpSecure(e.target.value as "true" | "false")}
@@ -290,10 +308,14 @@ export function EmailTab({ status, onSaved }: Props) {
                   </select>
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600">
+                  <label
+                    htmlFor="instance-smtp-user"
+                    className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wider text-neutral-600"
+                  >
                     {t("instanceSettings.smtpUser")}
                   </label>
                   <Input
+                    id="instance-smtp-user"
                     value={smtpUser}
                     onChange={(e) => setSmtpUser(e.target.value)}
                     placeholder="apikey or username"

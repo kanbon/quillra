@@ -1,39 +1,49 @@
 import { STEPS, type Step } from "@/components/organisms/setup/types";
-import { cn } from "@/lib/cn";
+import { useT } from "@/i18n/i18n";
 
+const STEP_LABEL_KEYS: Record<Step, string> = {
+  welcome: "setup.progress.labelWelcome",
+  anthropic: "setup.progress.labelAnthropic",
+  githubApp: "setup.progress.labelGithubApp",
+  email: "setup.progress.labelEmail",
+  organization: "setup.progress.labelOrganization",
+  signin: "setup.progress.labelSignin",
+};
 /**
- * Progress strip rendered at the top of the setup wizard card.
+ * Quill-red progress rail rendered above the setup wizard card.
  *
  * Pure presentation: given the current Step it shows "Step X / Y" plus a
  * row of segment bars that fill in as the user advances. Owns no state.
  */
 export function StepIndicator({ step }: { step: Step }) {
-  const stepIndex = STEPS.findIndex((s) => s.id === step);
+  const { t } = useT();
+  const stepIndex = STEPS.indexOf(step);
+  const currentStep = STEPS[stepIndex];
+  const currentLabel = currentStep ? t(STEP_LABEL_KEYS[currentStep]) : t("setup.badge");
+  const progress = ((stepIndex + 1) / STEPS.length) * 100;
 
   return (
-    <div className="mb-8">
-      <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-neutral-500">
+    <div className="mb-6 sm:mb-8">
+      <div className="mb-2.5 flex items-center justify-between text-xs font-medium text-graphite">
         <span>
-          Step <span className="text-neutral-900">{stepIndex + 1}</span>
-          <span className="text-neutral-400"> / {STEPS.length}</span>
+          {t("setup.progress.step")} <span className="font-semibold text-ink">{stepIndex + 1}</span>
+          <span className="text-graphite">
+            {" "}
+            {t("setup.progress.of")} {STEPS.length}
+          </span>
         </span>
-        <span className="uppercase tracking-wider text-neutral-400">{STEPS[stepIndex]?.label}</span>
+        <span className="font-semibold text-ink">{currentLabel}</span>
       </div>
-      <div className="flex items-center gap-1.5">
-        {STEPS.map((s, i) => (
-          <div
-            key={s.id}
-            className={cn(
-              "h-1 flex-1 rounded-full transition-colors",
-              i < stepIndex
-                ? "bg-neutral-900"
-                : i === stepIndex
-                  ? "bg-neutral-900"
-                  : "bg-neutral-200",
-            )}
-          />
-        ))}
-      </div>
+      <progress
+        className="block h-1 w-full appearance-none overflow-hidden rounded-full bg-rule accent-brand [&::-moz-progress-bar]:bg-brand [&::-webkit-progress-bar]:bg-rule [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-brand"
+        aria-label={t("setup.progress.aria", {
+          label: currentLabel,
+          current: stepIndex + 1,
+          total: STEPS.length,
+        })}
+        value={progress}
+        max={100}
+      />
     </div>
   );
 }

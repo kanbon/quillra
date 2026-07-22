@@ -187,6 +187,7 @@ export function EditorChatPanel({
             className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-700"
             onClick={startNewChat}
             title={t("chat.newChat")}
+            aria-label={t("chat.newChat")}
           >
             <svg
               className="h-3.5 w-3.5"
@@ -259,7 +260,7 @@ export function EditorChatPanel({
       {/* History sidebar (overlay) */}
       {showHistory && (
         <div className="border-b border-neutral-200 bg-white">
-          {/* Admin/editor/translator user filter, clients never see this */}
+          {/* Admin/editor user filter, clients never see this */}
           {convList?.canSeeAll && (
             <div className="flex items-center gap-2 border-b border-neutral-100 bg-neutral-50/50 px-3 py-2">
               <svg

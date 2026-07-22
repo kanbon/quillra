@@ -303,14 +303,34 @@ export function UsageTab() {
                           }}
                         >
                           <td className="px-3 py-2 align-top text-neutral-800">
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-neutral-900">
-                                {u.display_name}
-                              </p>
-                              {u.email && u.email !== u.display_name && (
-                                <p className="truncate text-[11px] text-neutral-500">{u.email}</p>
-                              )}
-                            </div>
+                            {uid ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDrillUser({ id: uid, name: u.display_name });
+                                }}
+                                className="block min-w-0 max-w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+                              >
+                                <span className="block truncate font-medium text-neutral-900">
+                                  {u.display_name}
+                                </span>
+                                {u.email && u.email !== u.display_name && (
+                                  <span className="block truncate text-[11px] text-neutral-500">
+                                    {u.email}
+                                  </span>
+                                )}
+                              </button>
+                            ) : (
+                              <div className="min-w-0">
+                                <p className="truncate font-medium text-neutral-900">
+                                  {u.display_name}
+                                </p>
+                                {u.email && u.email !== u.display_name && (
+                                  <p className="truncate text-[11px] text-neutral-500">{u.email}</p>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-neutral-800">
                             {u.runs}

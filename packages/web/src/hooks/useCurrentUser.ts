@@ -3,7 +3,7 @@
  *
  *  - "github", Better Auth session (GitHub OAuth). Used by the instance
  *                owner and anyone who voluntarily linked GitHub.
- *  - "team", email-code session for admins/editors/translators who
+ *  - "team", email-code session for admins and editors who
  *                don't want a GitHub account. Full dashboard access via
  *                projectMembers rows. From the UI's perspective this is
  *                equivalent to "github", the only difference is the
@@ -17,10 +17,11 @@
 
 import { apiJson } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 export type CurrentUser =
   | { kind: "loading" }
+  | { kind: "error"; retry: () => void; retrying: boolean }
   | { kind: "none" }
   | {
       kind: "github";
@@ -39,6 +40,8 @@ export type CurrentUser =
   | { kind: "client"; user: { id: string; email: string }; projectId: string };
 
 type SessionResponse = {
+  kind: "none" | "github" | "team" | "client";
+  projectId: string | null;
   user: null | {
     id: string;
     email: string;
@@ -48,73 +51,32 @@ type SessionResponse = {
   };
 };
 
-type ClientMeResponse = {
-  user: { id: string; email: string } | null;
-  projectId?: string;
-};
-
 export function useCurrentUser(): CurrentUser {
-  const { data, isPending } = authClient.useSession();
-  const [team, setTeam] = useState<SessionResponse["user"] | "none" | "pending">("pending");
-  const [client, setClient] = useState<ClientMeResponse | "none" | "pending">("pending");
+  const { data, isPending, isError, isFetching, refetch } = useQuery({
+    queryKey: ["session"],
+    queryFn: () => apiJson<SessionResponse>("/api/session"),
+  });
 
-  useEffect(() => {
-    if (isPending) return;
-    if (data?.user) {
-      // Better Auth already resolved a GitHub session; skip the fallbacks.
-      setTeam("none");
-      setClient("none");
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      // Try team session (also resolves github sessions as a side effect,
-      // but that's fine, if Better Auth said no, /api/session says no too).
-      try {
-        const r = await apiJson<SessionResponse>("/api/session");
-        if (cancelled) return;
-        if (r.user) {
-          setTeam(r.user);
-          setClient("none");
-          return;
-        }
-      } catch {
-        /* fall through */
-      }
-      if (cancelled) return;
-      setTeam("none");
-      // Still nothing? Try client session.
-      try {
-        const r = await apiJson<ClientMeResponse>("/api/clients/me");
-        if (cancelled) return;
-        setClient(r.user && r.projectId ? r : "none");
-      } catch {
-        if (!cancelled) setClient("none");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isPending, data?.user]);
-
-  if (isPending || team === "pending" || client === "pending") return { kind: "loading" };
-  if (data?.user) {
+  if (isPending) return { kind: "loading" };
+  if (isError) {
     return {
-      kind: "github",
-      user: data.user as {
-        id: string;
-        email?: string | null;
-        name?: string | null;
-        image?: string | null;
-      },
+      kind: "error",
+      retry: () => void refetch(),
+      retrying: isFetching,
     };
   }
-  if (team !== "none" && team) {
-    return { kind: "team", user: team };
+  if (!data?.user) return { kind: "none" };
+
+  if (data.kind === "client" && data.projectId) {
+    return { kind: "client", user: data.user, projectId: data.projectId };
   }
-  if (client !== "none" && client.user && client.projectId) {
-    return { kind: "client", user: client.user, projectId: client.projectId };
+  if (data.kind === "github") {
+    return { kind: "github", user: data.user };
   }
+  if (data.kind === "team") {
+    return { kind: "team", user: data.user };
+  }
+
   return { kind: "none" };
 }
 
@@ -123,25 +85,14 @@ export function isTeamSide(me: CurrentUser): boolean {
   return me.kind === "github" || me.kind === "team";
 }
 
-export async function signOutUnified(kind: "github" | "team" | "client") {
-  if (kind === "client") {
-    try {
-      await fetch("/api/clients/logout", { method: "POST", credentials: "include" });
-    } catch {
-      /* best effort */
-    }
-  } else if (kind === "team") {
-    try {
-      await fetch("/api/team-login/logout", { method: "POST", credentials: "include" });
-    } catch {
-      /* best effort */
-    }
-  } else {
-    try {
-      await authClient.signOut({ fetchOptions: { credentials: "include" } });
-    } catch {
-      /* best effort */
-    }
-  }
+export async function signOutUnified(_kind: "github" | "team" | "client") {
+  // Always clear every session mechanism. A browser can carry a stale custom
+  // cookie alongside its visible session, and leaving it behind would sign the
+  // user straight back in through the middleware's next fallback.
+  await Promise.allSettled([
+    fetch("/api/team-login/logout", { method: "POST", credentials: "include" }),
+    fetch("/api/clients/logout", { method: "POST", credentials: "include" }),
+    authClient.signOut({ fetchOptions: { credentials: "include" } }),
+  ]);
   window.location.href = "/login";
 }
