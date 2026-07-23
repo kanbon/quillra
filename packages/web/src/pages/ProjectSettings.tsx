@@ -28,7 +28,6 @@ export function ProjectSettingsPage() {
   const { t } = useT();
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
-  const [preferManualGit, setPreferManualGit] = useState(true);
   const [displayNameMode, setDisplayNameMode] = useState<"repo" | "full" | "custom">("repo");
 
   const projectQ = useQuery({
@@ -38,6 +37,8 @@ export function ProjectSettingsPage() {
       apiJson<{
         name: string;
         role: string;
+        githubRepositoryId: string | null;
+        githubInstallationId: string | null;
         githubRepoFullName: string;
         defaultBranch: string;
         previewDevCommand: string | null;
@@ -80,6 +81,8 @@ export function ProjectSettingsPage() {
     resolver: zodResolver(projectSchema),
     defaultValues: {
       name: "",
+      githubRepositoryId: null,
+      githubInstallationId: null,
       githubRepoFullName: "",
       defaultBranch: "main",
       previewDevCommand: "",
@@ -87,6 +90,8 @@ export function ProjectSettingsPage() {
   });
 
   const repoFull = watch("githubRepoFullName");
+  const githubRepositoryId = watch("githubRepositoryId");
+  const githubInstallationId = watch("githubInstallationId");
   const branch = watch("defaultBranch");
   const nameVal = watch("name");
   const hydratedProjectDetails = useRef<string | null>(null);
@@ -97,6 +102,8 @@ export function ProjectSettingsPage() {
     const detailsKey = JSON.stringify([
       id,
       p.name,
+      p.githubRepositoryId,
+      p.githubInstallationId,
       p.githubRepoFullName,
       p.defaultBranch,
       p.previewDevCommand,
@@ -105,12 +112,13 @@ export function ProjectSettingsPage() {
     hydratedProjectDetails.current = detailsKey;
     resetProject({
       name: p.name,
+      githubRepositoryId: p.githubRepositoryId,
+      githubInstallationId: p.githubInstallationId,
       githubRepoFullName: p.githubRepoFullName,
       defaultBranch: p.defaultBranch,
       previewDevCommand: p.previewDevCommand ?? "",
     });
     setDisplayNameMode(inferDisplayNameMode(p.name, p.githubRepoFullName));
-    setPreferManualGit(true);
   }, [id, projectQ.data, resetProject]);
 
   useEffect(() => {
@@ -166,13 +174,17 @@ export function ProjectSettingsPage() {
                 projectId={id}
                 displayNameMode={displayNameMode}
                 setDisplayNameMode={setDisplayNameMode}
-                preferManualGit={preferManualGit}
-                setPreferManualGit={setPreferManualGit}
                 registerProject={registerProject}
                 handleProjectSubmit={handleProjectSubmit}
                 setValue={setValue}
                 projectSubmitting={projectSubmitting}
                 projectErrors={projectErrors}
+                githubRepositoryId={githubRepositoryId}
+                githubInstallationId={githubInstallationId}
+                initialGithubRepositoryId={projectQ.data?.githubRepositoryId ?? null}
+                initialGithubInstallationId={projectQ.data?.githubInstallationId ?? null}
+                initialRepoFull={projectQ.data?.githubRepoFullName ?? ""}
+                initialBranch={projectQ.data?.defaultBranch ?? ""}
                 repoFull={repoFull}
                 branch={branch}
                 nameVal={nameVal}

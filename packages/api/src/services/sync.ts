@@ -93,87 +93,94 @@ function mapPorcelainStatus(code: string): LocalFileChange["status"] {
  */
 export async function getSyncStatus(projectId: string): Promise<SyncStatus> {
   const p = await loadProject(projectId);
-  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-  return runInProjectLock(p.id, async () => {
-    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-
-    try {
-      await g.fetch("origin", p.defaultBranch);
-    } catch {
-      // Network hiccups shouldn't block the editor; fall through with
-      // whatever we last knew about the remote. The sync modal will
-      // effectively be hidden, which is the safe default.
-    }
-
-    const remoteRef = `origin/${p.defaultBranch}`;
-    const remoteKnown = (await g.branch(["-r"])).all.includes(remoteRef);
-    if (!remoteKnown) return { state: "in_sync" };
-
-    // Porcelain status for both tracked and untracked changes.
-    const statusRaw = await g.raw(["status", "--porcelain=v1"]);
-    const localChanges: LocalFileChange[] = statusRaw
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const code = line.slice(0, 2);
-        const pathPart = line.slice(3).trim();
-        // Renames look like "old -> new"; keep the new path.
-        const filePath = pathPart.includes(" -> ")
-          ? (pathPart.split(" -> ")[1] ?? pathPart)
-          : pathPart;
-        return { path: filePath, status: mapPorcelainStatus(code) };
-      });
-
-    // Commit counts in each direction.
-    const ahead = Number(
-      (await g.raw(["rev-list", "--count", `${remoteRef}..HEAD`])).trim() || "0",
-    );
-    const behind = Number(
-      (await g.raw(["rev-list", "--count", `HEAD..${remoteRef}`])).trim() || "0",
-    );
-
-    if (behind === 0 && ahead === 0 && localChanges.length === 0) {
-      return { state: "in_sync" };
-    }
-    if (behind === 0 && ahead === 0 && localChanges.length > 0) {
-      // Locally dirty only; treated as in_sync for the load-time prompt.
-      // The publish flow handles these commits when the user ships.
-      return { state: "in_sync" };
-    }
-    if (behind === 0 && ahead > 0) {
-      return { state: "ahead_only", localAhead: ahead };
-    }
-
-    // Remote has new commits. Capture them for the modal.
-    const logRaw = await g.raw([
-      "log",
-      `HEAD..${remoteRef}`,
-      "--pretty=format:%H%x00%an%x00%s%x00%ct",
-    ]);
-    const remoteCommits: RemoteCommit[] = logRaw
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const [sha = "", author = "", message = "", ct = "0"] = line.split("\u0000");
-        return {
-          sha,
-          shortSha: sha.slice(0, 7),
-          author,
-          message,
-          when: Number(ct) * 1000,
-        };
-      });
-
-    if (localChanges.length === 0) {
-      return { state: "behind", remoteAhead: behind, remoteCommits };
-    }
-    return {
-      state: "behind_with_local_changes",
-      remoteAhead: behind,
-      remoteCommits,
-      localChanges,
-    };
+  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+    expectedBindingGeneration: p.githubBindingGeneration,
   });
+  return runInProjectLock(
+    p.id,
+    async () => {
+      const networkGit = await authenticatedGitForProject(p.id, repoPath, p.githubRepoFullName);
+      const g = simpleGitForProject(repoPath);
+
+      try {
+        await networkGit.fetch("origin", p.defaultBranch);
+      } catch {
+        // Network hiccups shouldn't block the editor; fall through with
+        // whatever we last knew about the remote. The sync modal will
+        // effectively be hidden, which is the safe default.
+      }
+
+      const remoteRef = `origin/${p.defaultBranch}`;
+      const remoteKnown = (await g.branch(["-r"])).all.includes(remoteRef);
+      if (!remoteKnown) return { state: "in_sync" };
+
+      // Porcelain status for both tracked and untracked changes.
+      const statusRaw = await g.raw(["status", "--porcelain=v1"]);
+      const localChanges: LocalFileChange[] = statusRaw
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const code = line.slice(0, 2);
+          const pathPart = line.slice(3).trim();
+          // Renames look like "old -> new"; keep the new path.
+          const filePath = pathPart.includes(" -> ")
+            ? (pathPart.split(" -> ")[1] ?? pathPart)
+            : pathPart;
+          return { path: filePath, status: mapPorcelainStatus(code) };
+        });
+
+      // Commit counts in each direction.
+      const ahead = Number(
+        (await g.raw(["rev-list", "--count", `${remoteRef}..HEAD`])).trim() || "0",
+      );
+      const behind = Number(
+        (await g.raw(["rev-list", "--count", `HEAD..${remoteRef}`])).trim() || "0",
+      );
+
+      if (behind === 0 && ahead === 0 && localChanges.length === 0) {
+        return { state: "in_sync" };
+      }
+      if (behind === 0 && ahead === 0 && localChanges.length > 0) {
+        // Locally dirty only; treated as in_sync for the load-time prompt.
+        // The publish flow handles these commits when the user ships.
+        return { state: "in_sync" };
+      }
+      if (behind === 0 && ahead > 0) {
+        return { state: "ahead_only", localAhead: ahead };
+      }
+
+      // Remote has new commits. Capture them for the modal.
+      const logRaw = await g.raw([
+        "log",
+        `HEAD..${remoteRef}`,
+        "--pretty=format:%H%x00%an%x00%s%x00%ct",
+      ]);
+      const remoteCommits: RemoteCommit[] = logRaw
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [sha = "", author = "", message = "", ct = "0"] = line.split("\u0000");
+          return {
+            sha,
+            shortSha: sha.slice(0, 7),
+            author,
+            message,
+            when: Number(ct) * 1000,
+          };
+        });
+
+      if (localChanges.length === 0) {
+        return { state: "behind", remoteAhead: behind, remoteCommits };
+      }
+      return {
+        state: "behind_with_local_changes",
+        remoteAhead: behind,
+        remoteCommits,
+        localChanges,
+      };
+    },
+    p,
+  );
 }
 
 type GitActor = { name: string; email: string };
@@ -189,19 +196,26 @@ async function configureGitActor(g: ReturnType<typeof simpleGitForProject>, acto
  */
 export async function fastForwardPull(projectId: string): Promise<{ pulled: number }> {
   const p = await loadProject(projectId);
-  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-  return runInProjectLock(p.id, async () => {
-    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-    await g.fetch("origin", p.defaultBranch);
-    const before = (await g.revparse(["HEAD"])).trim();
-    await g.raw(["merge", "--ff-only", `origin/${p.defaultBranch}`]);
-    const after = (await g.revparse(["HEAD"])).trim();
-    if (before === after) return { pulled: 0 };
-    const count = Number(
-      (await g.raw(["rev-list", "--count", `${before}..${after}`])).trim() || "0",
-    );
-    return { pulled: count };
+  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+    expectedBindingGeneration: p.githubBindingGeneration,
   });
+  return runInProjectLock(
+    p.id,
+    async () => {
+      const networkGit = await authenticatedGitForProject(p.id, repoPath, p.githubRepoFullName);
+      await networkGit.fetch("origin", p.defaultBranch);
+      const g = simpleGitForProject(repoPath);
+      const before = (await g.revparse(["HEAD"])).trim();
+      await g.raw(["merge", "--ff-only", `origin/${p.defaultBranch}`]);
+      const after = (await g.revparse(["HEAD"])).trim();
+      if (before === after) return { pulled: 0 };
+      const count = Number(
+        (await g.raw(["rev-list", "--count", `${before}..${after}`])).trim() || "0",
+      );
+      return { pulled: count };
+    },
+    p,
+  );
 }
 
 /**
@@ -210,13 +224,20 @@ export async function fastForwardPull(projectId: string): Promise<{ pulled: numb
  */
 export async function discardAndReset(projectId: string): Promise<void> {
   const p = await loadProject(projectId);
-  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-  await runInProjectLock(p.id, async () => {
-    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-    await g.fetch("origin", p.defaultBranch);
-    await g.reset(["--hard", `origin/${p.defaultBranch}`]);
-    await g.clean("fd");
+  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+    expectedBindingGeneration: p.githubBindingGeneration,
   });
+  await runInProjectLock(
+    p.id,
+    async () => {
+      const networkGit = await authenticatedGitForProject(p.id, repoPath, p.githubRepoFullName);
+      await networkGit.fetch("origin", p.defaultBranch);
+      const g = simpleGitForProject(repoPath);
+      await g.reset(["--hard", `origin/${p.defaultBranch}`]);
+      await g.clean("fd");
+    },
+    p,
+  );
 }
 
 export type MergeOutcome =
@@ -237,75 +258,82 @@ export type MergeOutcome =
  */
 export async function mergeRemote(projectId: string, actor: GitActor): Promise<MergeOutcome> {
   const p = await loadProject(projectId);
-  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-  return runInProjectLock(p.id, async () => {
-    const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-    await configureGitActor(g, actor);
-    await g.fetch("origin", p.defaultBranch);
-
-    const remoteRef = `origin/${p.defaultBranch}`;
-
-    // If working tree is clean, a fast-forward or three-way merge is the
-    // whole job.
-    const status = await g.status();
-    if (status.isClean()) {
-      try {
-        await g.raw(["merge", "--ff-only", remoteRef]);
-        return { state: "fast_forwarded" };
-      } catch {
-        // Non-ff; fall through to a merge commit below.
-      }
-    }
-
-    // Stage any uncommitted work first so the merge has a real commit to
-    // combine against. We do a temporary "WIP" commit that the merge
-    // rolls into the final result.
-    if (!status.isClean()) {
-      await g.add("-A");
-      await g.raw(["commit", "-m", "WIP: merging remote changes", "--allow-empty"]);
-    }
-
-    try {
-      await g.raw(["merge", "--no-ff", "--no-edit", remoteRef]);
-      const head = (await g.revparse(["HEAD"])).trim();
-      return { state: "merged_clean", commitSha: head };
-    } catch {
-      // Merge stopped on conflicts. Hand to the resolver agent.
-    }
-
-    const conflicted = (await g.raw(["diff", "--name-only", "--diff-filter=U"]))
-      .split("\n")
-      .filter(Boolean);
-
-    if (conflicted.length === 0) {
-      // Merge failed for some other reason; abort and bail loudly.
-      await g.raw(["merge", "--abort"]).catch(() => undefined);
-      return {
-        state: "conflicts_unresolved",
-        conflictedFiles: [],
-        message: "Merge failed for an unknown reason. Please resolve manually.",
-      };
-    }
-
-    const resolved = await resolveMergeConflictsWithOpus({
-      repoPath,
-      conflictedFiles: conflicted,
-    });
-
-    if (!resolved.ok) {
-      // Leave the merge in its conflicted state so an admin can inspect.
-      return {
-        state: "conflicts_unresolved",
-        conflictedFiles: conflicted,
-        message: resolved.reason,
-      };
-    }
-
-    // Resolver staged the files; we commit with the configured actor.
-    await g.raw(["commit", "-m", "chore: resolve merge conflicts", "--no-edit"]);
-    const head = (await g.revparse(["HEAD"])).trim();
-    return { state: "conflicts_resolved", commitSha: head, resolvedFiles: conflicted };
+  const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+    expectedBindingGeneration: p.githubBindingGeneration,
   });
+  return runInProjectLock(
+    p.id,
+    async () => {
+      const networkGit = await authenticatedGitForProject(p.id, repoPath, p.githubRepoFullName);
+      const g = simpleGitForProject(repoPath);
+      await configureGitActor(g, actor);
+      await networkGit.fetch("origin", p.defaultBranch);
+
+      const remoteRef = `origin/${p.defaultBranch}`;
+
+      // If working tree is clean, a fast-forward or three-way merge is the
+      // whole job.
+      const status = await g.status();
+      if (status.isClean()) {
+        try {
+          await g.raw(["merge", "--ff-only", remoteRef]);
+          return { state: "fast_forwarded" };
+        } catch {
+          // Non-ff; fall through to a merge commit below.
+        }
+      }
+
+      // Stage any uncommitted work first so the merge has a real commit to
+      // combine against. We do a temporary "WIP" commit that the merge
+      // rolls into the final result.
+      if (!status.isClean()) {
+        await g.add("-A");
+        await g.raw(["commit", "-m", "WIP: merging remote changes", "--allow-empty"]);
+      }
+
+      try {
+        await g.raw(["merge", "--no-ff", "--no-edit", remoteRef]);
+        const head = (await g.revparse(["HEAD"])).trim();
+        return { state: "merged_clean", commitSha: head };
+      } catch {
+        // Merge stopped on conflicts. Hand to the resolver agent.
+      }
+
+      const conflicted = (await g.raw(["diff", "--name-only", "--diff-filter=U"]))
+        .split("\n")
+        .filter(Boolean);
+
+      if (conflicted.length === 0) {
+        // Merge failed for some other reason; abort and bail loudly.
+        await g.raw(["merge", "--abort"]).catch(() => undefined);
+        return {
+          state: "conflicts_unresolved",
+          conflictedFiles: [],
+          message: "Merge failed for an unknown reason. Please resolve manually.",
+        };
+      }
+
+      const resolved = await resolveMergeConflictsWithOpus({
+        repoPath,
+        conflictedFiles: conflicted,
+      });
+
+      if (!resolved.ok) {
+        // Leave the merge in its conflicted state so an admin can inspect.
+        return {
+          state: "conflicts_unresolved",
+          conflictedFiles: conflicted,
+          message: resolved.reason,
+        };
+      }
+
+      // Resolver staged the files; we commit with the configured actor.
+      await g.raw(["commit", "-m", "chore: resolve merge conflicts", "--no-edit"]);
+      const head = (await g.revparse(["HEAD"])).trim();
+      return { state: "conflicts_resolved", commitSha: head, resolvedFiles: conflicted };
+    },
+    p,
+  );
 }
 
 /**

@@ -34,6 +34,44 @@ export type GithubAppCreds = {
   webhookSecret: string | null;
 };
 
+type CachedInstallationToken = {
+  token: string;
+  /** Early refresh boundary, ten minutes before GitHub's real expiry. */
+  expiresAt: number;
+};
+
+type IssuedInstallationToken = {
+  /** GitHub's real expiry, not the cache's early refresh boundary. */
+  expiresAt: number;
+};
+
+/** Installation tokens are cached for 50 minutes but remain remotely valid
+ * for an hour. Keep a separate issued-token registry through the real expiry
+ * so an early refresh never makes the superseded token invisible to reset. */
+const installationTokenCache = new Map<string, CachedInstallationToken>();
+const issuedInstallationTokens = new Map<string, IssuedInstallationToken>();
+const installationTokenMints = new Map<string, Promise<string>>();
+const installationTokenOperations = new Set<Promise<string>>();
+
+type InstallationTokenResetPhase = "open" | "draining" | "finalizing";
+let installationTokenResetPhase: InstallationTokenResetPhase = "open";
+let installationTokenReset: Promise<void> | null = null;
+let githubAppCredentialGeneration = 0;
+
+function invalidateLocalGithubAppTokenState(): void {
+  githubAppCredentialGeneration += 1;
+  installationTokenCache.clear();
+  issuedInstallationTokens.clear();
+  installationTokenMints.clear();
+  botIdentityPromise = null;
+}
+
+function pruneExpiredIssuedInstallationTokens(now = Date.now()): void {
+  for (const [token, issued] of issuedInstallationTokens) {
+    if (issued.expiresAt <= now) issuedInstallationTokens.delete(token);
+  }
+}
+
 /**
  * Delete every GITHUB_APP_* row from instance_settings. Called both by
  * the /api/admin/github-app DELETE endpoint (explicit reset) and
@@ -46,6 +84,15 @@ export type GithubAppCreds = {
  * are now as dead as the App itself.
  */
 export function clearGithubAppCredentials(): void {
+  pruneExpiredIssuedInstallationTokens();
+  if (
+    installationTokenResetPhase !== "finalizing" &&
+    (installationTokenOperations.size > 0 || issuedInstallationTokens.size > 0)
+  ) {
+    throw new Error(
+      "GitHub App credentials cannot be cleared before installation tokens are revoked.",
+    );
+  }
   setInstanceSetting("GITHUB_APP_ID", null);
   setInstanceSetting("GITHUB_APP_SLUG", null);
   setInstanceSetting("GITHUB_APP_NAME", null);
@@ -53,19 +100,14 @@ export function clearGithubAppCredentials(): void {
   setInstanceSetting("GITHUB_APP_CLIENT_SECRET", null);
   setInstanceSetting("GITHUB_APP_PRIVATE_KEY", null);
   setInstanceSetting("GITHUB_APP_WEBHOOK_SECRET", null);
-  installationTokenCache.clear();
-  botIdentityPromise = null;
+  setInstanceSetting("GITHUB_APP_OAUTH_CALLBACK_URL", null);
+  invalidateLocalGithubAppTokenState();
 }
 
 type InstallationTokenResponse = {
   token: string;
   expires_at: string;
 };
-
-/** Installation token cache, tokens are valid for 1 hour, we keep each
- *  one for 50 minutes and refresh early. Per-process, not shared across
- *  workers, intentionally, shared caches are a multi-tenant concern. */
-const installationTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 export function isGithubAppConfigured(): boolean {
   const appId = getInstanceSetting("GITHUB_APP_ID");
@@ -132,17 +174,30 @@ async function ghApp<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 let botIdentityPromise: Promise<{ name: string; email: string } | null> | null = null;
 
-/** Resolve GitHub's real bot user id so commit attribution uses its noreply address. */
-export function getGithubAppBotIdentity(): Promise<{ name: string; email: string } | null> {
+/**
+ * Resolve GitHub's real bot user id so commit attribution uses its noreply
+ * address. The public user endpoint does not accept an App JWT reliably; when
+ * publishing, pass the already repository-scoped installation token.
+ */
+export function getGithubAppBotIdentity(
+  installationToken?: string,
+): Promise<{ name: string; email: string } | null> {
   if (botIdentityPromise) return botIdentityPromise;
-  botIdentityPromise = (async () => {
+  const lookup = (async () => {
     const creds = getGithubAppCredentials();
     if (!creds?.slug) return null;
     const name = `${creds.slug}[bot]`;
     try {
-      const account = await ghApp<{ id: number; login: string }>(
-        `/users/${encodeURIComponent(name)}`,
-      );
+      const response = await fetch(`https://api.github.com/users/${encodeURIComponent(name)}`, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          ...(installationToken ? { Authorization: `Bearer ${installationToken}` } : {}),
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Quillra-Self-Hosted",
+        },
+      });
+      if (!response.ok) return null;
+      const account = (await response.json()) as { id: number; login: string };
       if (!Number.isInteger(account.id) || account.id <= 0) return null;
       return {
         name: account.login || name,
@@ -152,53 +207,212 @@ export function getGithubAppBotIdentity(): Promise<{ name: string; email: string
       return null;
     }
   })();
-  return botIdentityPromise;
+  botIdentityPromise = lookup;
+  void lookup.then((identity) => {
+    // A transient GitHub failure must not permanently switch all later
+    // commits to the fallback committer until the process restarts.
+    if (!identity && botIdentityPromise === lookup) botIdentityPromise = null;
+  });
+  return lookup;
+}
+
+export type GithubContentsPermission = "read" | "write";
+
+function trackInstallationTokenOperation(operation: Promise<string>): Promise<string> {
+  installationTokenOperations.add(operation);
+  const cleanup = () => {
+    installationTokenOperations.delete(operation);
+  };
+  void operation.then(cleanup, cleanup);
+  return operation;
+}
+
+function assertGithubNumericId(value: string, label: string): number {
+  if (!/^[1-9]\d*$/.test(value)) throw new Error(`Invalid GitHub ${label}`);
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) throw new Error(`Invalid GitHub ${label}`);
+  return number;
 }
 
 /**
- * Get an installation access token for a specific installation id.
- * Cached for 50 minutes to avoid hitting GitHub on every push.
+ * Mint an installation token for one immutable repository id and the minimum
+ * contents permission needed by the operation. Omitting `repository_ids`
+ * would silently grant the token every repository in the installation.
  */
-export async function getInstallationToken(installationId: string): Promise<string> {
-  const cached = installationTokenCache.get(installationId);
-  if (cached && cached.expiresAt > Date.now()) return cached.token;
-
+async function mintInstallationToken(
+  installationId: string,
+  repositoryId: string,
+  contents: GithubContentsPermission,
+  cacheKey: string,
+  credentialGeneration: number,
+): Promise<string> {
+  const numericRepositoryId = assertGithubNumericId(repositoryId, "repository id");
   const data = await ghApp<InstallationTokenResponse>(
     `/app/installations/${installationId}/access_tokens`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repository_ids: [numericRepositoryId],
+        permissions: { contents },
+      }),
+    },
   );
+  if (!data.token || typeof data.token !== "string") {
+    throw new Error("GitHub returned an invalid installation token");
+  }
   const expiresAtMs = new Date(data.expires_at).getTime();
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    throw new Error("GitHub returned an invalid installation token expiry");
+  }
+  // Register before returning or caching. Even if a credential-generation
+  // check fails, a token GitHub successfully minted must remain revocable.
+  const previousIssue = issuedInstallationTokens.get(data.token);
+  issuedInstallationTokens.set(data.token, {
+    expiresAt: Math.max(previousIssue?.expiresAt ?? 0, expiresAtMs),
+  });
   // Refresh 10 minutes before expiry so in-flight requests don't race.
   const keepUntil = expiresAtMs - 10 * 60 * 1000;
-  installationTokenCache.set(installationId, { token: data.token, expiresAt: keepUntil });
+  if (credentialGeneration !== githubAppCredentialGeneration) {
+    throw new Error("The GitHub App changed while repository access was being prepared.");
+  }
+  installationTokenCache.set(cacheKey, { token: data.token, expiresAt: keepUntil });
   return data.token;
 }
 
+async function performGetInstallationToken(
+  installationId: string,
+  repositoryId: string,
+  contents: GithubContentsPermission,
+): Promise<string> {
+  assertGithubNumericId(installationId, "installation id");
+  assertGithubNumericId(repositoryId, "repository id");
+  const credentialGeneration = githubAppCredentialGeneration;
+  const cacheKey = `${credentialGeneration}:${installationId}:${repositoryId}:${contents}`;
+  const cached = installationTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
+
+  const existingMint = installationTokenMints.get(cacheKey);
+  if (existingMint) return existingMint;
+
+  const mint = mintInstallationToken(
+    installationId,
+    repositoryId,
+    contents,
+    cacheKey,
+    credentialGeneration,
+  );
+  installationTokenMints.set(cacheKey, mint);
+  const cleanup = () => {
+    if (installationTokenMints.get(cacheKey) === mint) installationTokenMints.delete(cacheKey);
+  };
+  void mint.then(cleanup, cleanup);
+  return mint;
+}
+
 /**
- * Find the installation id for a specific `owner/repo`. Returns null
- * when the App isn't installed on that repo (the caller should show
- * the user a helpful "install the App on this repo" message).
+ * Resolve one repository-scoped installation token. Reset closes the gate
+ * synchronously before doing any asynchronous work, so calls beginning after
+ * reset cannot read a cached token or start a new mint.
  */
-export async function findInstallationForRepo(owner: string, repo: string): Promise<string | null> {
-  if (!isGithubAppConfigured()) return null;
-  try {
-    const data = await ghApp<{ id: number }>(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
-    );
-    return String(data.id);
-  } catch {
-    return null;
+export function getInstallationToken(
+  installationId: string,
+  repositoryId: string,
+  contents: GithubContentsPermission,
+): Promise<string> {
+  if (installationTokenResetPhase !== "open") {
+    return Promise.reject(new Error("The GitHub App is being reset. Try again."));
+  }
+  return trackInstallationTokenOperation(
+    performGetInstallationToken(installationId, repositoryId, contents),
+  );
+}
+
+async function revokeInstallationToken(token: string): Promise<void> {
+  const response = await fetch("https://api.github.com/installation/token", {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "Quillra-Self-Hosted",
+    },
+  });
+  // 401 means the token is already expired or revoked, which is the desired
+  // postcondition. Every other non-204 response is ambiguous and must remain
+  // retryable locally.
+  if (response.status !== 204 && response.status !== 401) {
+    throw new Error(`GitHub installation-token revocation failed with HTTP ${response.status}`);
   }
 }
 
-/** Mint a token for a given `owner/repo`. */
-export async function getInstallationTokenForRepo(
-  owner: string,
-  repo: string,
-): Promise<string | null> {
-  const id = await findInstallationForRepo(owner, repo);
-  if (!id) return null;
-  return getInstallationToken(id);
+function forgetRevokedInstallationToken(token: string): void {
+  issuedInstallationTokens.delete(token);
+  for (const [cacheKey, cached] of installationTokenCache) {
+    if (cached.token === token) installationTokenCache.delete(cacheKey);
+  }
+}
+
+async function performInstallationTokenReset(finalize: () => void | Promise<void>): Promise<void> {
+  // The closed gate means the set can only shrink. allSettled deliberately
+  // drains failed mints too; a failed mint produced no token to revoke.
+  while (installationTokenOperations.size > 0) {
+    await Promise.allSettled([...installationTokenOperations]);
+  }
+
+  pruneExpiredIssuedInstallationTokens();
+  const tokens = [...issuedInstallationTokens.keys()];
+  const revocations = await Promise.allSettled(
+    tokens.map(async (token) => {
+      await revokeInstallationToken(token);
+      forgetRevokedInstallationToken(token);
+    }),
+  );
+  const failure = revocations.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) {
+    throw failure.reason instanceof Error
+      ? failure.reason
+      : new Error("GitHub installation-token revocation failed");
+  }
+
+  installationTokenResetPhase = "finalizing";
+  const generationBeforeFinalize = githubAppCredentialGeneration;
+  await finalize();
+  // A credential finalizer normally calls clearGithubAppCredentials(), which
+  // already invalidates local token state. Keep the lifecycle useful for a
+  // token-only reset too, without incrementing twice.
+  if (githubAppCredentialGeneration === generationBeforeFinalize) {
+    invalidateLocalGithubAppTokenState();
+  }
+}
+
+/**
+ * Close installation-token access immediately, drain existing gets/mints,
+ * revoke every still-live token issued by this process, then run the supplied
+ * local/user-credential finalizer. Failed revocations keep their cache and
+ * issued-token records so the owner can retry safely.
+ *
+ * The App-reset route should wrap its existing user-grant reset with this:
+ *   resetGithubAppInstallationTokens(() =>
+ *     disconnectAllGithubUsers(clearGithubAppCredentials)
+ *   )
+ */
+export function resetGithubAppInstallationTokens(
+  finalize: () => void | Promise<void>,
+): Promise<void> {
+  if (installationTokenReset) return installationTokenReset;
+  installationTokenResetPhase = "draining";
+  const reset = performInstallationTokenReset(finalize);
+  installationTokenReset = reset;
+  const cleanup = () => {
+    if (installationTokenReset !== reset) return;
+    installationTokenReset = null;
+    installationTokenResetPhase = "open";
+  };
+  void reset.then(cleanup, cleanup);
+  return reset;
 }
 
 type Installation = {
@@ -237,71 +451,14 @@ export async function listInstallations(): Promise<InstallationsResult> {
       console.warn(
         "[github-app] remote App is gone (404 Integration not found), clearing stored credentials",
       );
-      clearGithubAppCredentials();
+      const { invalidateAllGithubUsers } = await import("./github-user-connection.js");
+      await resetGithubAppInstallationTokens(() =>
+        invalidateAllGithubUsers(clearGithubAppCredentials),
+      );
       return { installations: [], cleared: "app-deleted" };
     }
     throw e;
   }
-}
-
-/**
- * List every repository the App is installed on, across all installations.
- * Replaces `listAccessibleRepos()` from github-rest.ts when the App is
- * configured, the PAT version only knows about repos the owner's
- * personal token can see, while the App version only knows about repos
- * the App is installed on. Both are "what can I actually push to".
- */
-export async function listRepositoriesAcrossInstallations(): Promise<
-  Array<{ fullName: string; defaultBranch: string; installationId: number }>
-> {
-  const { installations } = await listInstallations();
-  const out: Array<{ fullName: string; defaultBranch: string; installationId: number }> = [];
-  for (const inst of installations) {
-    try {
-      const token = await getInstallationToken(String(inst.id));
-      // Paginate installation repositories
-      let page = 1;
-      for (;;) {
-        const res = await fetch(
-          `https://api.github.com/installation/repositories?per_page=100&page=${page}`,
-          {
-            headers: {
-              Authorization: `token ${token}`,
-              Accept: "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "Quillra-Self-Hosted",
-            },
-          },
-        );
-        if (!res.ok) break;
-        const data = (await res.json()) as {
-          repositories: { full_name: string; default_branch: string }[];
-        };
-        for (const r of data.repositories) {
-          out.push({
-            fullName: r.full_name,
-            defaultBranch: r.default_branch,
-            installationId: inst.id,
-          });
-        }
-        if (data.repositories.length < 100) break;
-        page++;
-        if (page > 50) break;
-      }
-    } catch {
-      /* skip failing installations, their repos just won't show up */
-    }
-  }
-  // Dedupe by full_name (same repo can show up twice if multiple
-  // installations have access to it) and sort.
-  const seen = new Set<string>();
-  const deduped = out.filter((r) => {
-    if (seen.has(r.fullName)) return false;
-    seen.add(r.fullName);
-    return true;
-  });
-  deduped.sort((a, b) => a.fullName.localeCompare(b.fullName));
-  return deduped;
 }
 
 /**

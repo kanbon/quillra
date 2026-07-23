@@ -40,6 +40,12 @@ export const auth = betterAuth({
   secret: betterAuthSecret,
   baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
   trustedOrigins: trustedOrigins(),
+  account: {
+    // Better Auth's own social-login tokens are not used for repository
+    // access, but they are still credentials and must not sit in SQLite as
+    // plaintext.
+    encryptOAuthTokens: true,
+  },
   socialProviders: {
     github: {
       clientId: process.env.GITHUB_CLIENT_ID ?? "",

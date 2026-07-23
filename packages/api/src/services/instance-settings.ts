@@ -33,6 +33,10 @@ export const SETTABLE_KEYS = [
   "GITHUB_APP_CLIENT_SECRET",
   "GITHUB_APP_PRIVATE_KEY",
   "GITHUB_APP_WEBHOOK_SECRET",
+  // Exact callback configured on the App for per-user authorization. This is
+  // not a secret; it lets upgraded instances fail with actionable migration
+  // guidance instead of sending users into a broken OAuth flow.
+  "GITHUB_APP_OAUTH_CALLBACK_URL",
   // Email provider
   "EMAIL_PROVIDER",
   "EMAIL_FROM",

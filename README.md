@@ -121,6 +121,13 @@ You deploy **one Quillra instance** (VPS, internal server, Docker). There are no
 
 All other settings, GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields, are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them and creates the owner account with a passwordless email code.
 
+Every team member connects their own GitHub identity before choosing a
+repository. Quillra only shows the repositories where that person and the
+installed GitHub App both have access, stores the immutable repository binding
+on the project, and publishes with the Quillra App bot identity when GitHub
+exposes it. Older GitHub Apps need the callback migration documented in
+[SECURITY.md](./SECURITY.md#upgrading-an-existing-github-app).
+
 Copy `packages/api/.env.example` to `packages/api/.env`, set the public URL,
 origins, and production secrets, then start the container. Keep
 `QUILLRA_ENCRYPTION_KEY` stable: it protects API keys and other credentials in
@@ -153,7 +160,7 @@ when mutually untrusted teams need isolation.
 **Server prerequisites:** Docker Engine with Compose, Git, OpenSSL, a text
 editor, and curl for the health check. Caddy or another TLS reverse proxy is
 optional but recommended for an internet-facing install. A source installation
-additionally needs Node.js 22 and Corepack on `PATH`. The image includes Node.js,
+additionally needs Node.js 22.13 or newer and Corepack on `PATH`. The image includes Node.js,
 Corepack, npm, pnpm, Yarn Classic, and Git for the supported JavaScript
 frameworks above. Non-Node generators such as Hugo and Jekyll are outside the
 stock registry and image.

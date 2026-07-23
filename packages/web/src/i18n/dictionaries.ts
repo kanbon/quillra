@@ -465,7 +465,7 @@ const enDict = {
     repository: "GitHub repository",
     repoPlaceholder: "owner/repo",
     apiUnavailable: "API unavailable (check server token).",
-    noRepos: "No repositories returned for this token.",
+    noRepos: "No repositories are available through your GitHub connection.",
     branch: "Branch",
     branchPlaceholder: "main",
     useListPicker: "Use list picker instead",
@@ -474,6 +474,25 @@ const enDict = {
     branchTypeHelp: "Type the branch name (API could not list branches).",
     loadingBranches: "Loading branches…",
     defaultSuffix: "(default)",
+    connected: "Connected to GitHub",
+    connectedAs: "Connected as @{login}",
+    disconnect: "Disconnect",
+    disconnecting: "Disconnecting…",
+    disconnectConfirm:
+      "Disconnect your personal GitHub account from Quillra? Existing projects stay connected through the Quillra App.",
+    connectTitle: "Connect your GitHub account",
+    connectDescription:
+      "Quillra will only show repositories that you can access personally and that the Quillra App is allowed to use.",
+    connectSettingsDescription:
+      "Connect your GitHub account to change {repo}. Existing publishing through the Quillra App is not affected.",
+    connect: "Connect GitHub",
+    searchRepos: "Search your repositories…",
+    noMatches: "No matching repositories",
+    reviewAccess: "Review GitHub access",
+    currentUnavailableSuffix: "(not available to your GitHub account)",
+    currentRepoUnavailable:
+      "Your GitHub account cannot currently rebind this repository. Select another repository or review the App installation.",
+    selectRepoRequired: "Select a repository from your connected GitHub account.",
   },
   projectSettings: {
     pageTitle: "Project settings",
@@ -1222,7 +1241,7 @@ export const de: Mirror<Dictionary> = {
     repository: "GitHub-Repository",
     repoPlaceholder: "owner/repo",
     apiUnavailable: "API nicht verfügbar (Server-Token prüfen).",
-    noRepos: "Für diesen Token wurden keine Repositories zurückgegeben.",
+    noRepos: "Über Ihre GitHub-Verbindung sind keine Repositories verfügbar.",
     branch: "Branch",
     branchPlaceholder: "main",
     useListPicker: "Listenauswahl verwenden",
@@ -1231,6 +1250,25 @@ export const de: Mirror<Dictionary> = {
     branchTypeHelp: "Geben Sie den Branch-Namen ein (API konnte keine Branches auflisten).",
     loadingBranches: "Branches werden geladen…",
     defaultSuffix: "(Standard)",
+    connected: "Mit GitHub verbunden",
+    connectedAs: "Verbunden als @{login}",
+    disconnect: "Trennen",
+    disconnecting: "Verbindung wird getrennt…",
+    disconnectConfirm:
+      "Ihre persönliche GitHub-Verbindung zu Quillra trennen? Bestehende Projekte bleiben über die Quillra App verbunden.",
+    connectTitle: "GitHub-Konto verbinden",
+    connectDescription:
+      "Quillra zeigt nur Repositories, auf die Sie persönlich zugreifen können und die für die Quillra App freigegeben sind.",
+    connectSettingsDescription:
+      "Verbinden Sie Ihr GitHub-Konto, um {repo} zu ändern. Das bestehende Publishing über die Quillra App bleibt davon unberührt.",
+    connect: "GitHub verbinden",
+    searchRepos: "Eigene Repositories durchsuchen…",
+    noMatches: "Keine passenden Repositories",
+    reviewAccess: "GitHub-Zugriff prüfen",
+    currentUnavailableSuffix: "(für Ihr GitHub-Konto nicht verfügbar)",
+    currentRepoUnavailable:
+      "Ihr GitHub-Konto kann dieses Repository derzeit nicht neu verbinden. Wählen Sie ein anderes Repository oder prüfen Sie die App-Installation.",
+    selectRepoRequired: "Wählen Sie ein Repository aus Ihrem verbundenen GitHub-Konto aus.",
   },
   projectSettings: {
     pageTitle: "Projekt-Einstellungen",

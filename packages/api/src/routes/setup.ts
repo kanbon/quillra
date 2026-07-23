@@ -42,7 +42,7 @@ import {
   verifyServerAccessSession,
   verifyServerAccessToken,
 } from "../lib/server-access.js";
-import { exchangeManifestCode } from "../services/github-app.js";
+import { exchangeManifestCode, isGithubAppConfigured } from "../services/github-app.js";
 import {
   SETTABLE_KEYS,
   type SettableKey,
@@ -225,6 +225,18 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     const parsed = saveSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
+    // GitHub App credentials have their own manifest/reset lifecycle. Writing
+    // any of them here would bypass token-cache invalidation and user-grant
+    // revocation, and a mixed request could partially replace an App. Reject
+    // the entire request before applying any setting, including future
+    // GITHUB_APP_* keys that have not been added to SETTABLE_KEYS yet.
+    if (Object.keys(parsed.data.values).some((key) => key.startsWith("GITHUB_APP_"))) {
+      return c.json(
+        { error: "GitHub App settings must be managed through the dedicated GitHub App flow." },
+        400,
+      );
+    }
+
     // Only allow known keys. Silently ignore anything else, no surprise writes.
     const allowed = new Set<SettableKey>(SETTABLE_KEYS);
     const writes: Array<{ key: SettableKey; value: string | null }> = [];
@@ -255,6 +267,9 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     if (!access.allowed) {
       return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
     }
+    if (isGithubAppConfigured()) {
+      return c.text("Reset the existing GitHub App before creating a replacement.", 409);
+    }
 
     const origin = originFromRequest(c);
     const instanceName = getSetupStatus().values.INSTANCE_NAME?.value ?? "Quillra";
@@ -277,6 +292,10 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       name: appName,
       url: origin,
       redirect_url: `${origin}${GITHUB_MANIFEST_FLOW_COOKIE_PATH}`,
+      // Dedicated GitHub App user authorization. This lets each Quillra user
+      // discover only installations/repositories they personally can access;
+      // it is separate from the instance-owner login OAuth configuration.
+      callback_urls: [`${origin}/api/github/connect/callback`],
       // After install GitHub redirects here so Quillra learns the
       // installation id and can immediately start using the App.
       setup_url: `${origin}/api/setup/github-app/installed`,
@@ -368,8 +387,15 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       path: GITHUB_MANIFEST_FLOW_COOKIE_PATH,
       secure: shouldUseSecureCookies(),
     });
+    if (isGithubAppConfigured()) {
+      return c.text("Reset the existing GitHub App before creating a replacement.", 409);
+    }
     try {
       const data = await exchangeManifestCode(code);
+      setInstanceSetting(
+        "GITHUB_APP_OAUTH_CALLBACK_URL",
+        `${originFromRequest(c)}/api/github/connect/callback`,
+      );
       // Bypass the wizard entirely and send them to GitHub's
       // "Install on repositories" page. GitHub will bounce them back
       // to the setup_url in the manifest when they're done.
@@ -395,6 +421,20 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
   .get("/github-app/installed", async (c) => {
     const access = await requireSetupAccess(c);
     if (!access.allowed) {
+      // The same public App is installed by individual Quillra users after
+      // initial setup. Installation itself happens entirely on GitHub; this
+      // callback grants nothing locally, so a signed-in non-owner may safely
+      // return to the dashboard and then discover only their own repositories.
+      if (c.get("user")) {
+        const origin = webOriginFromRequest(c);
+        const installationId = c.req.query("installation_id") ?? "";
+        return c.redirect(
+          `${origin}/?githubInstalled=1${
+            installationId ? `&installation_id=${encodeURIComponent(installationId)}` : ""
+          }`,
+          302,
+        );
+      }
       return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
     }
     const origin = webOriginFromRequest(c);

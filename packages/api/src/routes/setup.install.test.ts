@@ -9,6 +9,8 @@ const EXPECTED_TABLES = [
   "client_login_codes",
   "client_sessions",
   "conversations",
+  "github_oauth_states",
+  "github_user_connections",
   "instance_invites",
   "instance_settings",
   "messages",
@@ -153,6 +155,58 @@ describe("first-install database bootstrap", () => {
       .get("ANTHROPIC_API_KEY") as { value: string };
     expect(stored.value).toMatch(/^v1:/);
     expect(stored.value).not.toContain("test-anthropic-key");
+  });
+
+  it("rejects generic GitHub App writes atomically while preserving normal setup saves", async () => {
+    const { setupRouter, rawSqlite } = await loadSetupRuntime();
+    const unlockResponse = await setupRouter.request("/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "quillra-setup-test-token" }),
+    });
+    const cookie = unlockResponse.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+
+    rawSqlite
+      .prepare("INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)")
+      .run("GITHUB_APP_ID", "existing-app-id", Date.now());
+
+    const rejected = await setupRouter.request("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        values: {
+          GITHUB_APP_ID: "replacement-app-id",
+          GITHUB_APP_FUTURE_CREDENTIAL: "future-secret",
+          ANTHROPIC_API_KEY: "must-not-be-partially-written",
+        },
+      }),
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({
+      error: "GitHub App settings must be managed through the dedicated GitHub App flow.",
+    });
+    expect(
+      rawSqlite.prepare("SELECT value FROM instance_settings WHERE key = ?").get("GITHUB_APP_ID"),
+    ).toEqual({ value: "existing-app-id" });
+    expect(
+      rawSqlite
+        .prepare("SELECT value FROM instance_settings WHERE key = ?")
+        .get("ANTHROPIC_API_KEY"),
+    ).toBeUndefined();
+
+    const allowed = await setupRouter.request("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ values: { ANTHROPIC_API_KEY: "allowed-anthropic-key" } }),
+    });
+
+    expect(allowed.status).toBe(200);
+    const stored = rawSqlite
+      .prepare("SELECT value FROM instance_settings WHERE key = ?")
+      .get("ANTHROPIC_API_KEY") as { value: string };
+    expect(stored.value).toMatch(/^v1:/);
+    expect(stored.value).not.toContain("allowed-anthropic-key");
   });
 
   it("is idempotent across restarts and preserves first-install data", async () => {

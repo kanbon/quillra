@@ -1,15 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { simpleGit } from "simple-git";
+import { ensureProjectDirectory, ensureProjectGitExclude } from "../lib/project-files.js";
 import { createSafeChildEnv } from "./child-process-env.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
-import {
-  getGithubAppBotIdentity,
-  getInstallationTokenForRepo,
-  isGithubAppConfigured,
-} from "./github-app.js";
+import type { GithubContentsPermission } from "./github-app.js";
+import { getGithubAppBotIdentity } from "./github-app.js";
 import { issuePreviewCapability, revokePreviewCapability } from "./preview-capability.js";
 import { buildHostPreviewUrl, getPreviewOriginConfig } from "./preview-origin.js";
 import {
@@ -20,31 +19,17 @@ import {
   unregisterPreviewPort,
 } from "./preview-status.js";
 import {
+  type ProjectGithubBindingSnapshot,
+  assertProjectGithubBinding,
+  resolveProjectGitToken,
+} from "./project-github-token.js";
+import {
   beginProjectWriterReset,
   blockProjectWritersForDeletion,
   cancelAndWaitForProjectWriters,
   endProjectWriterReset,
   unblockProjectWritersAfterFailedDeletion,
 } from "./project-workspace-lifecycle.js";
-
-/**
- * Resolve a short-lived GitHub App installation token for a specific
- * repo. Returns null if the App isn't configured OR isn't installed on
- * the repo, the caller should surface "install the Quillra GitHub App
- * on this repository" in both cases. No PAT fallback: the App is the
- * only supported auth path for git operations.
- */
-async function resolveRepoGitToken(githubRepoFullName: string): Promise<string | null> {
-  if (!isGithubAppConfigured()) return null;
-  const [owner, repo] = githubRepoFullName.split("/");
-  if (!owner || !repo) return null;
-  try {
-    return (await getInstallationTokenForRepo(owner, repo)) ?? null;
-  } catch (e) {
-    console.warn(`[workspace] installation token fetch failed for ${githubRepoFullName}:`, e);
-    return null;
-  }
-}
 
 const previewChildren = new Map<string, ChildProcess>();
 const previewStartQueues = new Map<string, Promise<void>>();
@@ -102,7 +87,7 @@ export function clearPreviewLogs(projectId: string) {
 export function workspaceRoot(): string {
   const dir = process.env.WORKSPACE_DIR ?? path.join(process.cwd(), "data", "workspaces");
   fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return fs.realpathSync.native(path.resolve(dir));
 }
 
 function projectWorkspacePath(projectId: string): string {
@@ -151,27 +136,10 @@ export const QUILLRA_TEMP_DIR = ".quillra-temp";
  */
 export function ensureQuillraTempIgnored(repoPath: string): void {
   try {
-    const excludePath = path.join(repoPath, ".git", "info", "exclude");
-    fs.mkdirSync(path.dirname(excludePath), { recursive: true });
-    const line = `${QUILLRA_TEMP_DIR}/`;
-    let content = "";
-    if (fs.existsSync(excludePath)) {
-      content = fs.readFileSync(excludePath, "utf-8");
-    }
-    const already = content
-      .split("\n")
-      .map((l) => l.trim())
-      .some((l) => l === line || l === QUILLRA_TEMP_DIR);
-    if (!already) {
-      const suffix = content === "" || content.endsWith("\n") ? "" : "\n";
-      fs.appendFileSync(
-        excludePath,
-        `${suffix}# Quillra scratch space for chat attachments, never committed\n${line}\n`,
-      );
-    }
+    ensureProjectGitExclude(repoPath, QUILLRA_TEMP_DIR);
     // Belt-and-suspenders: also make sure the directory exists so the
     // upload handler can write to it without mkdir races.
-    fs.mkdirSync(path.join(repoPath, QUILLRA_TEMP_DIR), { recursive: true });
+    ensureProjectDirectory(repoPath, QUILLRA_TEMP_DIR);
   } catch (e) {
     console.warn("[workspace] failed to register .quillra-temp/ with git exclude:", e);
   }
@@ -555,6 +523,7 @@ export function sweepOrphanedProjectWorkspaces(
 export async function clearProjectRepoClone(
   projectId: string,
   writerTimeoutMs?: number,
+  afterClear?: () => Promise<void>,
 ): Promise<void> {
   resettingProjects.set(projectId, (resettingProjects.get(projectId) ?? 0) + 1);
   beginProjectWriterReset(projectId);
@@ -567,6 +536,7 @@ export async function clearProjectRepoClone(
     await stopPreviewAndWait(projectId);
     await withRepoLock(projectId, async () => {
       await removeManagedProjectPath(projectRepoPath(projectId));
+      await afterClear?.();
     });
   } finally {
     const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
@@ -641,6 +611,19 @@ function sweepStaleGitLocks(repoPath: string): void {
  * as soon as the next op attaches.
  */
 const repoOpQueue = new Map<string, Promise<unknown>>();
+type RepoLockContext = {
+  projectId: string;
+  active: boolean;
+  parent?: RepoLockContext;
+};
+const heldRepoLocks = new AsyncLocalStorage<RepoLockContext>();
+
+function contextHoldsRepoLock(context: RepoLockContext | undefined, projectId: string): boolean {
+  for (let current = context; current; current = current.parent) {
+    if (current.active && current.projectId === projectId) return true;
+  }
+  return false;
+}
 
 /**
  * Run an async operation while holding the per-project git lock. Exposed
@@ -648,17 +631,40 @@ const repoOpQueue = new Map<string, Promise<unknown>>();
  * serialisation as the chat turn, avoiding `.git/index.lock` races when
  * a remote-sync fetch collides with an in-flight chat.
  */
-export function runInProjectLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+export function runInProjectLock<T>(
+  projectId: string,
+  op: () => Promise<T>,
+  expectedBinding?: ProjectGithubBindingSnapshot,
+): Promise<T> {
   assertProjectWorkspaceAvailable(projectId);
   return withRepoLock(projectId, async () => {
     assertProjectWorkspaceAvailable(projectId);
+    if (expectedBinding) await assertProjectGithubBinding(projectId, expectedBinding);
     return op();
   });
 }
 
 function withRepoLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+  const held = heldRepoLocks.getStore();
+  if (contextHoldsRepoLock(held, projectId)) {
+    return op();
+  }
+
   const prev = repoOpQueue.get(projectId) ?? Promise.resolve();
-  const next = prev.then(op, op); // run op whether prev resolved or rejected
+  const start = () => {
+    const context: RepoLockContext = { projectId, active: true, parent: held };
+    return heldRepoLocks.run(context, async () => {
+      try {
+        return await op();
+      } finally {
+        // Async resources created by op retain this context. Marking the
+        // lease inactive prevents fire-and-forget work from bypassing the
+        // queue after the actual critical section has finished.
+        context.active = false;
+      }
+    });
+  };
+  const next = prev.then(start, start); // run op whether prev resolved or rejected
   // Store the "drained" version so errors don't poison the chain for
   // subsequent ops on this project.
   repoOpQueue.set(
@@ -697,8 +703,20 @@ function gitEnvironment(token?: string | null): NodeJS.ProcessEnv {
   return createSafeChildEnv(overrides);
 }
 
+// simple-git 3.36 blocks security-sensitive Git config by default. These four
+// exceptions apply only to the fixed environment assembled above: no caller or
+// repository can add config keys through this object. Protocol overrides,
+// custom binaries, pack helpers, templates, and all other unsafe categories
+// remain blocked.
+const CONTROLLED_GIT_UNSAFE_OPTIONS = {
+  allowUnsafeConfigEnvCount: true,
+  allowUnsafeConfigPaths: true,
+  allowUnsafeCredentialHelper: true,
+  allowUnsafeHooksPath: true,
+} as const;
+
 function simpleGitForClone(token?: string | null) {
-  return simpleGit().env(gitEnvironment(token));
+  return simpleGit({ unsafe: CONTROLLED_GIT_UNSAFE_OPTIONS }).env(gitEnvironment(token));
 }
 
 /**
@@ -706,8 +724,18 @@ function simpleGitForClone(token?: string | null) {
  * path. This keeps repository-installed hooks from executing with Quillra's
  * control-plane environment.
  */
-export function simpleGitForProject(repoPath: string, token?: string | null) {
-  return simpleGit(repoPath).env(gitEnvironment(token));
+export function simpleGitForProject(repoPath: string) {
+  return simpleGit({
+    baseDir: repoPath,
+    unsafe: CONTROLLED_GIT_UNSAFE_OPTIONS,
+  }).env(gitEnvironment());
+}
+
+function simpleGitForNetwork(repoPath: string, token: string) {
+  return simpleGit({
+    baseDir: repoPath,
+    unsafe: CONTROLLED_GIT_UNSAFE_OPTIONS,
+  }).env(gitEnvironment(token));
 }
 
 export async function scrubGitRemoteCredentials(
@@ -721,12 +749,17 @@ export async function scrubGitRemoteCredentials(
   ]);
 }
 
-export async function authenticatedGitForProject(repoPath: string, githubRepoFullName: string) {
-  const token = await resolveRepoGitToken(githubRepoFullName);
+export async function authenticatedGitForProject(
+  projectId: string,
+  repoPath: string,
+  _githubRepoFullName: string,
+  contents: GithubContentsPermission = "read",
+) {
+  const access = await resolveProjectGitToken(projectId, contents);
   // Also scrubs credentials persisted by releases that embedded the token in
   // origin. Authentication for network commands is injected only in env.
-  await scrubGitRemoteCredentials(repoPath, githubRepoFullName);
-  return simpleGitForProject(repoPath, token);
+  await scrubGitRemoteCredentials(repoPath, access.fullName);
+  return simpleGitForNetwork(repoPath, access.token);
 }
 
 export async function ensureRepoCloned(
@@ -734,6 +767,8 @@ export async function ensureRepoCloned(
   githubRepoFullName: string,
   branch: string,
   opts: {
+    /** Monotonic binding epoch captured with the caller's project row. */
+    expectedBindingGeneration: number;
     /** Skip running npm/yarn/pnpm install on the cloned repo. Set
      *  when the caller is about to rewrite package.json (migration)
      *  so we don't waste minutes installing a dep tree the agent
@@ -746,13 +781,11 @@ export async function ensureRepoCloned(
      *  File ops don't require node_modules. When this callback is not
      *  supplied, install failures still throw, the old behaviour. */
     onInstallFailed?: (error: string) => void;
-  } = {},
+  },
 ): Promise<string> {
   assertProjectWorkspaceAvailable(projectId);
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
-  const token = await resolveRepoGitToken(githubRepoFullName);
-  const url = credentialFreeGithubUrl(githubRepoFullName);
 
   const runInstall = async () => {
     if (opts.skipInstall) return;
@@ -777,6 +810,13 @@ export async function ensureRepoCloned(
   // one of them would die with a cryptic `File exists` message.
   await withRepoLock(projectId, async () => {
     assertProjectWorkspaceAvailable(projectId);
+    await assertProjectGithubBinding(projectId, {
+      githubRepoFullName,
+      defaultBranch: branch,
+      githubBindingGeneration: opts.expectedBindingGeneration,
+    });
+    const access = await resolveProjectGitToken(projectId, "read");
+    const url = credentialFreeGithubUrl(access.fullName);
     if (!fs.existsSync(gitDir)) {
       // A killed clone or an interrupted workspace reset can leave regular
       // files behind after `.git/` is already gone. Git refuses to clone into
@@ -787,9 +827,9 @@ export async function ensureRepoCloned(
         console.warn(`[workspace] removing incomplete clone for ${projectId}`);
         await removeManagedProjectPath(dir);
       }
-      setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
+      setPreviewStatus(projectId, "cloning", `Cloning ${access.fullName}`);
       fs.mkdirSync(path.dirname(dir), { recursive: true });
-      await simpleGitForClone(token).clone(url, dir, [
+      await simpleGitForClone(access.token).clone(url, dir, [
         "--branch",
         branch,
         "--single-branch",
@@ -799,11 +839,12 @@ export async function ensureRepoCloned(
       await runInstall();
     } else {
       sweepStaleGitLocks(dir);
-      await scrubGitRemoteCredentials(dir, githubRepoFullName);
-      const g = simpleGitForProject(dir, token);
-      await g.fetch("origin", branch);
-      await g.checkout(branch);
-      await g.pull("origin", branch).catch(() => undefined);
+      await scrubGitRemoteCredentials(dir, access.fullName);
+      const networkGit = simpleGitForNetwork(dir, access.token);
+      await networkGit.fetch("origin", branch);
+      const localGit = simpleGitForProject(dir);
+      await localGit.checkout(branch);
+      await localGit.raw(["merge", "--ff-only", `origin/${branch}`]).catch(() => undefined);
       await runInstall();
     }
     // Register .quillra-temp/ with git's local exclude so chat
@@ -1029,9 +1070,10 @@ export function getPreviewUrl(projectId: string, port: number): string {
 }
 
 export async function pushToGitHub(
+  projectId: string,
   repoPath: string,
   branch: string,
-  githubRepoFullName: string,
+  _githubRepoFullName: string,
   author?: { name: string | null; email: string | null } | null,
   commitMessage?: string | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
@@ -1039,18 +1081,14 @@ export async function pushToGitHub(
   // to accept an explicit `userToken` parameter here and the publish
   // route was passing the signed-in user's OAuth access token, which
   // (a) meant pushes happened under the human's credentials instead
-  // of the App's bot identity and (b) leaked the user's PAT-level
-  // scope into repos they didn't necessarily intend to push. The App
-  // installation token is always the right credential for a push.
-  const token = await resolveRepoGitToken(githubRepoFullName);
-  if (!token) {
-    throw new Error(
-      "Quillra GitHub App is not installed on this repository. Open Organization Settings → Integrations and install it, then try again.",
-    );
-  }
+  // of the App's bot identity and (b) exposed the user's broader
+  // authorization to repos they didn't necessarily intend to push.
+  // The exact-repository installation token is the right credential.
+  const access = await resolveProjectGitToken(projectId, "write");
 
-  await scrubGitRemoteCredentials(repoPath, githubRepoFullName);
-  const g = simpleGitForProject(repoPath, token);
+  await scrubGitRemoteCredentials(repoPath, access.fullName);
+  const g = simpleGitForProject(repoPath);
+  const networkGit = simpleGitForNetwork(repoPath, access.token);
 
   // Committer identity. When GitHub exposes the App's bot account, commits are
   // *committed by* the App's bot (`<slug>[bot]`, shows on github.com
@@ -1059,7 +1097,7 @@ export async function pushToGitHub(
   // in `git log` and the GitHub UI ("<name> authored, <slug>[bot]
   // committed"). If GitHub cannot resolve the bot account, fall back to the
   // human identity rather than inventing an invalid bot email address.
-  const botIdentity = await getGithubAppBotIdentity();
+  const botIdentity = await getGithubAppBotIdentity(access.token);
   let botCommitter = false;
   if (botIdentity) {
     await g.addConfig("user.name", botIdentity.name);
@@ -1106,9 +1144,9 @@ export async function pushToGitHub(
 
   if (!hasRemote) {
     try {
-      await g.push(["--set-upstream", "origin", branch]);
+      await networkGit.push(["--set-upstream", "origin", branch]);
     } catch {
-      await g.push("origin", branch);
+      await networkGit.push("origin", branch);
     }
     return {
       ok: true,
@@ -1122,9 +1160,9 @@ export async function pushToGitHub(
   }
 
   try {
-    await g.push("origin", branch);
+    await networkGit.push("origin", branch);
   } catch {
-    await g.push(["--set-upstream", "origin", branch]);
+    await networkGit.push(["--set-upstream", "origin", branch]);
   }
   return {
     ok: true,

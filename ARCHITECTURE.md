@@ -275,10 +275,28 @@ threshold fires a dedupe-guarded email once per user per month.
 ### GitHub
 
 Quillra uses a GitHub App, never a personal access token. The App is created
-once at install time from the first-run wizard (a manifest flow). Installation
-tokens are minted per operation, rotate every hour, and are scoped to the
-repos the customer picked. `services/github-app.ts` handles app JWTs;
-`services/github-rest.ts` is a thin REST client keyed off those tokens.
+once at install time from the first-run wizard (a manifest flow). Each Quillra
+user authorizes that App separately. The encrypted user token is used only to
+list the intersection of App installations and repositories that the user can
+personally access; read-only repositories are excluded from project creation.
+Because the App requests `contents:write`, the user token is itself
+write-capable and remains a control-plane credential even though Quillra uses
+it only for discovery and access checks.
+
+Projects persist GitHub's immutable repository and installation ids in addition
+to the display name. Clone and fetch mint a read token, while publish mints a
+write token, each restricted to exactly that repository id and cached
+separately. Quillra does not persist those transient tokens in Git remotes or
+intentionally forward them to repository commands. This is application-level
+credential scoping, not an operating-system sandbox: in the stock container,
+all project processes share one Unix identity and may inspect sibling process
+state. Mutually untrusted projects therefore require separate Quillra instances
+until workspace execution moves to isolated sandboxes such as microVMs. Project
+membership, not a shared owner credential, controls who can work with a
+repository inside the application authorization layer.
+`services/github-app.ts` handles App JWTs and installation tokens;
+`services/github-user-connection.ts` handles user authorization and discovery;
+`services/github-rest.ts` performs user-scoped metadata requests.
 
 ### Email
 

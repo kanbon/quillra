@@ -10,6 +10,10 @@ const CONTROLLED_ENV_KEYS = [
   "QUILLRA_ENCRYPTION_KEY",
   "EMAIL_PROVIDER",
   "RESEND_API_KEY",
+  "GITHUB_APP_ID",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
   "NODE_ENV",
 ] as const;
 
@@ -34,6 +38,10 @@ beforeEach(() => {
   process.env.DATABASE_URL = `file:${path.join(tempDirectory, "cms.sqlite")}`;
   process.env.QUILLRA_ENCRYPTION_KEY = "a".repeat(64);
   process.env.EMAIL_PROVIDER = "none";
+  process.env.GITHUB_APP_ID = "42";
+  process.env.GITHUB_APP_PRIVATE_KEY = "admin-test-private-key";
+  process.env.GITHUB_APP_CLIENT_ID = "Iv1.admin-test";
+  process.env.GITHUB_APP_CLIENT_SECRET = "admin-test-secret";
   process.env.NODE_ENV = "test";
 });
 
@@ -188,6 +196,10 @@ describe("instance invites", () => {
     const { issuePreviewCapability, resolvePreviewCapability } = await import(
       "../services/preview-capability.js"
     );
+    const { projectWriterAuthorizationEpoch, registerProjectWriter } = await import(
+      "../services/project-workspace-lifecycle.js"
+    );
+    const { encryptSecret } = await import("../services/crypto.js");
     openDatabase = rawSqlite;
     const now = Date.now();
     rawSqlite
@@ -199,6 +211,13 @@ describe("instance invites", () => {
            ('member-1', 'Member', 'member@example.com', 1, 'member', ?, ?)`,
       )
       .run(now, now, now, now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("member-1", "101", "member", encryptSecret("member-user-token"), now, now);
     for (const projectId of ["project-1", "project-2", "project-3"]) {
       rawSqlite
         .prepare(
@@ -230,10 +249,25 @@ describe("instance invites", () => {
       await next();
     });
     app.route("/", adminRouter);
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const writerCancel = vi.fn();
+    const releaseWriter = registerProjectWriter("project-1", writerCancel, {
+      userId: "member-1",
+      expectedEpoch: projectWriterAuthorizationEpoch("project-1", "member-1"),
+    });
 
     const response = await app.request("/members/member-1", { method: "DELETE" });
 
     expect(response.status).toBe(204);
+    expect(writerCancel).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/applications/Iv1.admin-test/grant",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ access_token: "member-user-token" }),
+      }),
+    );
     expect(resolvePreviewCapability("4173", affectedOne.token)).toEqual({ ok: false });
     expect(resolvePreviewCapability("4174", affectedTwo.token)).toEqual({ ok: false });
     expect(resolvePreviewCapability("4175", unaffected.token)).toMatchObject({
@@ -248,5 +282,6 @@ describe("instance invites", () => {
         .prepare("SELECT count(*) AS count FROM project_members WHERE user_id = ?")
         .get("member-1"),
     ).toEqual({ count: 0 });
+    releaseWriter();
   });
 });

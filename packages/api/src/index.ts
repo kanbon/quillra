@@ -22,17 +22,19 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException]", err.stack ?? err.message);
 });
-import { serve } from "@hono/node-server";
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { createNodeWebSocket } from "@hono/node-ws";
 import { eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { getCookie } from "hono/cookie";
 import { cors } from "hono/cors";
+import { WebSocketServer } from "ws";
 import { user } from "./db/auth-schema.js";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { type Session, type SessionUser, auth } from "./lib/auth.js";
+import { API_BODY_MAX_BYTES } from "./lib/request-limits.js";
 import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "./lib/session-cookies.js";
 import { adminRouter } from "./routes/admin.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
@@ -127,8 +129,10 @@ app.onError((err, c) => {
   );
 });
 
-const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
-wss.options.maxPayload = PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES;
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
+});
 const previewGateway = createPreviewGateway(upgradeWebSocket);
 app.use("*", previewGateway.middleware);
 app.get("/api/caddy-check", previewGateway.caddyCheck);
@@ -190,6 +194,14 @@ app.use(
     exposeHeaders: ["Content-Length"],
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  }),
+);
+
+app.use(
+  "/api/*",
+  bodyLimit({
+    maxSize: API_BODY_MAX_BYTES,
+    onError: (c) => c.json({ error: "Request body too large" }, 413),
   }),
 );
 
@@ -469,8 +481,7 @@ try {
 
 const port = Number(process.env.PORT ?? 3000);
 const hostname = resolveListenHost();
-const server = serve({ fetch: app.fetch, port, hostname }, (_info) => {});
-injectWebSocket(server);
+serve({ fetch: app.fetch, port, hostname, websocket: { server: wss } }, (_info) => {});
 
 // Kick off the monthly-report cron + boot-time catch-up. Runs in the
 // same process as the API; when Quillra moves to a multi-worker setup

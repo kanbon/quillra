@@ -40,8 +40,8 @@ export type PreviewGatewayEnv = {
   Variables: { previewAccess: PreviewGatewayAccess | null };
 };
 
-function closeWebSocket(
-  ws: WSContext<UpstreamWebSocket> | undefined,
+function closeWebSocket<RawWebSocket>(
+  ws: WSContext<RawWebSocket> | undefined,
   code: number,
   reason: string,
 ): void {
@@ -50,6 +50,11 @@ function closeWebSocket(
   } catch {
     /* already closed */
   }
+}
+
+function bufferedWebSocketBytes(ws: WSContext<unknown> | undefined): number {
+  const raw = ws?.raw as { bufferedAmount?: unknown } | undefined;
+  return typeof raw?.bufferedAmount === "number" ? raw.bufferedAmount : 0;
 }
 
 function isSendableCloseCode(code: number): boolean {
@@ -97,8 +102,8 @@ function messageByteLength(data: string | ArrayBuffer | Uint8Array): number {
   return typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
 }
 
-export function createPreviewGateway(
-  upgradeWebSocket: UpgradeWebSocket<UpstreamWebSocket>,
+export function createPreviewGateway<RawWebSocket>(
+  upgradeWebSocket: UpgradeWebSocket<RawWebSocket>,
   environment: PreviewEnvironment = process.env,
 ): {
   caddyCheck: MiddlewareHandler<PreviewGatewayEnv>;
@@ -162,7 +167,7 @@ export function createPreviewGateway(
 
   const webSocketUpgrade = upgradeWebSocket((c) => {
     const access = c.get("previewAccess") as PreviewGatewayAccess | null;
-    let downstream: WSContext<UpstreamWebSocket> | undefined;
+    let downstream: WSContext<RawWebSocket> | undefined;
     let upstream: UpstreamWebSocket | undefined;
     let validityTimer: ReturnType<typeof setInterval> | undefined;
     const queued: Array<{ data: string | ArrayBuffer; bytes: number }> = [];
@@ -239,7 +244,7 @@ export function createPreviewGateway(
           const payload = isBinary ? new Uint8Array(data as ArrayBuffer) : data.toString();
           if (
             messageByteLength(payload) > maxMessageBytes ||
-            (downstream.raw?.bufferedAmount ?? 0) > maxBufferedBytes
+            bufferedWebSocketBytes(downstream) > maxBufferedBytes
           ) {
             closeUpstreamWebSocket(upstream, 1_009, "Preview message is too large");
             closeWebSocket(downstream, 1_009, "Preview message is too large");

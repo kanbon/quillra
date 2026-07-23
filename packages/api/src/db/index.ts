@@ -100,6 +100,8 @@ function bootstrapCoreSchema() {
         name TEXT NOT NULL,
         github_repo_full_name TEXT NOT NULL,
         github_installation_id TEXT,
+        github_repository_id TEXT,
+        github_binding_generation INTEGER NOT NULL DEFAULT 1,
         default_branch TEXT NOT NULL DEFAULT 'main',
         preview_dev_command TEXT,
         logo_url TEXT,
@@ -193,6 +195,16 @@ try {
 }
 try {
   ensureColumn("projects", "logo_url", "TEXT");
+} catch {
+  /* table may not exist yet on a fresh init */
+}
+try {
+  ensureColumn("projects", "github_repository_id", "TEXT");
+} catch {
+  /* table may not exist yet on a fresh init */
+}
+try {
+  ensureColumn("projects", "github_binding_generation", "INTEGER NOT NULL DEFAULT 1");
 } catch {
   /* table may not exist yet on a fresh init */
 }
@@ -315,6 +327,36 @@ try {
   sqlite.exec(`CREATE TABLE IF NOT EXISTS instance_settings (
     key TEXT PRIMARY KEY,
     value TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+} catch {
+  /* ignore */
+}
+
+// Per-user GitHub App OAuth connection. OAuth state is one-time and bound to
+// the signed-in Quillra user; credentials are encrypted by the service before
+// they reach these tables.
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS github_oauth_states (
+    state_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    code_verifier TEXT NOT NULL,
+    return_to TEXT NOT NULL DEFAULT '/',
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  )`);
+  sqlite.exec(
+    "CREATE INDEX IF NOT EXISTS github_oauth_states_user_idx ON github_oauth_states(user_id)",
+  );
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS github_user_connections (
+    user_id TEXT PRIMARY KEY REFERENCES user(id) ON DELETE CASCADE,
+    github_user_id TEXT NOT NULL,
+    github_login TEXT NOT NULL,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    access_token_expires_at INTEGER,
+    refresh_token_expires_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   )`);
 } catch {

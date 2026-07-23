@@ -40,6 +40,7 @@ import { clientSessionCanAccessProject } from "../routes/projects/shared.js";
 import { getTeamSessionFromCookie } from "../routes/team-login.js";
 import { runProjectAgent } from "../services/agent.js";
 import { claimMigrationRun } from "../services/migration-run-lock.js";
+import { projectWriterAuthorizationEpoch } from "../services/project-workspace-lifecycle.js";
 import {
   monthLabelFromYmd,
   sendHardCapAlert,
@@ -54,7 +55,7 @@ import {
   markAlertSent,
   shouldBlockRun,
 } from "../services/usage-limits.js";
-import { ensureRepoCloned } from "../services/workspace.js";
+import { ensureRepoCloned, runInProjectLock } from "../services/workspace.js";
 
 type ChatVariables = {
   user: SessionUser | null;
@@ -228,6 +229,10 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         // Re-check the persisted membership for every message, not only when
         // the socket opens. Removing a member must revoke an already-open
         // WebSocket before it can start another agent run.
+        // Capture before the membership read. A concurrent role change or
+        // removal increments this epoch and makes later writer registration
+        // fail even if this request still holds the stale row.
+        const authorizationEpoch = projectWriterAuthorizationEpoch(projectId, wsUser.id);
         const m = await db
           .select()
           .from(projectMembers)
@@ -301,6 +306,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           // written the new Astro package.json.
           const isMigrating = p.migrationTarget === "astro" && m.role === "admin";
           repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+            expectedBindingGeneration: p.githubBindingGeneration,
             skipInstall: isMigrating,
             onInstallFailed: (err: string) => {
               installFailureContext = err;
@@ -522,118 +528,128 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         // `done` event is SWALLOWED here so we can emit exactly one `done`
         // at the very end of this handler (after any auto-retry), carrying
         // aggregated cost + wall-clock duration for the cost checkpoint.
-        const runAgentOnce = async (prompt: string) => {
-          let runText = "";
-          let runToolCount = 0;
-          let runErrored = false;
-          let runEmittedAsk = false;
-          for await (const ev of runProjectAgent({
-            cwd: repoPath,
-            prompt,
-            role,
+        const runAgentOnce = (prompt: string) =>
+          runInProjectLock(
             projectId,
-            previewDevCommandOverride: p.previewDevCommand ?? null,
-            language: userLanguage,
-            agentSessionId,
-            migrationMode,
-            onSessionId: (sid) => {
-              agentSessionId = sid;
-              void db
-                .update(conversations)
-                .set({ agentSessionId: sid })
-                .where(eq(conversations.id, convId!))
-                .catch(() => {});
-            },
-            onResult: (usage) => {
-              // Persist the usage row first, then, once it's in, run
-              // the threshold-crossing check so it sees up-to-date MTD
-              // spend. Both run as fire-and-forget from the agent's
-              // perspective; the chat stream isn't blocked on email.
-              void (async () => {
-                try {
-                  await db.insert(agentRuns).values({
-                    id: nanoid(),
-                    projectId,
-                    conversationId: convId,
-                    userId: wsUser.id,
-                    inputTokens: usage.inputTokens,
-                    outputTokens: usage.outputTokens,
-                    cacheReadTokens: usage.cacheReadTokens,
-                    cacheCreationTokens: usage.cacheCreationTokens,
-                    // Drizzle's sqlite driver wants strings for
-                    // REAL/TEXT, so we store cost as a text-encoded
-                    // number; queries cast with CAST(cost_usd AS REAL)
-                    // when aggregating.
-                    costUsd: String(usage.totalCostUsd),
-                    numTurns: usage.numTurns,
-                    modelUsageJson: JSON.stringify(usage.modelUsage),
-                    createdAt: new Date(),
-                  });
-                } catch (e) {
-                  console.warn("[usage] failed to persist agent_runs row:", e);
-                  return;
+            async () => {
+              let runText = "";
+              let runToolCount = 0;
+              let runErrored = false;
+              let runEmittedAsk = false;
+              // The complete agent lifetime holds the repository lock. Git
+              // publish/sync/reset operations therefore cannot observe or
+              // mutate a half-written working tree.
+              for await (const ev of runProjectAgent({
+                cwd: repoPath,
+                prompt,
+                role,
+                projectId,
+                userId: wsUser.id,
+                authorizationEpoch,
+                previewDevCommandOverride: p.previewDevCommand ?? null,
+                language: userLanguage,
+                agentSessionId,
+                migrationMode,
+                onSessionId: (sid) => {
+                  agentSessionId = sid;
+                  void db
+                    .update(conversations)
+                    .set({ agentSessionId: sid })
+                    .where(eq(conversations.id, convId!))
+                    .catch(() => {});
+                },
+                onResult: (usage) => {
+                  // Persist the usage row first, then, once it's in, run
+                  // the threshold-crossing check so it sees up-to-date MTD
+                  // spend. Both run as fire-and-forget from the agent's
+                  // perspective; the chat stream isn't blocked on email.
+                  void (async () => {
+                    try {
+                      await db.insert(agentRuns).values({
+                        id: nanoid(),
+                        projectId,
+                        conversationId: convId,
+                        userId: wsUser.id,
+                        inputTokens: usage.inputTokens,
+                        outputTokens: usage.outputTokens,
+                        cacheReadTokens: usage.cacheReadTokens,
+                        cacheCreationTokens: usage.cacheCreationTokens,
+                        // Drizzle's sqlite driver wants strings for
+                        // REAL/TEXT, so we store cost as a text-encoded
+                        // number; queries cast with CAST(cost_usd AS REAL)
+                        // when aggregating.
+                        costUsd: String(usage.totalCostUsd),
+                        numTurns: usage.numTurns,
+                        modelUsageJson: JSON.stringify(usage.modelUsage),
+                        createdAt: new Date(),
+                      });
+                    } catch (e) {
+                      console.warn("[usage] failed to persist agent_runs row:", e);
+                      return;
+                    }
+                    try {
+                      await maybeNotifyThresholdCrossing({
+                        userId: wsUser.id,
+                        userEmail: wsUser.email,
+                        userName: wsUser.name,
+                        role,
+                        preRunSpend,
+                      });
+                    } catch (e) {
+                      console.warn("[usage-alerts] notify check failed:", e);
+                    }
+                  })();
+                },
+              })) {
+                // Swallow the mapper's `done`, we aggregate cost here and
+                // emit our own done at the end with totals.
+                if (ev.type === "done") {
+                  if (typeof ev.costUsd === "number") totalCostUsd += ev.costUsd;
+                  continue;
                 }
-                try {
-                  await maybeNotifyThresholdCrossing({
-                    userId: wsUser.id,
-                    userEmail: wsUser.email,
-                    userName: wsUser.name,
-                    role,
-                    preRunSpend,
-                  });
-                } catch (e) {
-                  console.warn("[usage-alerts] notify check failed:", e);
+                // Intercept stream text so we can strip `<ask>` blocks and
+                // replace them with structured `ask` events. Other event
+                // types pass through unchanged.
+                if (ev.type === "stream" && typeof ev.text === "string") {
+                  for (const piece of askFilter(ev.text)) {
+                    if (piece.kind === "text") {
+                      ws.send(JSON.stringify({ type: "stream", text: piece.text }));
+                      runText += piece.text;
+                    } else {
+                      ws.send(
+                        JSON.stringify({
+                          type: "ask",
+                          id: nanoid(),
+                          question: piece.question,
+                          options: piece.options,
+                        }),
+                      );
+                      runEmittedAsk = true;
+                    }
+                  }
+                  continue;
                 }
-              })();
-            },
-          })) {
-            // Swallow the mapper's `done`, we aggregate cost here and
-            // emit our own done at the end with totals.
-            if (ev.type === "done") {
-              if (typeof ev.costUsd === "number") totalCostUsd += ev.costUsd;
-              continue;
-            }
-            // Intercept stream text so we can strip `<ask>` blocks and
-            // replace them with structured `ask` events. Other event
-            // types pass through unchanged.
-            if (ev.type === "stream" && typeof ev.text === "string") {
-              for (const piece of askFilter(ev.text)) {
-                if (piece.kind === "text") {
-                  ws.send(JSON.stringify({ type: "stream", text: piece.text }));
-                  runText += piece.text;
-                } else {
-                  ws.send(
-                    JSON.stringify({
-                      type: "ask",
-                      id: nanoid(),
-                      question: piece.question,
-                      options: piece.options,
-                    }),
-                  );
-                  runEmittedAsk = true;
+                ws.send(JSON.stringify(ev));
+                if (ev.type === "tool" || ev.type === "tool_progress") {
+                  runToolCount++;
+                }
+                if (ev.type === "error") {
+                  runErrored = true;
+                  agentErrored = true;
                 }
               }
-              continue;
-            }
-            ws.send(JSON.stringify(ev));
-            if (ev.type === "tool" || ev.type === "tool_progress") {
-              runToolCount++;
-            }
-            if (ev.type === "error") {
-              runErrored = true;
-              agentErrored = true;
-            }
-          }
-          // Flush any text the filter was holding back (e.g. an
-          // unfinished `<asx` that never closed). Treat it as regular
-          // stream text, better to show garbled text than to lose it.
-          const tail = askFlushTail();
-          if (tail) {
-            ws.send(JSON.stringify({ type: "stream", text: tail }));
-            runText += tail;
-          }
-          return { runText, runToolCount, runErrored, runEmittedAsk };
-        };
+              // Flush any text the filter was holding back (e.g. an
+              // unfinished `<asx` that never closed). Treat it as regular
+              // stream text, better to show garbled text than to lose it.
+              const tail = askFlushTail();
+              if (tail) {
+                ws.send(JSON.stringify({ type: "stream", text: tail }));
+                runText += tail;
+              }
+              return { runText, runToolCount, runErrored, runEmittedAsk };
+            },
+            p,
+          );
 
         // A turn is "suspiciously short" when the agent used tools but
         // ended up producing almost no summary text, the classic

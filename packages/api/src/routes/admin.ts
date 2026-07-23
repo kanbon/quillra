@@ -13,7 +13,12 @@ import { renderInviteEmail } from "../services/email-templates.js";
 import {
   clearGithubAppCredentials,
   listInstallations as listGithubAppInstallations,
+  resetGithubAppInstallationTokens,
 } from "../services/github-app.js";
+import {
+  disconnectAllGithubUsers,
+  disconnectGithubUser,
+} from "../services/github-user-connection.js";
 import {
   getInstanceSetting,
   getOrganizationInfo,
@@ -21,6 +26,7 @@ import {
 } from "../services/instance-settings.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 import { revokePreviewCapability } from "../services/preview-capability.js";
+import { beginProjectWriterAuthorizationChange } from "../services/project-workspace-lifecycle.js";
 import { reconcileMonthlyReports } from "../services/report-scheduler.js";
 import {
   ROLE_NAMES,
@@ -184,11 +190,31 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       .select({ projectId: projectMembers.projectId })
       .from(projectMembers)
       .where(eq(projectMembers.userId, userId));
-    const deleted = await db.delete(user).where(eq(user.id, userId)).returning({ id: user.id });
-    if (deleted.length > 0) {
-      for (const { projectId } of affectedProjects) revokePreviewCapability(projectId);
+    const finishAuthorizationChanges = [
+      ...new Set(affectedProjects.map(({ projectId }) => projectId)),
+    ].map((projectId) => beginProjectWriterAuthorizationChange(projectId, userId));
+    try {
+      try {
+        await disconnectGithubUser(userId);
+      } catch (error) {
+        return c.json(
+          {
+            error:
+              error instanceof Error
+                ? `GitHub authorization could not be revoked: ${error.message}`
+                : "GitHub authorization could not be revoked.",
+          },
+          502,
+        );
+      }
+      const deleted = await db.delete(user).where(eq(user.id, userId)).returning({ id: user.id });
+      if (deleted.length > 0) {
+        for (const { projectId } of affectedProjects) revokePreviewCapability(projectId);
+      }
+      return c.newResponse(null, 204);
+    } finally {
+      for (const finish of finishAuthorizationChanges) finish();
     }
-    return c.newResponse(null, 204);
   })
   .delete("/invites/:inviteId", async (c) => {
     const r = await requireOwner(c);
@@ -249,7 +275,21 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
   .delete("/github-app", async (c) => {
     const r = await requireOwner(c);
     if ("error" in r) return r.error;
-    clearGithubAppCredentials();
+    try {
+      await resetGithubAppInstallationTokens(() =>
+        disconnectAllGithubUsers(clearGithubAppCredentials),
+      );
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof Error
+              ? `GitHub credentials could not be revoked: ${error.message}`
+              : "GitHub credentials could not be revoked.",
+        },
+        502,
+      );
+    }
     return c.json({ ok: true });
   })
   /**

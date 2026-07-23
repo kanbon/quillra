@@ -49,6 +49,10 @@ export type ProjectAgentParams = {
   prompt: string;
   role: ProjectRole;
   projectId: string;
+  /** Authorization epoch captured before the caller read this user's project
+   * membership. Registration fails if that membership changed in between. */
+  userId: string;
+  authorizationEpoch: number;
   /** From projects.preview_dev_command, lets the diagnostics tools
    *  resolve the exact dev command the user configured. */
   previewDevCommandOverride?: string | null;
@@ -71,8 +75,13 @@ export async function* runProjectAgent(
   params: ProjectAgentParams,
 ): AsyncGenerator<Record<string, unknown>> {
   const abortController = new AbortController();
-  const releaseProjectWriter = registerProjectWriter(params.projectId, () =>
-    abortController.abort(),
+  const releaseProjectWriter = registerProjectWriter(
+    params.projectId,
+    () => abortController.abort(),
+    {
+      userId: params.userId,
+      expectedEpoch: params.authorizationEpoch,
+    },
   );
   try {
     yield* runRegisteredProjectAgent(params, abortController);

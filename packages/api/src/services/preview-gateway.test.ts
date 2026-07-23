@@ -5,8 +5,7 @@ import {
   request as httpRequest,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import { serve } from "@hono/node-server";
-import { createNodeWebSocket } from "@hono/node-ws";
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -218,14 +217,20 @@ beforeAll(async () => {
   upstreamPort = portOf(upstreamServer);
 
   const app = new Hono<PreviewGatewayEnv>();
-  const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
-  wss.options.maxPayload = PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES;
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  });
   const gateway = createPreviewGateway(upgradeWebSocket, ENVIRONMENT);
   app.use("*", gateway.middleware);
   app.get("/api/caddy-check", gateway.caddyCheck);
   app.all("*", (c) => c.text("control-plane"));
-  gatewayServer = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }) as Server;
-  injectWebSocket(gatewayServer);
+  gatewayServer = serve({
+    fetch: app.fetch,
+    hostname: "127.0.0.1",
+    port: 0,
+    websocket: { server: wss },
+  }) as Server;
   if (!gatewayServer.listening) {
     await new Promise<void>((resolve, reject) => {
       gatewayServer.once("listening", resolve);
