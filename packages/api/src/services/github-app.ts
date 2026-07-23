@@ -218,6 +218,18 @@ export function getGithubAppBotIdentity(
   return lookup;
 }
 
+export async function requireGithubAppBotIdentity(
+  installationToken: string,
+): Promise<{ name: string; email: string }> {
+  const identity = await getGithubAppBotIdentity(installationToken);
+  if (!identity) {
+    throw new Error(
+      "GitHub could not verify the Quillra App bot identity. Please retry publishing.",
+    );
+  }
+  return identity;
+}
+
 export type GithubContentsPermission = "read" | "write";
 
 function trackInstallationTokenOperation(operation: Promise<string>): Promise<string> {

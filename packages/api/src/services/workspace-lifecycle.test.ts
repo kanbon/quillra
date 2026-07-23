@@ -24,7 +24,10 @@ vi.mock("simple-git", () => ({
 }));
 
 vi.mock("./github-app.js", () => ({
-  getGithubAppBotIdentity: vi.fn(async () => null),
+  requireGithubAppBotIdentity: vi.fn(async () => ({
+    name: "quillra-test[bot]",
+    email: "123+quillra-test[bot]@users.noreply.github.com",
+  })),
 }));
 
 vi.mock("./project-github-token.js", () => ({

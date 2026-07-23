@@ -13,7 +13,7 @@ import {
   sanitizeProjectGitConfig,
 } from "./git-config-sanitizer.js";
 import type { GithubContentsPermission } from "./github-app.js";
-import { getGithubAppBotIdentity } from "./github-app.js";
+import { requireGithubAppBotIdentity } from "./github-app.js";
 import {
   issuePreviewCapability,
   issuePreviewHandoff,
@@ -1129,19 +1129,11 @@ export async function pushToGitHub(
   await scrubGitRemoteCredentials(repoPath, access.fullName);
   const networkGit = simpleGitForNetwork(repoPath, access.token);
 
-  // Committer identity. When GitHub exposes the App's bot account, commits are
-  // *committed by* the App's bot (`<slug>[bot]`, shows on github.com
-  // with the robot icon). The human who drove the change is attached
-  // as the git `author` via `--author=` so attribution stays visible
-  // in `git log` and the GitHub UI ("<name> authored, <slug>[bot]
-  // committed"). If GitHub cannot resolve the bot account, fall back to the
-  // human identity rather than inventing an invalid bot email address.
-  const botIdentity = await getGithubAppBotIdentity(access.token);
-  const botCommitter = Boolean(botIdentity);
-  const committer: GitCommitIdentity = botIdentity ?? {
-    name: author?.name?.trim() || "Quillra",
-    email: author?.email?.trim() || "quillra@users.noreply.github.com",
-  };
+  // Commits are always committed by the App's bot (`<slug>[bot]`, shown on
+  // github.com with the robot icon). The human who drove the change remains the
+  // git author. Fail closed when GitHub cannot verify the bot identity instead
+  // of silently creating a human-committed publish.
+  const committer: GitCommitIdentity = await requireGithubAppBotIdentity(access.token);
   const g = simpleGitForProject(repoPath, committer);
 
   const status = await g.status();
@@ -1166,10 +1158,9 @@ export async function pushToGitHub(
       message = `Update ${list}`;
     }
     const commitArgs: string[] = [];
-    // When the App bot is the committer, attribute authorship to the
-    // human who triggered the publish so `git log` shows who actually
-    // drove the edit.
-    if (botCommitter && author?.name && author?.email) {
+    // Attribute authorship to the human who triggered the publish while the
+    // verified App bot remains the committer.
+    if (author?.name && author?.email) {
       commitArgs.push(`--author=${author.name} <${author.email}>`);
     }
     await g.commit(message, commitArgs);

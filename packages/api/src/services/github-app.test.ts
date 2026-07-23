@@ -20,6 +20,7 @@ import {
   exchangeManifestCode,
   getGithubAppBotIdentity,
   getInstallationToken,
+  requireGithubAppBotIdentity,
   resetGithubAppInstallationTokens,
 } from "./github-app.js";
 
@@ -141,6 +142,18 @@ describe("repository-scoped GitHub installation tokens", () => {
       email: "123+quillra-test[bot]@users.noreply.github.com",
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed instead of publishing with a human committer when the bot is unavailable", async () => {
+    settingStore.set("GITHUB_APP_SLUG", "quillra-test");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({}, { status: 503 })),
+    );
+
+    await expect(requireGithubAppBotIdentity("scoped-token")).rejects.toThrow(
+      "could not verify the Quillra App bot identity",
+    );
   });
 
   it("closes the cache/mint gate synchronously until reset finalization completes", async () => {
