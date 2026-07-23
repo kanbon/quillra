@@ -60,13 +60,60 @@ const HIDE_DEV_TOOLBARS_CSS = `
 </style>
 `;
 
+export const PREVIEW_REWRITE_MAX_BYTES = 5 * 1024 * 1024;
+export const PREVIEW_UPSTREAM_TIMEOUT_MS = 30_000;
+const PREVIEW_REWRITE_MAX_CONCURRENCY = 4;
+let activePreviewRewrites = 0;
+
+class PreviewRewriteLimitError extends Error {}
+
+async function readPreviewTextBounded(response: Response): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > PREVIEW_REWRITE_MAX_BYTES) {
+    throw new PreviewRewriteLimitError("Preview response is too large to rewrite safely.");
+  }
+  if (activePreviewRewrites >= PREVIEW_REWRITE_MAX_CONCURRENCY) {
+    throw new PreviewRewriteLimitError("Preview rewrite capacity is busy.");
+  }
+  activePreviewRewrites += 1;
+  try {
+    if (!response.body) return "";
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > PREVIEW_REWRITE_MAX_BYTES) {
+          void reader.cancel().catch(() => undefined);
+          throw new PreviewRewriteLimitError("Preview response is too large to rewrite safely.");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const merged = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(merged);
+  } finally {
+    activePreviewRewrites -= 1;
+  }
+}
+
 /** Hide framework chrome without suppressing compile/runtime error overlays. */
 export async function injectPreviewToolbarCss(upstream: Response): Promise<Response> {
   const contentType = upstream.headers.get("content-type") ?? "";
   if (upstream.status !== 200 || !contentType.includes("text/html")) return upstream;
   const cloned = upstream.clone();
   try {
-    const html = await cloned.text();
+    const html = await readPreviewTextBounded(cloned);
     const injected = html.includes("</head>")
       ? html.replace("</head>", `${HIDE_DEV_TOOLBARS_CSS}</head>`)
       : `${HIDE_DEV_TOOLBARS_CSS}${html}`;
@@ -79,6 +126,7 @@ export async function injectPreviewToolbarCss(upstream: Response): Promise<Respo
       headers,
     });
   } catch {
+    void cloned.body?.cancel().catch(() => undefined);
     return upstream;
   }
 }
@@ -190,7 +238,7 @@ export async function rewritePreviewResourcePaths(
   const cloned = upstream.clone();
   try {
     const prefix = previewRootPath(port, capability);
-    const body = (await cloned.text())
+    const body = (await readPreviewTextBounded(cloned))
       .replace(/(["'`])\/(?!\/|__preview\/)/g, `$1${prefix}`)
       .replace(/(url\(\s*)\/(?!\/|__preview\/)/gi, `$1${prefix}`)
       .replace(/(\s(?:action|href|poster|src)=)\/(?!\/|__preview\/)/gi, `$1${prefix}`);
@@ -202,8 +250,18 @@ export async function rewritePreviewResourcePaths(
       statusText: upstream.statusText,
       headers,
     });
-  } catch {
-    return upstream;
+  } catch (error) {
+    void cloned.body?.cancel().catch(() => undefined);
+    if (error instanceof PreviewRewriteLimitError) {
+      return new Response("Preview response exceeds the safe proxy limit.", {
+        status: 502,
+        headers: { "content-type": "text/plain; charset=UTF-8" },
+      });
+    }
+    return new Response("Preview response could not be rewritten safely.", {
+      status: 502,
+      headers: { "content-type": "text/plain; charset=UTF-8" },
+    });
   }
 }
 
@@ -244,6 +302,7 @@ function rewritePreviewLocation(
   requestUrl: string,
   port: number,
   capability: string,
+  upstreamOrigin?: string,
 ): string | null {
   const previewRoot = previewRootPath(port, capability);
   const outer = new URL(requestUrl);
@@ -263,6 +322,9 @@ function rewritePreviewLocation(
       ["127.0.0.1", "localhost", "[::1]"].includes(external.hostname) &&
       (!external.port || Number(external.port) === port)
     ) {
+      return `${previewRoot}${external.pathname.replace(/^\//, "")}${external.search}${external.hash}`;
+    }
+    if (upstreamOrigin && external.origin === upstreamOrigin) {
       return `${previewRoot}${external.pathname.replace(/^\//, "")}${external.search}${external.hash}`;
     }
     if (external.origin === outer.origin) {
@@ -286,6 +348,7 @@ export function securePreviewResponseHeaders(
   requestUrl: string,
   port: number,
   capability: string,
+  upstreamOrigin?: string,
 ): Headers {
   const headers = new Headers(input);
   for (const name of UNSAFE_RESPONSE_HEADERS) headers.delete(name);
@@ -296,7 +359,13 @@ export function securePreviewResponseHeaders(
 
   const location = headers.get("location");
   if (location) {
-    const rewritten = rewritePreviewLocation(location, requestUrl, port, capability);
+    const rewritten = rewritePreviewLocation(
+      location,
+      requestUrl,
+      port,
+      capability,
+      upstreamOrigin,
+    );
     if (rewritten) headers.set("location", rewritten);
     else headers.delete("location");
   }
@@ -338,11 +407,18 @@ export function securePreviewResponse(
   requestUrl: string,
   port: number,
   capability: string,
+  upstreamOrigin?: string,
 ): Response {
   return new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
-    headers: securePreviewResponseHeaders(upstream.headers, requestUrl, port, capability),
+    headers: securePreviewResponseHeaders(
+      upstream.headers,
+      requestUrl,
+      port,
+      capability,
+      upstreamOrigin,
+    ),
   });
 }
 
@@ -377,6 +453,7 @@ function rewriteHostPreviewLocation(
   publicUrl: string,
   port: number,
   controlOrigins: string[],
+  upstreamOrigin?: string,
 ): string | null {
   const outer = new URL(publicUrl);
   try {
@@ -396,6 +473,9 @@ function rewriteHostPreviewLocation(
     ) {
       return `${outer.origin}${target.pathname}${target.search}${target.hash}`;
     }
+    if (upstreamOrigin && target.origin === upstreamOrigin) {
+      return `${outer.origin}${target.pathname}${target.search}${target.hash}`;
+    }
     if (controlOrigins.includes(target.origin)) return null;
     return target.toString();
   } catch {
@@ -410,6 +490,7 @@ export function secureHostPreviewResponseHeaders(
   port: number,
   controlOrigins: string[],
   accessCookieName = "__Host-quillra_preview",
+  upstreamOrigin?: string,
 ): Headers {
   const projectCookies = safeProjectSetCookies(input, accessCookieName);
   const headers = new Headers(input);
@@ -420,7 +501,13 @@ export function secureHostPreviewResponseHeaders(
 
   const location = headers.get("location");
   if (location) {
-    const rewritten = rewriteHostPreviewLocation(location, publicUrl, port, controlOrigins);
+    const rewritten = rewriteHostPreviewLocation(
+      location,
+      publicUrl,
+      port,
+      controlOrigins,
+      upstreamOrigin,
+    );
     if (rewritten) headers.set("location", rewritten);
     else headers.delete("location");
   }
@@ -443,6 +530,7 @@ export function secureHostPreviewResponse(
   port: number,
   controlOrigins: string[],
   accessCookieName?: string,
+  upstreamOrigin?: string,
 ): Response {
   return new Response(upstream.body, {
     status: upstream.status,
@@ -453,6 +541,7 @@ export function secureHostPreviewResponse(
       port,
       controlOrigins,
       accessCookieName,
+      upstreamOrigin,
     ),
   });
 }

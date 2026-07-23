@@ -9,11 +9,22 @@ import { db, rawSqlite } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
 import { emailEquals, normalizeEmail } from "../lib/email.js";
 import { getInstanceBrand } from "../services/branding.js";
+import {
+  E2bConfigurationError,
+  configureE2b,
+  getE2bConfigurationStatus,
+  resetE2b,
+} from "../services/e2b-configuration.js";
 import { renderInviteEmail } from "../services/email-templates.js";
 import {
   clearGithubAppCredentials,
   listInstallations as listGithubAppInstallations,
+  resetGithubAppInstallationTokens,
 } from "../services/github-app.js";
+import {
+  disconnectAllGithubUsers,
+  disconnectGithubUser,
+} from "../services/github-user-connection.js";
 import {
   getInstanceSetting,
   getOrganizationInfo,
@@ -21,6 +32,7 @@ import {
 } from "../services/instance-settings.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 import { revokePreviewCapability } from "../services/preview-capability.js";
+import { beginProjectWriterAuthorizationChange } from "../services/project-workspace-lifecycle.js";
 import { reconcileMonthlyReports } from "../services/report-scheduler.js";
 import {
   ROLE_NAMES,
@@ -31,14 +43,46 @@ import {
 } from "../services/role-prompts.js";
 import { getOwnerEmail, listUsageLimitRows, upsertUsageLimit } from "../services/usage-limits.js";
 
-type Variables = { user: SessionUser | null };
+type Variables = {
+  user: SessionUser | null;
+  clientSession?: { projectId: string } | null;
+};
+
+const e2bConfigurationSchema = z
+  .object({
+    apiKey: z
+      .string()
+      .trim()
+      .min(8)
+      .max(512)
+      .regex(/^e2b_[A-Za-z0-9_-]+$/)
+      .optional(),
+    templateId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
+      .nullable()
+      .optional(),
+  })
+  .strict();
 
 async function requireOwner(c: {
-  get: (k: "user") => SessionUser | null;
+  get: {
+    (k: "user"): SessionUser | null;
+    (k: "clientSession"): { projectId: string } | null | undefined;
+  };
   json: (b: unknown, s: number) => Response;
 }) {
   const u = c.get("user");
   if (!u) return { error: c.json({ error: "Unauthorized" }, 401) };
+  // A client login is a project-scoped capability, even when its underlying
+  // user row belongs to the instance owner. Never let that cookie inherit the
+  // user's global role.
+  if (c.get("clientSession")) {
+    return { error: c.json({ error: "Owner access required" }, 403) };
+  }
   const [row] = await db.select().from(user).where(eq(user.id, u.id)).limit(1);
   if (!row || row.instanceRole !== "owner") {
     return { error: c.json({ error: "Owner access required" }, 403) };
@@ -184,11 +228,31 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
       .select({ projectId: projectMembers.projectId })
       .from(projectMembers)
       .where(eq(projectMembers.userId, userId));
-    const deleted = await db.delete(user).where(eq(user.id, userId)).returning({ id: user.id });
-    if (deleted.length > 0) {
-      for (const { projectId } of affectedProjects) revokePreviewCapability(projectId);
+    const finishAuthorizationChanges = [
+      ...new Set(affectedProjects.map(({ projectId }) => projectId)),
+    ].map((projectId) => beginProjectWriterAuthorizationChange(projectId, userId));
+    try {
+      try {
+        await disconnectGithubUser(userId);
+      } catch (error) {
+        return c.json(
+          {
+            error:
+              error instanceof Error
+                ? `GitHub authorization could not be revoked: ${error.message}`
+                : "GitHub authorization could not be revoked.",
+          },
+          502,
+        );
+      }
+      const deleted = await db.delete(user).where(eq(user.id, userId)).returning({ id: user.id });
+      if (deleted.length > 0) {
+        for (const { projectId } of affectedProjects) revokePreviewCapability(projectId);
+      }
+      return c.newResponse(null, 204);
+    } finally {
+      for (const finish of finishAuthorizationChanges) finish();
     }
-    return c.newResponse(null, 204);
   })
   .delete("/invites/:inviteId", async (c) => {
     const r = await requireOwner(c);
@@ -223,6 +287,48 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     }
     return c.json({ ok: false, backend: result.backend, reason: result.reason });
   })
+  .get("/e2b", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    return c.json(getE2bConfigurationStatus());
+  })
+  .put("/e2b", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    const body = await c.req.json().catch(() => null);
+    const parsed = e2bConfigurationSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Enter a valid E2B API key and optional template ID." }, 400);
+    }
+    try {
+      return c.json({ ok: true, e2b: await configureE2b(parsed.data) });
+    } catch (error) {
+      if (error instanceof E2bConfigurationError) {
+        const status = error.code === "missing-api-key" ? 400 : 502;
+        return status === 400
+          ? c.json({ error: error.message }, 400)
+          : c.json({ error: error.message }, 502);
+      }
+      return c.json({ error: "E2B configuration could not be verified." }, 502);
+    }
+  })
+  .delete("/e2b", async (c) => {
+    const r = await requireOwner(c);
+    if ("error" in r) return r.error;
+    try {
+      return c.json({ ok: true, e2b: await resetE2b() });
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof E2bConfigurationError
+              ? error.message
+              : "E2B secure execution could not be reset.",
+        },
+        502,
+      );
+    }
+  })
   /**
    * Owner-only: list the GitHub App's installations. Renders in the
    * Integrations tab as "which GitHub accounts/orgs have granted the App
@@ -249,7 +355,21 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
   .delete("/github-app", async (c) => {
     const r = await requireOwner(c);
     if ("error" in r) return r.error;
-    clearGithubAppCredentials();
+    try {
+      await resetGithubAppInstallationTokens(() =>
+        disconnectAllGithubUsers(clearGithubAppCredentials),
+      );
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof Error
+              ? `GitHub credentials could not be revoked: ${error.message}`
+              : "GitHub credentials could not be revoked.",
+        },
+        502,
+      );
+    }
     return c.json({ ok: true });
   })
   /**

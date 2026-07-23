@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PREVIEW_REWRITE_MAX_BYTES,
   rewritePreviewResourcePaths,
   sanitizeHostPreviewRequestHeaders,
   sanitizePreviewRequestHeaders,
@@ -126,6 +127,15 @@ describe("preview proxy isolation", () => {
       CAPABILITY,
     );
     expect(unsafeRedirect.get("location")).toBeNull();
+
+    const e2bRedirect = securePreviewResponseHeaders(
+      new Headers({ location: "https://4321-sandbox.e2b.app/private?next=1" }),
+      `https://quillra.example${PREVIEW_ROOT}`,
+      4_321,
+      CAPABILITY,
+      "https://4321-sandbox.e2b.app",
+    );
+    expect(e2bRedirect.get("location")).toBe(`${PREVIEW_ROOT}private?next=1`);
   });
 
   it("scopes root-relative HTML and module paths without changing external URLs", async () => {
@@ -148,6 +158,19 @@ describe("preview proxy isolation", () => {
     );
     expect(rewritten.headers.get("content-encoding")).toBeNull();
     expect(rewritten.headers.get("content-length")).toBeNull();
+  });
+
+  it("rejects oversized rewrite bodies without buffering them", async () => {
+    const upstream = new Response("small body", {
+      headers: {
+        "content-length": String(PREVIEW_REWRITE_MAX_BYTES + 1),
+        "content-type": "text/html",
+      },
+    });
+
+    const rewritten = await rewritePreviewResourcePaths(upstream, 4_321, CAPABILITY);
+    expect(rewritten.status).toBe(502);
+    await expect(rewritten.text()).resolves.toContain("safe proxy limit");
   });
 
   it("keeps host-preview paths native and allows framing only from control origins", () => {
@@ -194,6 +217,16 @@ describe("preview proxy isolation", () => {
       ["https://cms.example.com"],
     );
     expect(external.get("location")).toBe("https://accounts.example.org/login");
+
+    const e2b = secureHostPreviewResponseHeaders(
+      new Headers({ location: "https://4321-sandbox.e2b.app/login" }),
+      publicUrl,
+      4_321,
+      ["https://cms.example.com"],
+      "__Host-quillra_preview",
+      "https://4321-sandbox.e2b.app",
+    );
+    expect(e2b.get("location")).toBe("https://p-deadbeef.preview.example.net/login");
 
     const controlPlane = secureHostPreviewResponseHeaders(
       new Headers({ location: "https://cms.example.com/api/session" }),

@@ -25,33 +25,56 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGitForProject(repoPath);
-      const status = await g.status();
-      const dirty = [...status.modified, ...status.created, ...status.not_added, ...status.deleted];
-      let unpushed = 0;
-      try {
-        const branches = await g.branch(["-r"]);
-        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-          const log = await g.log({ from: `origin/${p.defaultBranch}`, to: "HEAD", maxCount: 100 });
-          unpushed = log.total;
-        }
-      } catch {
-        /* no remote yet */
-      }
-      const hasChanges = dirty.length > 0 || unpushed > 0;
-
-      // Generate a plain-English summary using Claude. This is the
-      // expensive call (an API round-trip and tokens), only run it when
-      // the caller explicitly asks via ?summary=1, so the header's
-      // changes-pill polling can hit this endpoint cheaply.
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+        expectedBindingGeneration: p.githubBindingGeneration,
+      });
       const wantSummary = c.req.query("summary") === "1";
+      const snapshot = await runInProjectLock(
+        projectId,
+        async () => {
+          const g = simpleGitForProject(repoPath);
+          const status = await g.status();
+          const dirty = [
+            ...status.modified,
+            ...status.created,
+            ...status.not_added,
+            ...status.deleted,
+          ];
+          let unpushed = 0;
+          try {
+            const branches = await g.branch(["-r"]);
+            if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+              const log = await g.log({
+                from: `origin/${p.defaultBranch}`,
+                to: "HEAD",
+                maxCount: 100,
+              });
+              unpushed = log.total;
+            }
+          } catch {
+            /* no remote yet */
+          }
+          const hasChanges = dirty.length > 0 || unpushed > 0;
+          return {
+            dirty,
+            unpushed,
+            hasChanges,
+            diffOutput:
+              wantSummary && hasChanges
+                ? await g.diff(["--stat", "--no-color"]).catch(() => "")
+                : "",
+          };
+        },
+        p,
+      );
+
+      // Generate a plain-English summary using the captured git snapshot.
+      // The network request intentionally runs outside the repository lock.
       let summary = "";
-      if (wantSummary && hasChanges) {
+      if (wantSummary && snapshot.hasChanges) {
         try {
-          const diffOutput = await g.diff(["--stat", "--no-color"]);
           const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
-          if (apiKey && diffOutput) {
+          if (apiKey && snapshot.diffOutput) {
             const res = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",
               headers: {
@@ -65,7 +88,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
                 messages: [
                   {
                     role: "user",
-                    content: `Summarize these website changes for a non-technical person. Write exactly 1-3 bullet points using markdown "- " syntax (dash space). Each bullet on its own line. Be specific (e.g. "Updated the homepage title"). No headings, no code, no filenames. Example format:\n- Changed the hero text\n- Added a new page\n\nChanged files:\n${dirty.join("\n")}\n\nDiff summary:\n${diffOutput.slice(0, 1000)}`,
+                    content: `Summarize these website changes for a non-technical person. Write exactly 1-3 bullet points using markdown "- " syntax (dash space). Each bullet on its own line. Be specific (e.g. "Updated the homepage title"). No headings, no code, no filenames. Example format:\n- Changed the hero text\n- Added a new page\n\nChanged files:\n${snapshot.dirty.join("\n")}\n\nDiff summary:\n${snapshot.diffOutput.slice(0, 1000)}`,
                   },
                 ],
               }),
@@ -80,7 +103,12 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
         }
       }
 
-      return c.json({ dirty, unpushed, hasChanges, summary });
+      return c.json({
+        dirty: snapshot.dirty,
+        unpushed: snapshot.unpushed,
+        hasChanges: snapshot.hasChanges,
+        summary,
+      });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
     }
@@ -107,9 +135,9 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGitForProject(repoPath);
-      const status = await g.status();
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+        expectedBindingGeneration: p.githubBindingGeneration,
+      });
 
       type FileChange = {
         path: string;
@@ -120,48 +148,6 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
         isBinary: boolean;
       };
 
-      const files: FileChange[] = [];
-      const seen = new Set<string>();
-      const pushFile = async (path: string, fileStatus: FileChange["status"]) => {
-        if (seen.has(path)) return;
-        seen.add(path);
-        let diff = "";
-        let isBinary = false;
-        try {
-          if (fileStatus === "untracked") {
-            diff = await g.raw(["diff", "--no-index", "--", "/dev/null", path]).catch(() => "");
-          } else {
-            diff = await g.diff(["--", path]);
-          }
-        } catch {
-          diff = "";
-        }
-        if (/^Binary files /m.test(diff) || diff.includes("\x00")) {
-          isBinary = true;
-          diff = "";
-        }
-        let additions = 0;
-        let deletions = 0;
-        for (const line of diff.split("\n")) {
-          if (line.startsWith("+") && !line.startsWith("+++")) additions++;
-          else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
-        }
-        // Hard cap on diff size so a monstrous auto-generated file
-        // doesn't make the modal unusable. 200kB is plenty for real
-        // human edits.
-        if (diff.length > 200_000) {
-          diff = `${diff.slice(0, 200_000)}\n… (truncated)`;
-        }
-        files.push({ path, status: fileStatus, additions, deletions, diff, isBinary });
-      };
-
-      for (const f of status.deleted) await pushFile(f, "deleted");
-      for (const f of status.modified) await pushFile(f, "modified");
-      for (const f of status.created) await pushFile(f, "added");
-      for (const r of status.renamed) await pushFile(r.to, "renamed");
-      for (const f of status.not_added) await pushFile(f, "untracked");
-
-      // Unpushed commits (local-only vs origin/<default branch>)
       type CommitEntry = {
         sha: string;
         shortSha: string;
@@ -169,30 +155,83 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
         author: string;
         date: string;
       };
-      const commits: CommitEntry[] = [];
-      try {
-        const branches = await g.branch(["-r"]);
-        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-          const log = await g.log({
-            from: `origin/${p.defaultBranch}`,
-            to: "HEAD",
-            maxCount: 50,
-          });
-          for (const commit of log.all) {
-            commits.push({
-              sha: commit.hash,
-              shortSha: commit.hash.slice(0, 7),
-              message: commit.message,
-              author: commit.author_name,
-              date: commit.date,
-            });
-          }
-        }
-      } catch {
-        /* no remote yet */
-      }
 
-      return c.json({ files, commits });
+      const snapshot = await runInProjectLock(
+        projectId,
+        async () => {
+          const g = simpleGitForProject(repoPath);
+          const status = await g.status();
+          const files: FileChange[] = [];
+          const seen = new Set<string>();
+          const pushFile = async (path: string, fileStatus: FileChange["status"]) => {
+            if (seen.has(path)) return;
+            seen.add(path);
+            let diff = "";
+            let isBinary = false;
+            try {
+              if (fileStatus === "untracked") {
+                diff = await g.raw(["diff", "--no-index", "--", "/dev/null", path]).catch(() => "");
+              } else {
+                diff = await g.diff(["--", path]);
+              }
+            } catch {
+              diff = "";
+            }
+            if (/^Binary files /m.test(diff) || diff.includes("\x00")) {
+              isBinary = true;
+              diff = "";
+            }
+            let additions = 0;
+            let deletions = 0;
+            for (const line of diff.split("\n")) {
+              if (line.startsWith("+") && !line.startsWith("+++")) additions++;
+              else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+            }
+            // Hard cap on diff size so a monstrous auto-generated file
+            // doesn't make the modal unusable. 200kB is plenty for real
+            // human edits.
+            if (diff.length > 200_000) {
+              diff = `${diff.slice(0, 200_000)}\n… (truncated)`;
+            }
+            files.push({ path, status: fileStatus, additions, deletions, diff, isBinary });
+          };
+
+          for (const f of status.deleted) await pushFile(f, "deleted");
+          for (const f of status.modified) await pushFile(f, "modified");
+          for (const f of status.created) await pushFile(f, "added");
+          for (const r of status.renamed) await pushFile(r.to, "renamed");
+          for (const f of status.not_added) await pushFile(f, "untracked");
+
+          // Unpushed commits (local-only vs origin/<default branch>)
+          const commits: CommitEntry[] = [];
+          try {
+            const branches = await g.branch(["-r"]);
+            if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+              const log = await g.log({
+                from: `origin/${p.defaultBranch}`,
+                to: "HEAD",
+                maxCount: 50,
+              });
+              for (const commit of log.all) {
+                commits.push({
+                  sha: commit.hash,
+                  shortSha: commit.hash.slice(0, 7),
+                  message: commit.message,
+                  author: commit.author_name,
+                  date: commit.date,
+                });
+              }
+            }
+          } catch {
+            /* no remote yet */
+          }
+
+          return { files, commits };
+        },
+        p,
+      );
+
+      return c.json(snapshot);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Failed" }, 500);
     }
@@ -222,25 +261,32 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      await runInProjectLock(projectId, async () => {
-        const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-        // Make sure we know the latest state of the remote before resetting
-        // onto it. Failure here is non-fatal, we can still hard-reset to
-        // whatever HEAD's upstream was when we cloned.
-        await g.fetch("origin", p.defaultBranch).catch(() => undefined);
-        const branches = await g.branch(["-r"]);
-        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-          await g.reset(["--hard", `origin/${p.defaultBranch}`]);
-        } else {
-          await g.reset(["--hard", "HEAD"]);
-        }
-        // Remove untracked files the reset didn't touch. `-f` (force) is
-        // required by git by default, `-d` recurses into untracked
-        // directories. We deliberately do NOT pass `-x`, that would
-        // also wipe ignored files, including `.quillra-temp/` contents.
-        await g.clean("fd");
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+        expectedBindingGeneration: p.githubBindingGeneration,
       });
+      await runInProjectLock(
+        projectId,
+        async () => {
+          const networkGit = await authenticatedGitForProject(p.id, repoPath, p.githubRepoFullName);
+          // Make sure we know the latest state of the remote before resetting
+          // onto it. Failure here is non-fatal, we can still hard-reset to
+          // whatever HEAD's upstream was when we cloned.
+          await networkGit.fetch("origin", p.defaultBranch).catch(() => undefined);
+          const g = simpleGitForProject(repoPath);
+          const branches = await g.branch(["-r"]);
+          if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+            await g.reset(["--hard", `origin/${p.defaultBranch}`]);
+          } else {
+            await g.reset(["--hard", "HEAD"]);
+          }
+          // Remove untracked files the reset didn't touch. `-f` (force) is
+          // required by git by default, `-d` recurses into untracked
+          // directories. We deliberately do NOT pass `-x`, that would
+          // also wipe ignored files, including `.quillra-temp/` contents.
+          await g.clean("fd");
+        },
+        p,
+      );
       return c.json({ ok: true });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Discard failed" }, 500);
@@ -283,18 +329,27 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
       // remote branch doesn't exist, that's fine, the agent will
       // start fresh next time anyway.
       try {
-        await runInProjectLock(projectId, async () => {
-          const repoPath = projectRepoPath(projectId);
-          if (fs.existsSync(path.join(repoPath, ".git"))) {
-            const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-            await g.fetch("origin", p.defaultBranch).catch(() => undefined);
-            const branches = await g.branch(["-r"]).catch(() => ({ all: [] as string[] }));
-            if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-              await g.reset(["--hard", `origin/${p.defaultBranch}`]).catch(() => undefined);
+        await runInProjectLock(
+          projectId,
+          async () => {
+            const repoPath = projectRepoPath(projectId);
+            if (fs.existsSync(path.join(repoPath, ".git"))) {
+              const networkGit = await authenticatedGitForProject(
+                p.id,
+                repoPath,
+                p.githubRepoFullName,
+              );
+              await networkGit.fetch("origin", p.defaultBranch).catch(() => undefined);
+              const g = simpleGitForProject(repoPath);
+              const branches = await g.branch(["-r"]).catch(() => ({ all: [] as string[] }));
+              if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+                await g.reset(["--hard", `origin/${p.defaultBranch}`]).catch(() => undefined);
+              }
+              await g.clean("fd").catch(() => undefined);
             }
-            await g.clean("fd").catch(() => undefined);
-          }
-        });
+          },
+          p,
+        );
       } catch {
         /* best-effort; flag is already cleared which is what unblocks the UI */
       }
@@ -319,24 +374,30 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-
-      const diffSnapshot = await runInProjectLock(projectId, async () => {
-        const g = simpleGitForProject(repoPath);
-        const status = await g.status();
-        const dirtyList = [
-          ...status.modified,
-          ...status.created,
-          ...status.not_added,
-          ...status.deleted,
-        ];
-        if (dirtyList.length === 0) return null;
-        return {
-          dirtyList,
-          diffOutput: await g.diff(["--stat", "--no-color"]).catch(() => ""),
-          diffFull: await g.diff(["--no-color"]).catch(() => ""),
-        };
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+        expectedBindingGeneration: p.githubBindingGeneration,
       });
+
+      const diffSnapshot = await runInProjectLock(
+        projectId,
+        async () => {
+          const g = simpleGitForProject(repoPath);
+          const status = await g.status();
+          const dirtyList = [
+            ...status.modified,
+            ...status.created,
+            ...status.not_added,
+            ...status.deleted,
+          ];
+          if (dirtyList.length === 0) return null;
+          return {
+            dirtyList,
+            diffOutput: await g.diff(["--stat", "--no-color"]).catch(() => ""),
+            diffFull: await g.diff(["--no-color"]).catch(() => ""),
+          };
+        },
+        p,
+      );
 
       // Generate a proper commit message from the locked diff snapshot.
       // The external request intentionally runs outside the repository lock;
@@ -393,14 +454,18 @@ Output ONLY the commit message, nothing else.`,
         /* fall back to filename summary inside pushToGitHub */
       }
 
-      const result = await runInProjectLock(projectId, () =>
-        pushToGitHub(
-          repoPath,
-          p.defaultBranch,
-          p.githubRepoFullName,
-          { name: r.user.name ?? null, email: r.user.email ?? null },
-          commitMessage,
-        ),
+      const result = await runInProjectLock(
+        projectId,
+        () =>
+          pushToGitHub(
+            p.id,
+            repoPath,
+            p.defaultBranch,
+            p.githubRepoFullName,
+            { name: r.user.name ?? null, email: r.user.email ?? null },
+            commitMessage,
+          ),
+        p,
       );
       return c.json(result);
     } catch (e) {

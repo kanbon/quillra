@@ -7,11 +7,14 @@ single-origin production layout. The temporary installation is removed when
 Playwright stops the server.
 
 No real Anthropic, GitHub, or email service is used. The setup wizard receives
-dummy GitHub App environment values and stores a placeholder Anthropic key. A
-test-only server access token unlocks setup and no-email owner recovery. The
-test then enables a local in-process SMTP server and verifies delivered codes
-for collaborator and project-scoped client invitations. Browser requests to
-non-local origins are blocked.
+test-only GitHub App environment values and stores a placeholder Anthropic key.
+The API process preloads a strict GitHub fetch fixture, while the application
+still executes its real OAuth state/PKCE callback, encrypted user connection,
+repository access, and branch verification logic. A test-only server access
+token unlocks setup and no-email owner recovery. The test then enables a local
+in-process SMTP server and verifies delivered codes for collaborator and
+project-scoped client invitations. Browser requests to non-local origins are
+blocked.
 
 Run locally after installing Playwright and Chromium. The root script builds
 the production bundles before Playwright launches the isolated API:

@@ -107,6 +107,34 @@ afterEach(() => {
 });
 
 describe("team login owner bootstrap", () => {
+  it("sets and clears secure __Host team cookies in production", async () => {
+    process.env.NODE_ENV = "production";
+    const { teamLoginRouter, rawSqlite } = await loadRuntime();
+    const email = "owner@example.com";
+    const requested = await requestCode(teamLoginRouter, email);
+
+    const verified = await verifyCode(teamLoginRouter, email, requested.body.devCode as string);
+
+    expect(verified.status).toBe(200);
+    expect(verified.headers.get("set-cookie")).toContain("__Host-quillra_team_session=");
+    expect(verified.headers.get("set-cookie")).toContain("Secure");
+    const { token } = rawSqlite.prepare("SELECT token FROM team_sessions").get() as {
+      token: string;
+    };
+
+    const logout = await teamLoginRouter.request("/logout", {
+      method: "POST",
+      headers: { Cookie: `__Host-quillra_team_session=${token}` },
+    });
+
+    expect(logout.status).toBe(200);
+    expect(logout.headers.get("set-cookie")).toContain("__Host-quillra_team_session=");
+    expect(logout.headers.get("set-cookie")).toContain("Secure");
+    expect(rawSqlite.prepare("SELECT count(*) AS count FROM team_sessions").get()).toEqual({
+      count: 0,
+    });
+  });
+
   it("creates the first owner and a team session from an email code", async () => {
     const { teamLoginRouter, rawSqlite } = await loadRuntime();
     const email = "owner@example.com";

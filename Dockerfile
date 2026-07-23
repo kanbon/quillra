@@ -11,18 +11,10 @@ RUN pnpm build \
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
-ENV COREPACK_HOME=/opt/corepack \
-  HOME=/home/node \
-  XDG_CACHE_HOME=/home/node/.cache \
-  COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN mkdir -p "$COREPACK_HOME" "$XDG_CACHE_HOME" /home/node/.local/share/pnpm \
-  && apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu \
+ENV HOME=/home/node
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu \
   && rm -rf /var/lib/apt/lists/* \
-  && corepack enable \
-  && corepack prepare yarn@1.22.22 --activate \
-  && corepack prepare pnpm@10.34.0 \
-  && corepack prepare pnpm@9.15.9 --activate \
-  && chown -R node:node "$COREPACK_HOME" /home/node
+  && chown -R node:node /home/node
 ENV NODE_ENV=production
 COPY --from=builder --chown=node:node /prod/api/package.json /app/packages/api/
 COPY --from=builder --chown=node:node /prod/api/node_modules /app/packages/api/node_modules

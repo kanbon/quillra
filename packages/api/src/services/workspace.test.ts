@@ -1,15 +1,16 @@
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  consumeReservedPreviewHandoff,
   resolvePreviewCapability,
   resolvePreviewCapabilityToken,
+  resolveReservedPreviewSessionToken,
   revokePreviewCapability,
 } from "./preview-capability.js";
-import { unregisterPreviewPort } from "./preview-status.js";
+import { registerPreviewPort, unregisterPreviewPort } from "./preview-status.js";
 import {
   getPackageManager,
   getPreviewUrl,
@@ -61,13 +62,23 @@ describe("getPreviewUrl", () => {
     vi.stubEnv("BETTER_AUTH_URL", "https://cms.example.com");
     vi.stubEnv("BETTER_AUTH_SECRET", "workspace-preview-host-secret");
     vi.stubEnv("PREVIEW_DOMAIN", "preview.example.net");
+    registerPreviewPort(4_321, "project-preview-url");
 
     const url = new URL(getPreviewUrl("project-preview-url", 4_321));
-    const capability = url.searchParams.get("__quillra_preview") ?? "";
+    const handoff = url.searchParams.get("__quillra_preview") ?? "";
 
     expect(url.hostname).toMatch(/^p-[a-f0-9]{40}\.preview\.example\.net$/);
     expect(url.pathname).toBe("/");
-    expect(resolvePreviewCapabilityToken(capability)).toMatchObject({
+    expect(resolvePreviewCapabilityToken(handoff)).toEqual({ ok: false });
+    const exchanged = consumeReservedPreviewHandoff(handoff, url.host);
+    expect(exchanged).toMatchObject({
+      ok: true,
+      projectId: "project-preview-url",
+      port: 4_321,
+    });
+    if (!exchanged.ok) return;
+    expect(exchanged.token).not.toBe(handoff);
+    expect(resolveReservedPreviewSessionToken(exchanged.token, url.host)).toMatchObject({
       ok: true,
       projectId: "project-preview-url",
       port: 4_321,
@@ -94,43 +105,6 @@ describe("reserveAvailablePreviewPort", () => {
 
     expect(new Set(ports).size).toBe(1);
     unregisterPreviewPort("project-concurrent");
-  });
-
-  it("skips a deterministic port already occupied by another process", async () => {
-    const server = net.createServer();
-    const occupiedPort = await new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
-        const address = server.address();
-        if (!address || typeof address === "string") reject(new Error("Expected TCP address"));
-        else resolve(address.port);
-      });
-    });
-
-    // Find a project hash whose base maps to the occupied port while still
-    // satisfying the production range guard.
-    let projectId = "";
-    let base = 0;
-    for (let candidate = 0; candidate < 10_000; candidate++) {
-      const id = `occupied-port-project-${candidate}`;
-      let hash = 0;
-      for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-      const candidateBase = occupiedPort - (hash % 2_000);
-      if (candidateBase > 0 && candidateBase <= 65_535 - 2_000) {
-        projectId = id;
-        base = candidateBase;
-        break;
-      }
-    }
-    expect(projectId).not.toBe("");
-    vi.stubEnv("PREVIEW_PORT_BASE", String(base));
-    const reserved = await reserveAvailablePreviewPort(projectId);
-    expect(reserved).not.toBe(occupiedPort);
-    unregisterPreviewPort(projectId);
-
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
   });
 });
 
@@ -174,10 +148,11 @@ describe("project Git security", () => {
 
   it("does not execute repository-installed Git hooks", async () => {
     const repo = createRepo();
-    const git = simpleGitForProject(repo);
+    const git = simpleGitForProject(repo, {
+      name: "Quillra Test",
+      email: "test@quillra.test",
+    });
     await git.init();
-    await git.addConfig("user.name", "Quillra Test");
-    await git.addConfig("user.email", "test@quillra.test");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "safe");
     await git.add("tracked.txt");
 
@@ -188,5 +163,101 @@ describe("project Git security", () => {
 
     await git.commit("test commit");
     expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("removes executable local config before every project Git command", async () => {
+    const repo = createRepo();
+    const identity = {
+      name: "Quillra Test",
+      email: "test@quillra.test",
+    };
+    const setupGit = simpleGit({
+      baseDir: repo,
+      config: [`user.name=${identity.name}`, `user.email=${identity.email}`],
+    });
+    await setupGit.init();
+
+    fs.writeFileSync(
+      path.join(repo, ".gitattributes"),
+      "tracked.txt filter=quillra-evil diff=quillra-evil merge=quillra-evil\n",
+    );
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+    await setupGit.add([".gitattributes", "tracked.txt"]);
+    await setupGit.commit("base");
+    const initialBranch = (await setupGit.branchLocal()).current;
+    await setupGit.checkoutLocalBranch("feature");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "feature\n");
+    await setupGit.add("tracked.txt");
+    await setupGit.commit("feature");
+    await setupGit.checkout(initialBranch);
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "main\n");
+    await setupGit.add("tracked.txt");
+    await setupGit.commit("main");
+
+    const marker = path.join(repo, "git-config-command-ran");
+    const executable = path.join(repo, "git-config-command");
+    fs.writeFileSync(executable, `#!/bin/sh\n: > "${marker}"\ncat\n`);
+    fs.chmodSync(executable, 0o755);
+
+    const plantExecutableConfig = () => {
+      fs.writeFileSync(
+        path.join(repo, ".git", "config"),
+        [
+          "[core]",
+          "\trepositoryformatversion = 0",
+          "\tfilemode = true",
+          "\tbare = false",
+          "\tlogallrefupdates = true",
+          `\tfsmonitor = ${executable}`,
+          `\tsshCommand = ${executable}`,
+          '[filter "quillra-evil"]',
+          `\tclean = ${executable}`,
+          `\tsmudge = ${executable}`,
+          '[diff "quillra-evil"]',
+          `\tcommand = ${executable}`,
+          '[merge "quillra-evil"]',
+          `\tdriver = ${executable} %O %A %B`,
+          "[diff]",
+          `\texternal = ${executable}`,
+          "[credential]",
+          `\thelper = !${executable}`,
+          "[http]",
+          "\tproxy = http://127.0.0.1:9",
+          "[include]",
+          `\tpath = ${executable}`,
+          "[alias]",
+          `\tstatus = !${executable}`,
+          "",
+        ].join("\n"),
+      );
+    };
+    const expectCommandBlocked = async (command: () => Promise<unknown>) => {
+      plantExecutableConfig();
+      fs.rmSync(marker, { force: true });
+      await command();
+      expect(fs.existsSync(marker)).toBe(false);
+    };
+
+    const git = simpleGitForProject(repo, identity);
+    await expectCommandBlocked(() => git.status());
+    await expectCommandBlocked(() => git.checkout("feature"));
+    await expectCommandBlocked(() => git.checkout(initialBranch));
+
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "main staged\n");
+    await expectCommandBlocked(() => git.add("tracked.txt"));
+    await expectCommandBlocked(() => git.diff(["--cached"]));
+    await git.reset(["--hard", "HEAD"]);
+
+    await expectCommandBlocked(() =>
+      git.raw(["merge", "--no-edit", "feature"]).catch(() => undefined),
+    );
+    await git.raw(["merge", "--abort"]).catch(() => undefined);
+
+    const sanitized = fs.readFileSync(path.join(repo, ".git", "config"), "utf8");
+    expect(sanitized).toContain("[core]");
+    expect(sanitized).not.toContain(executable);
+    expect(sanitized).not.toMatch(
+      /fsmonitor|filter|external|merge\s+"quillra-evil"|credential|proxy|include|alias|sshCommand/i,
+    );
   });
 });

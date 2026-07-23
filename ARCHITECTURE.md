@@ -12,17 +12,22 @@ their project, and the existing hosting pipeline deploys them. There is no
 headless CMS, no content database, and no separate "published" storage: the
 repo is the source of truth.
 
-Three pieces make that work:
+Four pieces make that work:
 
 1. **A React SPA** in the browser where the user chats, sees a live preview,
    and hits publish.
-2. **A Hono backend** that owns the websocket chat loop, the workspace (one
-   clone per project, one dev server per project), and a SQLite database for
+2. **A Hono control plane** that owns the websocket chat loop, one persistent
+   credential-free Git working copy per project, and a SQLite database for
    users, projects, memberships, conversations, and usage.
 3. **The Claude Agent SDK** running in-process inside the backend. When a
    message arrives, the backend runs `query(...)` against the workspace clone
-   with a scoped tool allow-list. Tool calls stream back over the websocket
-   so the user sees file reads, edits, and command output in real time.
+   with a scoped tool allow-list. File operations stay in the hardened control
+   plane; the SDK has no local Bash fallback.
+4. **E2B project sandboxes** where repository-defined shell commands,
+   dependency installers, lifecycle scripts, and preview servers run. A custom
+   MCP tool routes approved commands to the current project's sandbox. Command
+   output is captured remotely with hard byte limits and returned after the
+   command exits; untrusted output never streams into an unbounded SDK buffer.
 
 Everything else is supporting infrastructure: auth, email, billing limits,
 the first-run setup wizard, and the GitHub App that lets us push without
@@ -37,7 +42,9 @@ quillra/
     web/                frontend (React, Vite, TailwindCSS)
   scripts/              one-shot maintenance scripts
   .github/workflows/    CI: checks, signup E2E, and container smoke tests
+  docs/railway.md       Railway deployment and Template publishing checklist
   biome.json            formatter + linter config (shared by both packages)
+  railway.json          Railway service build, healthcheck, and restart policy
   turbo.json            task runner config
   ARCHITECTURE.md       this file
   CONTRIBUTING.md       how to contribute
@@ -72,7 +79,7 @@ routes/
     shared.ts           Variables type and auth helpers
     crud.ts             list, create, read, update, delete
     publish.ts          publish flow, changes diff, discard
-    preview.ts          dev-server control and debug
+    preview.ts          E2B preview control and debug
     chat.ts             conversations and message history
     files.ts            file read, uploads, asset delete, logo
     presence.ts         collaborative-presence heartbeat
@@ -95,10 +102,15 @@ services/
   agent-prompts.ts              system prompts and per-framework hints
   agent-permissions.ts          tool allow-list by project role
   agent-stream-mapper.ts        translates SDK events into WS frames
-  agent-diagnostics-tools.ts    dev-server diagnostics MCP server
+  agent-diagnostics-tools.ts    preview diagnostics MCP server
   agent-humanizer.ts            friendly names for tool events in the UI
   astro-migration-skill.ts      the prompt for the Astro migration agent
-  workspace.ts                  per-project clone, dev server, git ops
+  workspace.ts                  per-project local clone and hardened git ops
+  e2b-adapter.ts                narrow wrapper around the E2B SDK
+  e2b-configuration.ts          verified key/template configuration and rotation
+  e2b-runtime.ts                one sandbox lifecycle per project
+  e2b-workspace-sync.ts         bounded file sync across the execution boundary
+  e2b-verification.ts           temporary live-probe sandbox for setup
   framework.ts + registry       detect and describe the project framework
   github-app.ts + rest          GitHub App auth and REST calls
   crypto.ts                     secret storage with AES-GCM
@@ -109,7 +121,7 @@ services/
   usage-alert-emails.ts         threshold crossing notifications
   report-scheduler.ts           monthly usage report cron
   presence.ts                   in-memory who's-editing-what
-  preview-status.ts             preview-server health polling
+  preview-status.ts             E2B preview-server health polling
   image.ts                      sharp-based WebP pipeline
 ```
 
@@ -121,11 +133,14 @@ through it:
 
 1. Authenticate the connection (team, Better Auth, or client session).
 2. Check the user is a member of this project.
-3. Clone or update the project's repo.
+3. Clone or update the project's credential-free local working copy.
 4. Check if the user is already over their spend cap.
-5. Run the agent with `runProjectAgent(...)`.
-6. Stream events back to the browser.
-7. Persist the assistant's final message, fire threshold alerts if any were
+5. Synchronize project files into that project's E2B sandbox.
+6. Run the agent with `runProjectAgent(...)`. Local file tools remain
+   role-scoped; approved shell tools execute through E2B.
+7. Synchronize allowed file changes back to the control-plane working copy and
+   stream events to the browser.
+8. Persist the assistant's final message, fire threshold alerts if any were
    crossed, clear the migration flag on a clean Astro migration exit, and
    emit a single `done` frame with total cost and duration.
 
@@ -147,21 +162,48 @@ by `user.instanceRole = "owner"`.
 
 ### Workspace model
 
-Every project has exactly one clone on disk under
-`$WORKSPACE_DIR/<projectId>/` (default: `packages/api/data/workspaces/<projectId>/`)
-and, while active, one preview dev server. The preview is a child process
-the backend starts on demand; the user's browser talks to it through a
-capability-authenticated host gateway. Its opaque per-project hostname keeps the
-browser path identical to the loopback dev-server path, which makes SPA history,
-root-relative resources, and HMR WebSockets framework-transparent. The browser
-renders that separate origin inside a restricted iframe. Built-in framework
-commands bind the child process to loopback; only Quillra's validating HTTP/WS
-gateway and TLS terminator are public, never the workspace ports themselves.
+Every project has exactly one credential-free clone on persistent control-plane
+storage under `$WORKSPACE_DIR/<projectId>/` (default:
+`packages/api/data/workspaces/<projectId>/`). This working copy is where
+Quillra's hardened file tools and Git operations run. Repository-defined
+executables never run there.
+
+When a project needs command execution, installation, or preview, Quillra
+creates or reconnects to that project's E2B sandbox and mirrors the permitted
+workspace files into it. `.git`, `node_modules`, Quillra temporary state,
+symbolic links, special entries, unsafe paths, and snapshots over the configured
+limits do not cross the boundary. Command changes are synchronized back through
+the same validation. Project sandboxes are not shared.
+
+The preview server runs inside E2B. The user's browser talks to it only through
+Quillra's capability-authenticated host gateway. Its opaque per-project hostname
+keeps the browser path identical to the sandbox dev-server path, which makes SPA
+history, root-relative resources, and HMR WebSockets framework-transparent.
+An initial 60-second handoff is consumed once and exchanged for a separate
+HttpOnly session bound to the exact host, project, and port. The gateway
+connects to the private E2B host and injects its traffic access token
+server-side. Quillra does not disclose the provider URL, although untrusted
+preview code can reflect its upstream hostname. That hostname is not a
+credential; the traffic token is removed before project code and is never
+exposed to the browser.
+The browser renders the preview origin inside a restricted iframe.
 Installations without wildcard DNS retain a compatibility path proxy with the
-known limitation that a browser router can still observe its mount prefix.
+known limitations that a browser router can still observe its mount prefix and
+that its longer-lived access bearer remains in rewritten preview URLs. Host
+mode is the security-recommended production configuration.
+
+E2B execution is fail-closed. The service does not enable it until a browser
+setup request has created, probed, and removed a temporary sandbox. There is no
+automatic local execution mode if the key, template, sandbox, or provider is
+unavailable. The control plane does not copy Anthropic, GitHub, auth, mail,
+encryption, or E2B secrets into a sandbox environment.
 
 Git operations are serialised per project with an in-process mutex because
-concurrent chat turns used to race on `.git/index.lock`.
+concurrent chat turns used to race on `.git/index.lock`. Before and after every
+Git invocation, Quillra rebuilds repository-local Git configuration from a
+strict inert allowlist. This removes executable configuration left by older
+releases, including fsmonitor hooks, filters, external diff and merge drivers,
+includes, aliases, credential helpers, proxies, and SSH commands.
 
 ## Frontend (`packages/web`)
 
@@ -250,35 +292,60 @@ Three session types flow through the same middleware:
   instance, the first verified address becomes the owner; later addresses must
   already belong to a member or have a pending invite.
 - **Client** sessions from a custom cookie issued by `/api/clients/verify-code`.
-  Scoped to one project; no GitHub account required.
+  Scoped to one project; no GitHub account required. This credential never
+  inherits the underlying user row's instance role, so even an owner who also
+  has a client membership receives only project-client authority from it.
 - **Anonymous** for public endpoints like `/api/instance` and
   `/api/setup/status`.
 
 The middleware populates `c.get("user")` and optionally
 `c.get("clientSession")`. Handlers call `requireUser(c)` or check the
-client session themselves.
+client session themselves. Global admin, setup, GitHub, and team-management
+guards reject client sessions explicitly.
 
 ### Permissions
 
-Every project member has a role (`admin`, `editor`, or `client`).
-The agent's tool allow-list is derived from the role in
-`services/agent-permissions.ts`, so clients can edit content files but can't
-run arbitrary shell commands.
+Every project member has a role (`admin`, `editor`, or `client`). The agent's
+tool allow-list is derived from the role in `services/agent-permissions.ts`.
+Clients can edit content files but cannot request shell commands. Roles that can
+run commands receive an E2B-backed MCP tool, never local Bash.
 
 ### Usage and spend caps
 
 `services/usage-limits.ts` reads from three scopes in order: per-user
 override, per-role default, global default. The websocket handler consults
-`shouldBlockRun(...)` before starting an agent turn. Crossing a warn or hard
+`shouldBlockRun(...)` before starting an agent turn. The owner exemption applies
+only to an owner/team session, never to a project-scoped client cookie.
+Crossing a warn or hard
 threshold fires a dedupe-guarded email once per user per month.
 
 ### GitHub
 
 Quillra uses a GitHub App, never a personal access token. The App is created
-once at install time from the first-run wizard (a manifest flow). Installation
-tokens are minted per operation, rotate every hour, and are scoped to the
-repos the customer picked. `services/github-app.ts` handles app JWTs;
-`services/github-rest.ts` is a thin REST client keyed off those tokens.
+once at install time from the first-run wizard (a manifest flow). Each Quillra
+user authorizes that App separately. The encrypted user token is used only to
+list the intersection of App installations and repositories that the user can
+personally access; read-only repositories are excluded from project creation.
+Because the App requests `contents:write`, the user token is itself
+write-capable and remains a control-plane credential even though Quillra uses
+it only for discovery and access checks.
+
+Projects persist GitHub's immutable repository and installation ids in addition
+to the display name. Clone and fetch mint a read token, while publish mints a
+write token, each restricted to exactly that repository id and cached
+separately. Quillra does not persist those transient tokens in Git remotes or
+forward them to E2B. GitHub operations stay in the control plane with hooks,
+filters, and credential persistence disabled. Repository commands run in the
+project's E2B sandbox without GitHub credentials.
+
+Project membership, not a shared owner credential, controls who can work with a
+repository. Clients do not need a GitHub connection. When their role allows
+publish, Quillra uses an exact-repository installation token and the App bot
+commit identity without exposing the token or the connecting user's other
+repositories.
+`services/github-app.ts` handles App JWTs and installation tokens;
+`services/github-user-connection.ts` handles user authorization and discovery;
+`services/github-rest.ts` performs user-scoped metadata requests.
 
 ### Email
 
@@ -326,7 +393,8 @@ Outlook and Gmail rendering.
 - **A multi-tenant cloud service from this codebase.** The managed SaaS at
   quillra.com runs this same code plus deployment glue we do not publish in
   this repository.
-  Single-tenant self-host is the primary shape.
+  A self-hosted control plane with project-scoped membership and E2B execution
+  isolation is the primary shape.
 ## Tests
 
 Vitest runs unit tests from `packages/api`. Test files live next to the

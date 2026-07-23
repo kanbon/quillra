@@ -82,6 +82,7 @@ async function startFlow(setupRouter: SetupRouter, accessCookie: string) {
   const manifest = JSON.parse(encodedManifest.replaceAll("&apos;", "'")) as {
     name: string;
     redirect_url: string;
+    callback_urls: string[];
   };
   const action = html.match(/<form[^>]+action="([^"]+)"/)?.[1];
   if (!action) throw new Error("Expected GitHub App manifest form action");
@@ -92,6 +93,7 @@ async function startFlow(setupRouter: SetupRouter, accessCookie: string) {
     flowCookie: responseCookie(response),
     appName: manifest.name,
     redirectUrl: manifest.redirect_url,
+    callbackUrls: manifest.callback_urls,
     action,
   };
 }
@@ -159,6 +161,7 @@ describe("GitHub App manifest callback state", () => {
     const flow = await startFlow(setupRouter, accessCookie);
 
     expect(flow.redirectUrl).toBe("http://quillra.test/api/setup/github-app/callback");
+    expect(flow.callbackUrls).toEqual(["http://quillra.test/api/github/connect/callback"]);
     expect(flow.appName).toMatch(/^Quillra @ quillra\.test-[A-Za-z0-9_-]{8}$/);
     expect(flow.action).toBe(`https://github.com/settings/apps/new?state=${flow.state}`);
     expect(flow.flowCookie).toMatch(/^quillra_github_manifest_flow=/);
@@ -178,6 +181,11 @@ describe("GitHub App manifest callback state", () => {
     expect(
       rawSqlite.prepare("SELECT value FROM instance_settings WHERE key = ?").get("GITHUB_APP_ID"),
     ).toMatchObject({ value: "42" });
+    expect(
+      rawSqlite
+        .prepare("SELECT value FROM instance_settings WHERE key = ?")
+        .get("GITHUB_APP_OAUTH_CALLBACK_URL"),
+    ).toEqual({ value: "http://quillra.test/api/github/connect/callback" });
   });
 
   it("rejects a missing query state or flow cookie without calling GitHub", async () => {

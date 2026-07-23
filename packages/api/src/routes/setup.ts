@@ -42,7 +42,8 @@ import {
   verifyServerAccessSession,
   verifyServerAccessToken,
 } from "../lib/server-access.js";
-import { exchangeManifestCode } from "../services/github-app.js";
+import { E2bConfigurationError, configureE2b } from "../services/e2b-configuration.js";
+import { exchangeManifestCode, isGithubAppConfigured } from "../services/github-app.js";
 import {
   SETTABLE_KEYS,
   type SettableKey,
@@ -51,17 +52,44 @@ import {
 } from "../services/instance-settings.js";
 import { resetMailer } from "../services/mailer.js";
 
-type Variables = { user: SessionUser | null };
+type Variables = {
+  user: SessionUser | null;
+  clientSession?: { projectId: string } | null;
+};
 
 const saveSchema = z.object({
   values: z.record(z.string().min(1).max(64), z.string().nullable()),
 });
 
+const e2bConfigurationSchema = z
+  .object({
+    apiKey: z
+      .string()
+      .trim()
+      .min(8)
+      .max(512)
+      .regex(/^e2b_[A-Za-z0-9_-]+$/)
+      .optional(),
+    templateId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
 const unlockSchema = z.object({ token: z.string().trim().min(1).max(512) });
+const GITHUB_MANIFEST_CALLBACK_PATH = "/api/setup/github-app/callback";
 
 type SetupContext = Context<{ Variables: Variables }>;
 
 async function isOwner(c: SetupContext): Promise<boolean> {
+  // Client cookies authorize exactly one project. They must not inherit a
+  // global owner role from the same underlying user row.
+  if (c.get("clientSession")) return false;
   const sessionUser = c.get("user");
   if (!sessionUser) return false;
   const [row] = await db
@@ -79,6 +107,9 @@ function hasServerAccess(c: SetupContext): boolean {
 async function requireSetupAccess(
   c: SetupContext,
 ): Promise<{ allowed: true } | { allowed: false; status: 401 | 403; message: string }> {
+  if (c.get("clientSession")) {
+    return { allowed: false, status: 403, message: "Owner only" };
+  }
   const status = getSetupStatus();
   if (status.needsOwner) {
     if (hasServerAccess(c)) return { allowed: true };
@@ -213,6 +244,35 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     });
     return c.json({ ok: true });
   })
+  .post("/e2b", async (c) => {
+    const access = await requireSetupAccess(c);
+    if (!access.allowed) {
+      return access.status === 401
+        ? c.json({ error: access.message }, 401)
+        : c.json({ error: access.message }, 403);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = e2bConfigurationSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Enter a valid E2B API key and optional template ID." }, 400);
+    }
+    try {
+      const e2b = await configureE2b(parsed.data);
+      return c.json({
+        ok: true,
+        e2b,
+        status: { ...getSetupStatus(), access: "granted" as const },
+      });
+    } catch (error) {
+      if (error instanceof E2bConfigurationError) {
+        const status = error.code === "missing-api-key" ? 400 : 502;
+        return status === 400
+          ? c.json({ error: error.message }, 400)
+          : c.json({ error: error.message }, 502);
+      }
+      return c.json({ error: "E2B configuration could not be verified." }, 502);
+    }
+  })
   .post("/save", async (c) => {
     const access = await requireSetupAccess(c);
     if (!access.allowed) {
@@ -224,6 +284,24 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     const body = await c.req.json().catch(() => null);
     const parsed = saveSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+    // GitHub App credentials have their own manifest/reset lifecycle. Writing
+    // any of them here would bypass token-cache invalidation and user-grant
+    // revocation, and a mixed request could partially replace an App. Reject
+    // the entire request before applying any setting, including future
+    // GITHUB_APP_* keys that have not been added to SETTABLE_KEYS yet.
+    if (Object.keys(parsed.data.values).some((key) => key.startsWith("GITHUB_APP_"))) {
+      return c.json(
+        { error: "GitHub App settings must be managed through the dedicated GitHub App flow." },
+        400,
+      );
+    }
+    if (Object.keys(parsed.data.values).some((key) => key.startsWith("E2B_"))) {
+      return c.json(
+        { error: "E2B settings must be managed through the verified secure-execution flow." },
+        400,
+      );
+    }
 
     // Only allow known keys. Silently ignore anything else, no surprise writes.
     const allowed = new Set<SettableKey>(SETTABLE_KEYS);
@@ -255,6 +333,9 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     if (!access.allowed) {
       return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
     }
+    if (isGithubAppConfigured()) {
+      return c.text("Reset the existing GitHub App before creating a replacement.", 409);
+    }
 
     const origin = originFromRequest(c);
     const instanceName = getSetupStatus().values.INSTANCE_NAME?.value ?? "Quillra";
@@ -276,7 +357,11 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     const manifest: Record<string, unknown> = {
       name: appName,
       url: origin,
-      redirect_url: `${origin}${GITHUB_MANIFEST_FLOW_COOKIE_PATH}`,
+      redirect_url: `${origin}${GITHUB_MANIFEST_CALLBACK_PATH}`,
+      // Dedicated GitHub App user authorization. This lets each Quillra user
+      // discover only installations/repositories they personally can access;
+      // it is separate from the instance-owner login OAuth configuration.
+      callback_urls: [`${origin}/api/github/connect/callback`],
       // After install GitHub redirects here so Quillra learns the
       // installation id and can immediately start using the App.
       setup_url: `${origin}/api/setup/github-app/installed`,
@@ -368,8 +453,14 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
       path: GITHUB_MANIFEST_FLOW_COOKIE_PATH,
       secure: shouldUseSecureCookies(),
     });
+    if (isGithubAppConfigured()) {
+      return c.text("Reset the existing GitHub App before creating a replacement.", 409);
+    }
     try {
-      const data = await exchangeManifestCode(code);
+      const data = await exchangeManifestCode(
+        code,
+        `${originFromRequest(c)}/api/github/connect/callback`,
+      );
       // Bypass the wizard entirely and send them to GitHub's
       // "Install on repositories" page. GitHub will bounce them back
       // to the setup_url in the manifest when they're done.
@@ -395,6 +486,20 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
   .get("/github-app/installed", async (c) => {
     const access = await requireSetupAccess(c);
     if (!access.allowed) {
+      // The same public App is installed by individual Quillra users after
+      // initial setup. Installation itself happens entirely on GitHub; this
+      // callback grants nothing locally, so a signed-in non-owner may safely
+      // return to the dashboard and then discover only their own repositories.
+      if (c.get("user")) {
+        const origin = webOriginFromRequest(c);
+        const installationId = c.req.query("installation_id") ?? "";
+        return c.redirect(
+          `${origin}/?githubInstalled=1${
+            installationId ? `&installation_id=${encodeURIComponent(installationId)}` : ""
+          }`,
+          302,
+        );
+      }
       return access.status === 401 ? c.text(access.message, 401) : c.text(access.message, 403);
     }
     const origin = webOriginFromRequest(c);

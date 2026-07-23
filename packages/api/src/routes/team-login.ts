@@ -341,7 +341,10 @@ export const teamLoginRouter = new Hono()
     if (clientToken) {
       await db.delete(clientSessions).where(eq(clientSessions.token, clientToken));
     }
-    deleteCookie(c, CLIENT_SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, CLIENT_SESSION_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
 
     setCookie(c, TEAM_SESSION_COOKIE, token, {
       path: "/",
@@ -353,7 +356,10 @@ export const teamLoginRouter = new Hono()
     // First-run server proof is intentionally short-lived and single-purpose.
     // Once an authenticated owner/member session exists, do not let the setup
     // cookie silently turn a later no-email login back into an on-screen code.
-    deleteCookie(c, SERVER_ACCESS_COOKIE, { path: "/" });
+    deleteCookie(c, SERVER_ACCESS_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
 
     return c.json({ ok: true });
   })
@@ -369,8 +375,14 @@ export const teamLoginRouter = new Hono()
       await db.delete(clientSessions).where(eq(clientSessions.token, clientToken));
     }
     await invalidateBetterAuthSession(c);
-    deleteCookie(c, TEAM_SESSION_COOKIE, { path: "/" });
-    deleteCookie(c, CLIENT_SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, TEAM_SESSION_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
+    deleteCookie(c, CLIENT_SESSION_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
     return c.json({ ok: true });
   });
 
