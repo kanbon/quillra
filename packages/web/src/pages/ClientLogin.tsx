@@ -14,6 +14,7 @@
 
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
+import { accessibleTextColor, normalizeHexColor } from "@/lib/brand";
 import { cn } from "@/lib/cn";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -135,24 +136,31 @@ export function ClientLoginPage() {
     );
   }
 
-  const accent = branding?.accentColor || DEFAULT_ACCENT;
+  const accent = normalizeHexColor(branding?.accentColor || DEFAULT_ACCENT);
+  const accentText = accessibleTextColor(accent);
 
   return (
     <div
-      className="flex min-h-dvh items-center justify-center bg-gradient-to-b from-neutral-50 to-neutral-100 px-4 py-8"
+      className="flex min-h-dvh items-center justify-center bg-[#f3f0e9] px-4 py-8"
       style={{ ["--brand-accent" as string]: accent } as React.CSSProperties}
     >
       <div className="w-full max-w-md">
-        <div className="overflow-hidden rounded-3xl border border-neutral-200/80 bg-white shadow-xl shadow-neutral-200/50">
+        <div
+          className="overflow-hidden rounded-3xl border border-neutral-200/80 bg-white shadow-[0_28px_70px_-38px_rgba(25,25,24,0.55)]"
+          style={{ borderTop: `4px solid ${accent}` }}
+        >
           <div className="flex flex-col items-center px-8 pb-2 pt-10">
             {branding?.logoUrl ? (
               <img
                 src={branding.logoUrl}
                 alt={branding.name}
-                className="mb-5 h-16 w-16 rounded-2xl object-cover ring-1 ring-neutral-200"
+                className="mb-5 h-16 w-16 rounded-2xl object-contain p-1 ring-1 ring-neutral-200"
               />
             ) : branding ? (
-              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-neutral-900 to-neutral-700 text-xl font-semibold text-white">
+              <div
+                className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl text-xl font-semibold shadow-sm"
+                style={{ backgroundColor: accent, color: accentText }}
+              >
                 {initialsOf(branding.name)}
               </div>
             ) : (
@@ -162,7 +170,9 @@ export function ClientLoginPage() {
               {branding?.name ?? "…"}
             </h1>
             <p className="mt-1 text-center text-sm text-neutral-500">
-              {step === "email" ? t("clientLogin.editSite") : t("clientLogin.enterCode")}
+              {step === "email"
+                ? branding?.tagline || t("clientLogin.editSite")
+                : t("clientLogin.enterCode")}
             </p>
           </div>
 
@@ -190,9 +200,9 @@ export function ClientLoginPage() {
                 <button
                   type="submit"
                   disabled={submitting || !email.trim()}
-                  style={{ backgroundColor: "var(--brand-accent)" }}
+                  style={{ backgroundColor: accent, color: accentText }}
                   className={cn(
-                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold text-white shadow-sm transition-all",
+                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold shadow-sm transition-all",
                     submitting || !email.trim()
                       ? "cursor-not-allowed opacity-50"
                       : "hover:opacity-90 hover:shadow",
@@ -201,7 +211,7 @@ export function ClientLoginPage() {
                   {submitting ? (
                     <>
                       <span
-                        className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                        className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
                         aria-hidden="true"
                       />
                       {t("clientLogin.sending")}
@@ -249,9 +259,9 @@ export function ClientLoginPage() {
                 <button
                   type="submit"
                   disabled={submitting || code.length !== 6}
-                  style={{ backgroundColor: "var(--brand-accent)" }}
+                  style={{ backgroundColor: accent, color: accentText }}
                   className={cn(
-                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold text-white shadow-sm transition-all",
+                    "mt-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl text-[15px] font-semibold shadow-sm transition-all",
                     submitting || code.length !== 6
                       ? "cursor-not-allowed opacity-50"
                       : "hover:opacity-90 hover:shadow",
@@ -260,7 +270,7 @@ export function ClientLoginPage() {
                   {submitting ? (
                     <>
                       <span
-                        className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                        className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
                         aria-hidden="true"
                       />
                       {t("clientLogin.verifying")}

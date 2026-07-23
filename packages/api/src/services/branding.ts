@@ -29,6 +29,7 @@ import { getInstanceSetting } from "./instance-settings.js";
 
 const QUILLRA_DEFAULT_NAME = "Quillra";
 const QUILLRA_DEFAULT_ACCENT = "#C1121F";
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 export type Brand = {
   /** Display name shown in headers, login page, and email subjects. */
@@ -44,12 +45,47 @@ export type Brand = {
   poweredBy: { label: string; href: string } | null;
 };
 
-function instanceBrand(): Pick<Brand, "displayName" | "logoUrl" | "accentColor"> {
+export type ProjectBrandContext = {
+  brand: Brand;
+  instanceBrand: Brand;
+  /** The brand after removing project-level overrides. Used by settings
+   * previews so "Use inherited value" is truthful before saving. */
+  inheritedBrand: Brand;
+};
+
+/**
+ * Most email clients reject data-URI images. Project uploads are stored that
+ * way, so mail points at the public, project-scoped logo response instead.
+ */
+export function projectBrandForEmail(brand: Brand, projectId: string, publicOrigin: string): Brand {
+  if (!brand.logoUrl?.startsWith("data:image/")) return brand;
+  try {
+    const logoUrl = new URL(
+      `/api/clients/branding/${encodeURIComponent(projectId)}/logo`,
+      publicOrigin,
+    );
+    return { ...brand, logoUrl: logoUrl.toString() };
+  } catch {
+    return { ...brand, logoUrl: null };
+  }
+}
+
+export function normalizeBrandAccent(value: string | null | undefined): string {
+  const candidate = value?.trim();
+  return candidate && HEX_COLOR.test(candidate) ? candidate.toUpperCase() : QUILLRA_DEFAULT_ACCENT;
+}
+
+export function getInstanceBrand(referer: string | null = null): Brand {
   const instanceName = getInstanceSetting("INSTANCE_NAME")?.trim() || QUILLRA_DEFAULT_NAME;
   const instanceLogo = getInstanceSetting("INSTANCE_LOGO_URL")?.trim() || null;
-  const instanceAccent =
-    getInstanceSetting("INSTANCE_ACCENT_COLOR")?.trim() || QUILLRA_DEFAULT_ACCENT;
-  return { displayName: instanceName, logoUrl: instanceLogo, accentColor: instanceAccent };
+  const instanceAccent = normalizeBrandAccent(getInstanceSetting("INSTANCE_ACCENT_COLOR"));
+  return {
+    displayName: instanceName,
+    logoUrl: instanceLogo,
+    accentColor: instanceAccent,
+    tagline: null,
+    poweredBy: poweredByLink(referer),
+  };
 }
 
 function poweredByLink(referer: string | null): Brand["poweredBy"] {
@@ -76,10 +112,21 @@ export async function getProjectBrand(
   projectId: string,
   referer: string | null = null,
 ): Promise<Brand> {
+  return (await getProjectBrandContext(projectId, referer)).brand;
+}
+
+export async function getProjectBrandContext(
+  projectId: string,
+  referer: string | null = null,
+): Promise<ProjectBrandContext> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
-  const inst = instanceBrand();
+  const inst = getInstanceBrand(referer);
   if (!project) {
-    return { ...inst, tagline: null, poweredBy: poweredByLink(referer) };
+    return {
+      brand: inst,
+      instanceBrand: inst,
+      inheritedBrand: inst,
+    };
   }
   let group: typeof projectGroups.$inferSelect | undefined;
   if (project.groupId) {
@@ -89,19 +136,31 @@ export async function getProjectBrand(
       .where(eq(projectGroups.id, project.groupId))
       .limit(1);
   }
-  const displayName =
-    project.brandDisplayName?.trim() ||
-    group?.brandDisplayName?.trim() ||
-    project.name ||
-    inst.displayName;
-  const logoUrl = project.logoUrl?.trim() || group?.brandLogoUrl?.trim() || inst.logoUrl || null;
-  const accentColor =
-    project.brandAccentColor?.trim() ||
-    group?.brandAccentColor?.trim() ||
-    inst.accentColor ||
-    QUILLRA_DEFAULT_ACCENT;
-  const tagline = group?.brandTagline?.trim() || null;
-  return { displayName, logoUrl, accentColor, tagline, poweredBy: poweredByLink(referer) };
+  const groupDisplayName = group?.brandDisplayName?.trim() || null;
+  const groupLogoUrl = group?.brandLogoUrl?.trim() || null;
+  const groupAccent = group?.brandAccentColor?.trim() || null;
+  const inheritedBrand: Brand = {
+    displayName: groupDisplayName || project.name || inst.displayName,
+    logoUrl: groupLogoUrl || inst.logoUrl || null,
+    accentColor: normalizeBrandAccent(groupAccent || inst.accentColor),
+    tagline: group?.brandTagline?.trim() || null,
+    poweredBy: inst.poweredBy,
+  };
+  const displayName = project.brandDisplayName?.trim() || inheritedBrand.displayName;
+  const logoUrl = project.logoUrl?.trim() || inheritedBrand.logoUrl;
+  const accentColor = normalizeBrandAccent(project.brandAccentColor || inheritedBrand.accentColor);
+  const brand: Brand = {
+    displayName,
+    logoUrl,
+    accentColor,
+    tagline: inheritedBrand.tagline,
+    poweredBy: inst.poweredBy,
+  };
+  return {
+    brand,
+    instanceBrand: inst,
+    inheritedBrand,
+  };
 }
 
 /**
@@ -119,13 +178,13 @@ export async function getGroupBrand(
     .where(eq(projectGroups.slug, groupSlug))
     .limit(1);
   if (!group) return null;
-  const inst = instanceBrand();
+  const inst = getInstanceBrand(referer);
   const brand: Brand = {
     displayName: group.brandDisplayName?.trim() || group.name || inst.displayName,
     logoUrl: group.brandLogoUrl?.trim() || inst.logoUrl || null,
-    accentColor: group.brandAccentColor?.trim() || inst.accentColor,
+    accentColor: normalizeBrandAccent(group.brandAccentColor || inst.accentColor),
     tagline: group.brandTagline?.trim() || null,
-    poweredBy: poweredByLink(referer),
+    poweredBy: inst.poweredBy,
   };
   return { group, brand };
 }

@@ -12,6 +12,7 @@ import {
   QUILLRA_TEMP_DIR,
   ensureQuillraTempIgnored,
   ensureRepoCloned,
+  runInProjectLock,
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
 
@@ -93,10 +94,6 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
     // screenshot ends up pushed to GitHub" problem, the agent decides
     // per-file whether the attachment is a real asset for the site or
     // just context for the conversation.
-    ensureQuillraTempIgnored(repoPath);
-    const tempDir = path.join(repoPath, QUILLRA_TEMP_DIR);
-    fs.mkdirSync(tempDir, { recursive: true });
-
     type UploadItem = {
       path: string;
       originalName: string;
@@ -104,7 +101,12 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
       contentType: string;
       kind: "image" | "content";
     };
-    const items: UploadItem[] = [];
+    type PreparedUpload = {
+      filename: string;
+      contents: Buffer;
+      item: UploadItem;
+    };
+    const preparedUploads: PreparedUpload[] = [];
 
     const CONTENT_EXTS = new Set(["txt", "md", "markdown", "html", "htm", "csv", "json"]);
     const CONTENT_MIME_PREFIXES = ["text/"];
@@ -176,13 +178,16 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
           contentType = "image/webp";
         }
         const filename = `${stem}-${id}.${ext}`;
-        fs.writeFileSync(path.join(tempDir, filename), outBuf);
-        items.push({
-          path: `${QUILLRA_TEMP_DIR}/${filename}`,
-          originalName: file.name,
-          bytes: outBuf.length,
-          contentType,
-          kind: "image",
+        preparedUploads.push({
+          filename,
+          contents: outBuf,
+          item: {
+            path: `${QUILLRA_TEMP_DIR}/${filename}`,
+            originalName: file.name,
+            bytes: outBuf.length,
+            contentType,
+            kind: "image",
+          },
         });
       } else {
         // Content file: keep the original extension, just sanitize the stem
@@ -193,18 +198,39 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
         const MAX_CONTENT_BYTES = 1024 * 1024;
         if (inputBuf.length > MAX_CONTENT_BYTES) continue;
         const filename = `${stem}-${id}.${ext}`;
-        fs.writeFileSync(path.join(tempDir, filename), inputBuf);
-        items.push({
-          path: `${QUILLRA_TEMP_DIR}/${filename}`,
-          originalName: file.name,
-          bytes: inputBuf.length,
-          contentType: file.type || "text/plain",
-          kind: "content",
+        preparedUploads.push({
+          filename,
+          contents: inputBuf,
+          item: {
+            path: `${QUILLRA_TEMP_DIR}/${filename}`,
+            originalName: file.name,
+            bytes: inputBuf.length,
+            contentType: file.type || "text/plain",
+            kind: "content",
+          },
         });
       }
     }
 
-    if (items.length === 0) return c.json({ error: "No supported files in upload" }, 400);
+    if (preparedUploads.length === 0) {
+      return c.json({ error: "No supported files in upload" }, 400);
+    }
+
+    await runInProjectLock(projectId, async () => {
+      // A reset may finish between ensureRepoCloned() and acquiring this
+      // lock. Never recreate a partial repository from a stale request.
+      if (!fs.existsSync(path.join(repoPath, ".git"))) {
+        throw new Error("Project workspace changed during upload. Please retry.");
+      }
+      ensureQuillraTempIgnored(repoPath);
+      const tempDir = path.join(repoPath, QUILLRA_TEMP_DIR);
+      fs.mkdirSync(tempDir, { recursive: true });
+      for (const upload of preparedUploads) {
+        fs.writeFileSync(path.join(tempDir, upload.filename), upload.contents);
+      }
+    });
+
+    const items = preparedUploads.map(({ item }) => item);
     return c.json({ items, framework: fw });
   })
   .post("/:id/asset-delete", async (c) => {
@@ -225,11 +251,13 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
     if (!resolved.startsWith(path.resolve(repoPath) + path.sep)) {
       return c.json({ error: "Invalid path" }, 400);
     }
-    try {
-      fs.unlinkSync(resolved);
-    } catch {
-      /* already gone */
-    }
+    await runInProjectLock(projectId, async () => {
+      try {
+        fs.unlinkSync(resolved);
+      } catch {
+        /* already gone */
+      }
+    });
     return c.json({ ok: true });
   })
   /**
@@ -259,7 +287,10 @@ export const filesRouter = new Hono<{ Variables: Variables }>()
     try {
       outBuf = await sharp(inputBuf)
         .rotate() // honour EXIF
-        .resize(256, 256, { fit: "cover", position: "centre" })
+        .resize(256, 256, {
+          fit: "contain",
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        })
         .png({ compressionLevel: 9 })
         .toBuffer();
     } catch {

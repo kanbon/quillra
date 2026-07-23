@@ -54,7 +54,8 @@ import {
   verifyServerAccessToken,
 } from "../lib/server-access.js";
 import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "../lib/session-cookies.js";
-import { loginCodeEmailHtml } from "../services/email-templates.js";
+import { getInstanceBrand } from "../services/branding.js";
+import { renderLoginCodeEmail } from "../services/email-templates.js";
 import { getOrganizationInfo } from "../services/instance-settings.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
@@ -204,17 +205,17 @@ export const teamLoginRouter = new Hono()
     }
 
     const org = getOrganizationInfo();
-    const html = loginCodeEmailHtml({
-      projectName: org.instanceName,
-      projectLogoUrl: null,
+    const brand = getInstanceBrand(new URL(c.req.url).host || null);
+    const emailBody = renderLoginCodeEmail({
+      brand,
       code,
       expiresInMinutes: CODE_TTL_MINUTES,
     });
     const delivery = await sendEmail({
       to: email,
       subject: `Your ${org.instanceName} sign-in code: ${code}`,
-      html,
-      text: `Your sign-in code for ${org.instanceName} is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+      html: emailBody.html,
+      text: emailBody.text,
     });
     if (!delivery.sent) {
       // Do not leave an undeliverable code live. In particular, the first

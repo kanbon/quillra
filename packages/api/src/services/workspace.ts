@@ -19,6 +19,13 @@ import {
   setPreviewStatus,
   unregisterPreviewPort,
 } from "./preview-status.js";
+import {
+  beginProjectWriterReset,
+  blockProjectWritersForDeletion,
+  cancelAndWaitForProjectWriters,
+  endProjectWriterReset,
+  unblockProjectWritersAfterFailedDeletion,
+} from "./project-workspace-lifecycle.js";
 
 /**
  * Resolve a short-lived GitHub App installation token for a specific
@@ -42,6 +49,24 @@ async function resolveRepoGitToken(githubRepoFullName: string): Promise<string |
 const previewChildren = new Map<string, ChildProcess>();
 const previewStartQueues = new Map<string, Promise<void>>();
 const previewReservationQueues = new Map<string, Promise<void>>();
+const previewTerminationQueues = new Map<string, Promise<void>>();
+const resettingProjects = new Map<string, number>();
+const deletingProjects = new Set<string>();
+const deletedWorkspaceCleanupJobs = new Map<
+  string,
+  {
+    attempt: number;
+    completion: Promise<void>;
+    options: DeletedWorkspaceCleanupOptions;
+    resolve: () => void;
+  }
+>();
+const DELETED_WORKSPACE_RETRY_DELAYS_MS = [250, 1_000, 5_000, 30_000, 60_000] as const;
+
+export type DeletedWorkspaceCleanupOptions = {
+  retryDelaysMs?: readonly number[];
+  writerTimeoutMs?: number;
+};
 
 /**
  * Bounded ring buffer of the last ~200 log lines per running dev server
@@ -80,8 +105,31 @@ export function workspaceRoot(): string {
   return dir;
 }
 
+function projectWorkspacePath(projectId: string): string {
+  const root = path.resolve(workspaceRoot());
+  const projectDir = path.resolve(root, projectId);
+  if (projectDir === root || path.dirname(projectDir) !== root) {
+    throw new Error("Invalid project workspace path");
+  }
+  return projectDir;
+}
+
 export function projectRepoPath(projectId: string): string {
-  return path.join(workspaceRoot(), projectId, "repo");
+  return path.join(projectWorkspacePath(projectId), "repo");
+}
+
+function projectWorkspaceBlocked(projectId: string): boolean {
+  return (resettingProjects.get(projectId) ?? 0) > 0 || deletingProjects.has(projectId);
+}
+
+function assertProjectWorkspaceAvailable(projectId: string): void {
+  if (projectWorkspaceBlocked(projectId)) {
+    throw new Error(
+      deletingProjects.has(projectId)
+        ? "Project is being deleted"
+        : "Project workspace is being reset",
+    );
+  }
 }
 
 /** Folder inside the cloned repo where chat attachments live until the
@@ -166,6 +214,7 @@ async function reserveAvailablePreviewPortNow(
 ): Promise<number> {
   const existing = getPortByProject(projectId);
   if (existing !== undefined && (!verifyExisting || (await isLoopbackPortAvailable(existing)))) {
+    assertProjectWorkspaceAvailable(projectId);
     return existing;
   }
   if (existing !== undefined) unregisterPreviewPort(projectId, existing);
@@ -175,7 +224,13 @@ async function reserveAvailablePreviewPortNow(
   for (let attempt = 0; attempt < PREVIEW_PORT_SLOTS; attempt++) {
     const port = base + ((offset + attempt) % PREVIEW_PORT_SLOTS);
     if (!registerPreviewPort(port, projectId)) continue;
-    if ((await isLoopbackPortAvailable(port)) && getPortByProject(projectId) === port) return port;
+    if ((await isLoopbackPortAvailable(port)) && getPortByProject(projectId) === port) {
+      if (projectWorkspaceBlocked(projectId)) {
+        unregisterPreviewPort(projectId, port);
+        assertProjectWorkspaceAvailable(projectId);
+      }
+      return port;
+    }
     unregisterPreviewPort(projectId, port);
   }
   throw new Error("No preview ports are available");
@@ -186,10 +241,17 @@ export function reserveAvailablePreviewPort(
   projectId: string,
   verifyExisting = false,
 ): Promise<number> {
+  assertProjectWorkspaceAvailable(projectId);
   const previous = previewReservationQueues.get(projectId) ?? Promise.resolve();
   const next = previous.then(
-    () => reserveAvailablePreviewPortNow(projectId, verifyExisting),
-    () => reserveAvailablePreviewPortNow(projectId, verifyExisting),
+    () => {
+      assertProjectWorkspaceAvailable(projectId);
+      return reserveAvailablePreviewPortNow(projectId, verifyExisting);
+    },
+    () => {
+      assertProjectWorkspaceAvailable(projectId);
+      return reserveAvailablePreviewPortNow(projectId, verifyExisting);
+    },
   );
   const drained = next.then(
     () => undefined,
@@ -350,12 +412,167 @@ export function getPreviewProcessInfo(projectId: string): {
   };
 }
 
-/** Remove cloned workspace so the next ensureRepoCloned does a fresh clone (repo or branch change). */
-export function clearProjectRepoClone(projectId: string): void {
+async function removeManagedProjectPath(target: string): Promise<void> {
+  await fs.promises.rm(target, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
+}
+
+/**
+ * Mark a project as permanently unavailable before its database row is
+ * removed. Every queued clone, Git operation, and preview start re-checks this
+ * marker when it gets to the front of its queue.
+ */
+export function beginProjectDeletion(projectId: string): void {
+  deletingProjects.add(projectId);
+  blockProjectWritersForDeletion(projectId);
+  clearPreviewLogs(projectId);
   stopPreview(projectId);
-  const dir = projectRepoPath(projectId);
-  if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+/** Undo the in-memory deletion marker when the database delete itself fails. */
+export function cancelProjectDeletion(projectId: string): void {
+  deletingProjects.delete(projectId);
+  unblockProjectWritersAfterFailedDeletion(projectId);
+}
+
+/**
+ * Remove the whole managed project directory after its database row has been
+ * deleted. The deletion marker intentionally remains for the lifetime of this
+ * process so an already-authorized in-flight request cannot recreate the
+ * workspace after cleanup.
+ */
+export async function removeDeletedProjectWorkspace(
+  projectId: string,
+  writerTimeoutMs?: number,
+): Promise<void> {
+  deletingProjects.add(projectId);
+  blockProjectWritersForDeletion(projectId);
+  const writersStopped = await cancelAndWaitForProjectWriters(projectId, writerTimeoutMs);
+  if (!writersStopped) {
+    console.warn(
+      `[workspace] project writers did not stop before cleanup timeout for ${projectId}; cleanup will be retried`,
+    );
+  }
+  await stopPreviewAndWait(projectId);
+  await (previewStartQueues.get(projectId) ?? Promise.resolve());
+  await stopPreviewAndWait(projectId);
+  await withRepoLock(projectId, async () => {
+    await removeManagedProjectPath(projectWorkspacePath(projectId));
+  });
+  if (!writersStopped) {
+    // The timed-out writer may still recreate files after this attempt. Force
+    // the scheduler to make another pass until the writer lease is released.
+    throw new Error(`Project writers are still active for deleted project ${projectId}`);
+  }
+}
+
+function deletedWorkspaceRetryDelay(
+  attempt: number,
+  configuredDelays: readonly number[] = DELETED_WORKSPACE_RETRY_DELAYS_MS,
+): number {
+  const delays = configuredDelays.length > 0 ? configuredDelays : DELETED_WORKSPACE_RETRY_DELAYS_MS;
+  return (
+    delays[Math.min(attempt, delays.length - 1)] ??
+    DELETED_WORKSPACE_RETRY_DELAYS_MS[DELETED_WORKSPACE_RETRY_DELAYS_MS.length - 1]
+  );
+}
+
+/**
+ * Keep retrying a deleted project's physical cleanup without holding the HTTP
+ * response open. Each attempt has a bounded writer-cancellation wait, and the
+ * unref'd retry timer does not prevent a clean process shutdown.
+ */
+export function scheduleDeletedProjectWorkspaceCleanup(
+  projectId: string,
+  options: DeletedWorkspaceCleanupOptions = {},
+): Promise<void> {
+  const existing = deletedWorkspaceCleanupJobs.get(projectId);
+  if (existing) return existing.completion;
+
+  let resolveCompletion: (() => void) | undefined;
+  const completion = new Promise<void>((resolve) => {
+    resolveCompletion = resolve;
+  });
+  const job = {
+    attempt: 0,
+    completion,
+    options,
+    resolve: () => resolveCompletion?.(),
+  };
+  deletedWorkspaceCleanupJobs.set(projectId, job);
+
+  const runAttempt = async (): Promise<void> => {
+    try {
+      await removeDeletedProjectWorkspace(projectId, job.options.writerTimeoutMs);
+      if (deletedWorkspaceCleanupJobs.get(projectId) === job) {
+        deletedWorkspaceCleanupJobs.delete(projectId);
+      }
+      job.resolve();
+    } catch (error) {
+      const delayMs = deletedWorkspaceRetryDelay(job.attempt, job.options.retryDelaysMs);
+      job.attempt += 1;
+      console.warn(
+        `[workspace] cleanup attempt ${job.attempt} failed for deleted project ${projectId}; retrying in ${delayMs}ms:`,
+        error,
+      );
+      const timer = setTimeout(() => {
+        void runAttempt();
+      }, delayMs);
+      timer.unref();
+    }
+  };
+
+  void runAttempt();
+  return completion;
+}
+
+/**
+ * Find workspace directories that no longer have a project row. Running this
+ * at boot recovers cleanup work lost to a process/container restart.
+ */
+export function sweepOrphanedProjectWorkspaces(
+  activeProjectIds: Iterable<string>,
+): Promise<void>[] {
+  const active = new Set(activeProjectIds);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(workspaceRoot(), { withFileTypes: true });
+  } catch (error) {
+    console.warn("[workspace] failed to scan for orphaned project workspaces:", error);
+    return [];
+  }
+
+  return entries
+    .filter((entry) => !active.has(entry.name))
+    .map((entry) => scheduleDeletedProjectWorkspaceCleanup(entry.name));
+}
+
+/** Remove cloned workspace so the next ensureRepoCloned does a fresh clone (repo or branch change). */
+export async function clearProjectRepoClone(
+  projectId: string,
+  writerTimeoutMs?: number,
+): Promise<void> {
+  resettingProjects.set(projectId, (resettingProjects.get(projectId) ?? 0) + 1);
+  beginProjectWriterReset(projectId);
+  try {
+    if (!(await cancelAndWaitForProjectWriters(projectId, writerTimeoutMs))) {
+      throw new Error(`Project writers are still active for ${projectId}`);
+    }
+    await stopPreviewAndWait(projectId);
+    await (previewStartQueues.get(projectId) ?? Promise.resolve());
+    await stopPreviewAndWait(projectId);
+    await withRepoLock(projectId, async () => {
+      await removeManagedProjectPath(projectRepoPath(projectId));
+    });
+  } finally {
+    const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
+    if (remaining > 0) resettingProjects.set(projectId, remaining);
+    else resettingProjects.delete(projectId);
+    endProjectWriterReset(projectId);
   }
 }
 
@@ -365,15 +582,29 @@ export function clearProjectRepoClone(projectId: string): void {
  * and skipped devDependencies) and you want to heal without losing local
  * edits or re-downloading the whole repo.
  */
-export async function reinstallProjectDependencies(projectId: string): Promise<void> {
-  stopPreview(projectId);
-  const dir = projectRepoPath(projectId);
-  if (!fs.existsSync(dir)) throw new Error("Workspace not cloned");
-  const nm = path.join(dir, "node_modules");
-  if (fs.existsSync(nm)) {
-    fs.rmSync(nm, { recursive: true, force: true });
+export async function reinstallProjectDependencies(
+  projectId: string,
+  writerTimeoutMs?: number,
+): Promise<void> {
+  resettingProjects.set(projectId, (resettingProjects.get(projectId) ?? 0) + 1);
+  beginProjectWriterReset(projectId);
+  try {
+    if (!(await cancelAndWaitForProjectWriters(projectId, writerTimeoutMs))) {
+      throw new Error(`Project writers are still active for ${projectId}`);
+    }
+    await stopPreviewAndWait(projectId);
+    await withRepoLock(projectId, async () => {
+      const dir = projectRepoPath(projectId);
+      if (!fs.existsSync(dir)) throw new Error("Workspace not cloned");
+      await removeManagedProjectPath(path.join(dir, "node_modules"));
+      await installDependenciesIfNeeded(dir, projectId);
+    });
+  } finally {
+    const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
+    if (remaining > 0) resettingProjects.set(projectId, remaining);
+    else resettingProjects.delete(projectId);
+    endProjectWriterReset(projectId);
   }
-  await installDependenciesIfNeeded(dir, projectId);
 }
 
 /**
@@ -418,7 +649,11 @@ const repoOpQueue = new Map<string, Promise<unknown>>();
  * a remote-sync fetch collides with an in-flight chat.
  */
 export function runInProjectLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
-  return withRepoLock(projectId, op);
+  assertProjectWorkspaceAvailable(projectId);
+  return withRepoLock(projectId, async () => {
+    assertProjectWorkspaceAvailable(projectId);
+    return op();
+  });
 }
 
 function withRepoLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
@@ -513,6 +748,7 @@ export async function ensureRepoCloned(
     onInstallFailed?: (error: string) => void;
   } = {},
 ): Promise<string> {
+  assertProjectWorkspaceAvailable(projectId);
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
   const token = await resolveRepoGitToken(githubRepoFullName);
@@ -540,7 +776,17 @@ export async function ensureRepoCloned(
   // the same project would otherwise race on `.git/index.lock` and
   // one of them would die with a cryptic `File exists` message.
   await withRepoLock(projectId, async () => {
+    assertProjectWorkspaceAvailable(projectId);
     if (!fs.existsSync(gitDir)) {
+      // A killed clone or an interrupted workspace reset can leave regular
+      // files behind after `.git/` is already gone. Git refuses to clone into
+      // that non-empty destination, so discard only this managed repo clone
+      // before retrying. The per-project lock keeps a concurrent clone from
+      // being mistaken for stale state.
+      if (fs.existsSync(dir)) {
+        console.warn(`[workspace] removing incomplete clone for ${projectId}`);
+        await removeManagedProjectPath(dir);
+      }
       setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
       fs.mkdirSync(path.dirname(dir), { recursive: true });
       await simpleGitForClone(token).clone(url, dir, [
@@ -567,14 +813,87 @@ export async function ensureRepoCloned(
   return dir;
 }
 
-export function stopPreview(projectId: string): void {
-  revokePreviewCapability(projectId);
-  const child = previewChildren.get(projectId);
-  if (child) {
-    previewChildren.delete(projectId);
-    child.kill("SIGTERM");
+function previewChildExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForPreviewChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (previewChildExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      child.off("error", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(previewChildExited(child)), timeoutMs);
+    child.once("exit", onExit);
+    child.once("error", onExit);
+  });
+}
+
+function signalPreviewProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      // Preview commands run in their own process group. Signalling the group
+      // also stops shell/npm wrappers and compiler helpers such as esbuild.
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      const code = error instanceof Error && "code" in error ? error.code : null;
+      if (code === "ESRCH") return;
+    }
   }
+  try {
+    child.kill(signal);
+  } catch {
+    // The process may have exited between the state check and the signal.
+  }
+}
+
+async function stopPreviewAndWait(projectId: string): Promise<void> {
+  revokePreviewCapability(projectId);
   unregisterPreviewPort(projectId);
+
+  const existingTermination = previewTerminationQueues.get(projectId);
+  if (existingTermination) {
+    await existingTermination;
+    return;
+  }
+
+  const child = previewChildren.get(projectId);
+  if (!child) return;
+  previewChildren.delete(projectId);
+
+  const termination = (async () => {
+    if (previewChildExited(child)) return;
+    signalPreviewProcess(child, "SIGTERM");
+    if (await waitForPreviewChildExit(child, 1_500)) return;
+
+    console.warn(`[workspace] preview ${projectId} did not exit after SIGTERM; sending SIGKILL`);
+    signalPreviewProcess(child, "SIGKILL");
+    if (!(await waitForPreviewChildExit(child, 1_000))) {
+      console.warn(`[workspace] preview ${projectId} still appears to be running after SIGKILL`);
+    }
+  })();
+  previewTerminationQueues.set(projectId, termination);
+  try {
+    await termination;
+  } finally {
+    if (previewTerminationQueues.get(projectId) === termination) {
+      previewTerminationQueues.delete(projectId);
+    }
+  }
+}
+
+export function stopPreview(projectId: string): void {
+  void stopPreviewAndWait(projectId).catch((error) => {
+    console.warn(`[workspace] failed to stop preview ${projectId}:`, error);
+  });
 }
 
 async function startDevPreviewNow(
@@ -582,16 +901,14 @@ async function startDevPreviewNow(
   repoPath: string,
   previewCommandOverride: string | null | undefined,
 ): Promise<{ port: number; label: string }> {
+  assertProjectWorkspaceAvailable(projectId);
   const previous = previewChildren.get(projectId);
   if (previous) {
-    const exited = new Promise<void>((resolve) => {
-      if (previous.exitCode !== null) resolve();
-      else previous.once("exit", () => resolve());
-    });
-    stopPreview(projectId);
-    await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 1_500))]);
+    await stopPreviewAndWait(projectId);
   }
+  assertProjectWorkspaceAvailable(projectId);
   const port = await reserveAvailablePreviewPort(projectId, true);
+  assertProjectWorkspaceAvailable(projectId);
   setPreviewStatus(projectId, "starting", "Launching dev server");
   const { command, args, label } = resolveDevCommand(repoPath, port, previewCommandOverride);
   let child: ChildProcess;
@@ -606,6 +923,7 @@ async function startDevPreviewNow(
         FORCE_COLOR: "0",
       }),
       shell: false,
+      detached: process.platform !== "win32",
     });
   } catch (error) {
     revokePreviewCapability(projectId);
@@ -672,8 +990,12 @@ export function startDevPreview(
   repoPath: string,
   previewCommandOverride: string | null | undefined,
 ): Promise<{ port: number; label: string }> {
+  assertProjectWorkspaceAvailable(projectId);
   const previous = previewStartQueues.get(projectId) ?? Promise.resolve();
-  const next = previous.then(() => startDevPreviewNow(projectId, repoPath, previewCommandOverride));
+  const next = previous.then(() => {
+    assertProjectWorkspaceAvailable(projectId);
+    return startDevPreviewNow(projectId, repoPath, previewCommandOverride);
+  });
   const drained = next.then(
     () => undefined,
     () => undefined,

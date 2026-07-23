@@ -47,6 +47,8 @@ type Props = {
   canPublish?: boolean;
   publishing?: boolean;
   onPublish?: () => void;
+  /** Settings render without cloning a repository just to identify its framework. */
+  detectFramework?: boolean;
 };
 
 const tabClass = ({ isActive }: { isActive: boolean }) =>
@@ -63,6 +65,7 @@ export function ProjectHeader({
   canPublish,
   publishing,
   onPublish,
+  detectFramework = true,
 }: Props) {
   const { t } = useT();
   const me = useCurrentUser();
@@ -87,7 +90,7 @@ export function ProjectHeader({
     // implementation detail clients do not need, detecting it may clone the
     // repository on first access. A client opening their site must never
     // trigger that workspace side effect.
-    enabled: Boolean(projectId) && isTeam,
+    enabled: Boolean(projectId) && isTeam && detectFramework,
     staleTime: 5 * 60 * 1000,
   });
 

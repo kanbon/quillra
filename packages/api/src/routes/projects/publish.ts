@@ -10,6 +10,7 @@ import {
   ensureRepoCloned,
   projectRepoPath,
   pushToGitHub,
+  runInProjectLock,
   simpleGitForProject,
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
@@ -222,22 +223,24 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-      // Make sure we know the latest state of the remote before resetting
-      // onto it. Failure here is non-fatal, we can still hard-reset to
-      // whatever HEAD's upstream was when we cloned.
-      await g.fetch("origin", p.defaultBranch).catch(() => undefined);
-      const branches = await g.branch(["-r"]);
-      if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-        await g.reset(["--hard", `origin/${p.defaultBranch}`]);
-      } else {
-        await g.reset(["--hard", "HEAD"]);
-      }
-      // Remove untracked files the reset didn't touch. `-f` (force) is
-      // required by git by default, `-d` recurses into untracked
-      // directories. We deliberately do NOT pass `-x`, that would
-      // also wipe ignored files, including `.quillra-temp/` contents.
-      await g.clean("fd");
+      await runInProjectLock(projectId, async () => {
+        const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
+        // Make sure we know the latest state of the remote before resetting
+        // onto it. Failure here is non-fatal, we can still hard-reset to
+        // whatever HEAD's upstream was when we cloned.
+        await g.fetch("origin", p.defaultBranch).catch(() => undefined);
+        const branches = await g.branch(["-r"]);
+        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+          await g.reset(["--hard", `origin/${p.defaultBranch}`]);
+        } else {
+          await g.reset(["--hard", "HEAD"]);
+        }
+        // Remove untracked files the reset didn't touch. `-f` (force) is
+        // required by git by default, `-d` recurses into untracked
+        // directories. We deliberately do NOT pass `-x`, that would
+        // also wipe ignored files, including `.quillra-temp/` contents.
+        await g.clean("fd");
+      });
       return c.json({ ok: true });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Discard failed" }, 500);
@@ -280,16 +283,18 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
       // remote branch doesn't exist, that's fine, the agent will
       // start fresh next time anyway.
       try {
-        const repoPath = projectRepoPath(projectId);
-        if (fs.existsSync(path.join(repoPath, ".git"))) {
-          const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
-          await g.fetch("origin", p.defaultBranch).catch(() => undefined);
-          const branches = await g.branch(["-r"]).catch(() => ({ all: [] as string[] }));
-          if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-            await g.reset(["--hard", `origin/${p.defaultBranch}`]).catch(() => undefined);
+        await runInProjectLock(projectId, async () => {
+          const repoPath = projectRepoPath(projectId);
+          if (fs.existsSync(path.join(repoPath, ".git"))) {
+            const g = await authenticatedGitForProject(repoPath, p.githubRepoFullName);
+            await g.fetch("origin", p.defaultBranch).catch(() => undefined);
+            const branches = await g.branch(["-r"]).catch(() => ({ all: [] as string[] }));
+            if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+              await g.reset(["--hard", `origin/${p.defaultBranch}`]).catch(() => undefined);
+            }
+            await g.clean("fd").catch(() => undefined);
           }
-          await g.clean("fd").catch(() => undefined);
-        }
+        });
       } catch {
         /* best-effort; flag is already cleared which is what unblocks the UI */
       }
@@ -316,11 +321,7 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
 
-      // Generate a proper commit message from the diff via Claude Haiku.
-      // Falls back to a filename summary inside pushToGitHub if this
-      // errors out or the Anthropic key isn't set.
-      let commitMessage: string | null = null;
-      try {
+      const diffSnapshot = await runInProjectLock(projectId, async () => {
         const g = simpleGitForProject(repoPath);
         const status = await g.status();
         const dirtyList = [
@@ -329,25 +330,36 @@ export const publishRouter = new Hono<{ Variables: Variables }>()
           ...status.not_added,
           ...status.deleted,
         ];
-        if (dirtyList.length > 0) {
-          const diffOutput = await g.diff(["--stat", "--no-color"]).catch(() => "");
-          const diffFull = await g.diff(["--no-color"]).catch(() => "");
-          const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
-          if (apiKey && diffOutput) {
-            const res = await fetch("https://api.anthropic.com/v1/messages", {
-              method: "POST",
-              headers: {
-                "x-api-key": apiKey,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "claude-haiku-4-5-20251001",
-                max_tokens: 200,
-                messages: [
-                  {
-                    role: "user",
-                    content: `You are writing a git commit message for website edits made through a CMS.
+        if (dirtyList.length === 0) return null;
+        return {
+          dirtyList,
+          diffOutput: await g.diff(["--stat", "--no-color"]).catch(() => ""),
+          diffFull: await g.diff(["--no-color"]).catch(() => ""),
+        };
+      });
+
+      // Generate a proper commit message from the locked diff snapshot.
+      // The external request intentionally runs outside the repository lock;
+      // the final push reacquires it and will be rejected if deletion/reset
+      // started while Haiku was responding.
+      let commitMessage: string | null = null;
+      try {
+        const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
+        if (apiKey && diffSnapshot?.diffOutput) {
+          const res = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 200,
+              messages: [
+                {
+                  role: "user",
+                  content: `You are writing a git commit message for website edits made through a CMS.
 
 Rules:
 - First line: concise imperative subject in present tense, max 72 chars, no trailing period.
@@ -357,36 +369,38 @@ Rules:
 - Write it as if a human developer is committing their own work.
 
 Changed files:
-${dirtyList.slice(0, 20).join("\n")}
+${diffSnapshot.dirtyList.slice(0, 20).join("\n")}
 
 Diff summary:
-${diffOutput.slice(0, 1500)}
+${diffSnapshot.diffOutput.slice(0, 1500)}
 
 First 3000 chars of the full diff:
-${diffFull.slice(0, 3000)}
+${diffSnapshot.diffFull.slice(0, 3000)}
 
 Output ONLY the commit message, nothing else.`,
-                  },
-                ],
-              }),
-            });
-            if (res.ok) {
-              const body = (await res.json()) as { content?: { text?: string }[] };
-              const text = body.content?.[0]?.text?.trim();
-              if (text) commitMessage = text;
-            }
+                },
+              ],
+            }),
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (res.ok) {
+            const body = (await res.json()) as { content?: { text?: string }[] };
+            const text = body.content?.[0]?.text?.trim();
+            if (text) commitMessage = text;
           }
         }
       } catch {
         /* fall back to filename summary inside pushToGitHub */
       }
 
-      const result = await pushToGitHub(
-        repoPath,
-        p.defaultBranch,
-        p.githubRepoFullName,
-        { name: r.user.name ?? null, email: r.user.email ?? null },
-        commitMessage,
+      const result = await runInProjectLock(projectId, () =>
+        pushToGitHub(
+          repoPath,
+          p.defaultBranch,
+          p.githubRepoFullName,
+          { name: r.user.name ?? null, email: r.user.email ?? null },
+          commitMessage,
+        ),
       );
       return c.json(result);
     } catch (e) {

@@ -5,20 +5,23 @@
  * safe) AND a plain-text fallback generated from the same inputs so no
  * parsing/stripping is needed.
  *
- * The older invite/login emails in `email-templates.ts` predate this
- * helper. Kept in parallel so their minor styling idiosyncrasies aren't
- * disturbed; new emails should use this module.
+ * Invite, login-code, usage, and report emails all pass through this
+ * renderer so identity, accessibility, and operator details cannot drift.
  */
+import { type Brand, getInstanceBrand, normalizeBrandAccent } from "./branding.js";
 import { getOrganizationInfo } from "./instance-settings.js";
 
-const BRAND_COLOR = "#C1121F";
-const BRAND_COLOR_DARK = "#a50e19";
+export type EmailBrand = Pick<Brand, "displayName" | "logoUrl" | "accentColor" | "tagline">;
 
 export type EmailBody = {
+  /** Primary visible heading inside the message card. */
+  heading?: string;
   /** "Hi Alice," */
   greeting?: string;
   /** One paragraph per entry, rendered as <p> in HTML, blank-line-separated in text. */
   paragraphs: string[];
+  /** Large monospace verification code. */
+  code?: string;
   /** Optional data table, displayed as a zebra-striped HTML table and as
    *  a simple column-aligned plain-text grid. */
   table?: {
@@ -40,19 +43,34 @@ export type RenderOptions = {
    *  is ideal. Hidden from the visible body via a zero-size hidden span. */
   preheader: string;
   body: EmailBody;
-  /** Defaults to the instance operator's brand info from settings. */
-  brandName?: string;
-  brandLogoUrl?: string | null;
+  /** Defaults to the instance brand. */
+  brand?: EmailBrand;
 };
 
 export function renderBrandedEmail(opts: RenderOptions): { html: string; text: string } {
-  const org = getOrganizationInfo();
-  const brandName = opts.brandName ?? org.instanceName ?? "Quillra";
-  const brandLogoUrl = opts.brandLogoUrl ?? null;
-  return {
-    html: renderHtml({ ...opts, brandName, brandLogoUrl }),
-    text: renderText(opts),
+  const requestedBrand: EmailBrand = opts.brand ?? getInstanceBrand();
+  const brand = {
+    ...requestedBrand,
+    accentColor: normalizeBrandAccent(requestedBrand.accentColor),
   };
+  return {
+    html: renderHtml(opts, brand),
+    text: renderText(opts, brand),
+  };
+}
+
+export function accessibleTextColor(background: string): "#171717" | "#ffffff" {
+  const hex = normalizeBrandAccent(background).slice(1);
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+  const luminance = channels
+    .map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    })
+    .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const whiteContrast = 1.05 / (luminance + 0.05);
+  const inkContrast = (luminance + 0.05) / 0.059;
+  return whiteContrast >= inkContrast ? "#ffffff" : "#171717";
 }
 
 // ─────────────────────────── HTML ───────────────────────────
@@ -66,15 +84,26 @@ function esc(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function renderHtml(
-  opts: RenderOptions & { brandName: string; brandLogoUrl: string | null },
-): string {
-  const { title, preheader, body, brandName, brandLogoUrl } = opts;
-  const logoBlock = brandLogoUrl
-    ? `<img src="${esc(brandLogoUrl)}" alt="${esc(brandName)}" width="56" height="56" style="display:block;border-radius:14px;object-fit:cover;border:0" />`
-    : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td width="56" height="56" align="center" valign="middle" bgcolor="${BRAND_COLOR}" style="width:56px;height:56px;border-radius:14px;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-weight:600;font-size:22px;line-height:56px">${esc(brandName.charAt(0).toUpperCase())}</td></tr></table>`;
+function renderHtml(opts: RenderOptions, brand: EmailBrand): string {
+  const { title, preheader, body } = opts;
+  const accent = normalizeBrandAccent(brand.accentColor);
+  const accentText = accessibleTextColor(accent);
+  const logoUrl = emailSafeLogoUrl(brand.logoUrl);
+  const logoBlock = logoUrl
+    ? `<img src="${esc(logoUrl)}" alt="" width="52" height="52" style="display:block;width:52px;height:52px;border-radius:13px;object-fit:contain;border:1px solid #ececec;background:#ffffff" />`
+    : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td width="52" height="52" align="center" valign="middle" bgcolor="${accent}" style="width:52px;height:52px;border-radius:13px;color:${accentText};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-weight:700;font-size:20px;line-height:52px">${esc(brand.displayName.charAt(0).toUpperCase() || "Q")}</td></tr></table>`;
+  const tagline = brand.tagline
+    ? `<p style="margin:2px 0 0 0;font-size:12px;color:#737373;line-height:1.4">${esc(brand.tagline)}</p>`
+    : "";
+  const brandLockup = `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+    <td width="52" valign="middle">${logoBlock}</td>
+    <td valign="middle" style="padding-left:14px">
+      <p style="margin:0;font-size:15px;font-weight:700;letter-spacing:-0.01em;color:#171717">${esc(brand.displayName)}</p>
+      ${tagline}
+    </td>
+  </tr></table>`;
 
-  const bodyInner = renderBodyHtml(body);
+  const bodyInner = renderBodyHtml(body, accent, accentText);
   const footer = renderFooterHtml();
 
   // Outlook 2016+ ignores <style> and flex/grid. Every style is inline.
@@ -103,10 +132,10 @@ function renderHtml(
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f5f5f5;padding:36px 16px">
   <tr>
     <td align="center">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="520" style="width:100%;max-width:520px;background:#ffffff;border-radius:18px;border:1px solid #ececec">
-        <tr>
-          <td style="padding:32px 36px 12px 36px">
-            ${logoBlock}
+	      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="520" style="width:100%;max-width:520px;background:#ffffff;border-radius:18px;border:1px solid #ececec;border-top:4px solid ${accent}">
+	        <tr>
+	          <td style="padding:32px 36px 12px 36px">
+	            ${brandLockup}
           </td>
         </tr>
         <tr>
@@ -128,8 +157,13 @@ function renderHtml(
 </html>`;
 }
 
-function renderBodyHtml(body: EmailBody): string {
+function renderBodyHtml(body: EmailBody, accent: string, accentText: string): string {
   const parts: string[] = [];
+  if (body.heading) {
+    parts.push(
+      `<h1 style="margin:0 0 10px 0;font-size:23px;font-weight:700;letter-spacing:-0.02em;color:#171717;line-height:1.25">${esc(body.heading)}</h1>`,
+    );
+  }
   if (body.greeting) {
     parts.push(
       `<p style="margin:0 0 14px 0;font-size:15px;color:#1f1f1f">${esc(body.greeting)}</p>`,
@@ -140,11 +174,16 @@ function renderBodyHtml(body: EmailBody): string {
       `<p style="margin:0 0 14px 0;font-size:15px;color:#1f1f1f;line-height:1.6">${esc(p)}</p>`,
     );
   }
+  if (body.code) {
+    parts.push(
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;margin:18px 0"><tr><td align="center" style="padding:18px 20px;background:#fafafa;border:1px solid #e5e5e5;border-radius:12px;font-family:'SF Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:30px;font-weight:700;letter-spacing:0.18em;color:#171717">${esc(body.code)}</td></tr></table>`,
+    );
+  }
   if (body.table) {
     parts.push(renderTableHtml(body.table));
   }
   if (body.cta) {
-    parts.push(renderCtaHtml(body.cta));
+    parts.push(renderCtaHtml(body.cta, accent, accentText));
   }
   if (body.signature) {
     parts.push(
@@ -187,7 +226,11 @@ function renderTableHtml(table: NonNullable<EmailBody["table"]>): string {
 </table>`;
 }
 
-function renderCtaHtml(cta: { label: string; url: string }): string {
+function renderCtaHtml(
+  cta: { label: string; url: string },
+  accent: string,
+  accentText: string,
+): string {
   // Bulletproof button: MSO conditional VML on top, fallback `<a>` below.
   // Outlook renders the VML; every other client hides it and shows the link.
   const href = esc(cta.url);
@@ -195,15 +238,27 @@ function renderCtaHtml(cta: { label: string; url: string }): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 24px 0">
 <tr><td align="left">
 <!--[if mso]>
-<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${href}" style="height:44px;v-text-anchor:middle;width:220px;" arcsize="14%" strokecolor="${BRAND_COLOR_DARK}" fillcolor="${BRAND_COLOR}">
+<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${href}" style="height:44px;v-text-anchor:middle;width:220px;" arcsize="14%" strokecolor="${accent}" fillcolor="${accent}">
 <w:anchorlock/>
-<center style="color:#ffffff;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;font-weight:600;">${label}</center>
+<center style="color:${accentText};font-family:'Segoe UI',Arial,sans-serif;font-size:14px;font-weight:600;">${label}</center>
 </v:roundrect>
 <![endif]-->
 <!--[if !mso]><!-- -->
-<a href="${href}" style="display:inline-block;padding:13px 26px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#ffffff;background:${BRAND_COLOR};text-decoration:none;border-radius:10px;mso-hide:all">${label}</a>
+<a href="${href}" style="display:inline-block;padding:13px 26px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;color:${accentText};background:${accent};text-decoration:none;border-radius:10px;mso-hide:all">${label}</a>
 <!--<![endif]-->
-</td></tr></table>`;
+</td></tr></table>
+<p style="margin:0 0 18px 0;font-size:11px;line-height:1.5;color:#a3a3a3;word-break:break-all">If the button does not work, paste this link into your browser:<br><a href="${href}" style="color:#737373;text-decoration:underline">${href}</a></p>`;
+}
+
+function emailSafeLogoUrl(value: string | null | undefined): string | null {
+  const candidate = value?.trim();
+  if (!candidate) return null;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function renderFooterHtml(): string {
@@ -238,11 +293,14 @@ function renderFooterHtml(): string {
 
 // ─────────────────────────── Text ───────────────────────────
 
-function renderText(opts: RenderOptions): string {
+function renderText(opts: RenderOptions, brand: EmailBrand): string {
   const { title, body } = opts;
   const lines: string[] = [];
   lines.push(title);
   lines.push("=".repeat(Math.min(title.length, 60)));
+  lines.push("");
+  lines.push(brand.displayName);
+  if (brand.tagline) lines.push(brand.tagline);
   lines.push("");
   if (body.greeting) {
     lines.push(body.greeting);
@@ -252,6 +310,7 @@ function renderText(opts: RenderOptions): string {
     lines.push(p);
     lines.push("");
   }
+  if (body.code) lines.push(body.code, "");
   if (body.table) lines.push(renderTableText(body.table), "");
   if (body.cta) lines.push(`${body.cta.label}: ${body.cta.url}`, "");
   if (body.signature) lines.push(body.signature, "");

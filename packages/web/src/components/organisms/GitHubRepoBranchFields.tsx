@@ -34,6 +34,7 @@ export function GitHubRepoBranchFields({
   const reposQ = useQuery({
     queryKey: ["github-repos"],
     queryFn: () => apiJson<{ repos: GithubRepoRow[] }>("/api/github/repos"),
+    enabled: !preferManual,
     retry: false,
   });
 
@@ -100,7 +101,7 @@ export function GitHubRepoBranchFields({
             disabled={disabled}
           />
         </div>
-        {!preferManual && reposQ.isSuccess && repos.length > 0 ? (
+        {preferManual ? (
           <div className="sm:col-span-2">
             <button
               type="button"

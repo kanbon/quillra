@@ -46,6 +46,32 @@ async function readDeliveredCode(email: string, requestedAt: number): Promise<st
   return deliveredCode;
 }
 
+async function readDeliveredMessage(
+  email: string,
+  requestedAt: number,
+  content: RegExp,
+): Promise<MailboxMessage> {
+  let delivered: MailboxMessage | undefined;
+  await expect
+    .poll(
+      () => {
+        delivered = readMailbox()
+          .reverse()
+          .find(
+            ({ raw, receivedAt }) =>
+              receivedAt >= requestedAt &&
+              raw.toLowerCase().includes(email.toLowerCase()) &&
+              content.test(raw),
+          );
+        return Boolean(delivered);
+      },
+      { message: `Expected a delivered email for ${email}`, timeout: 10_000 },
+    )
+    .toBe(true);
+  if (!delivered) throw new Error(`Email for ${email} was not delivered`);
+  return delivered;
+}
+
 async function blockExternalRequests(page: Page) {
   const unexpectedHosts = new Set<string>();
 
@@ -308,7 +334,63 @@ test("a fresh production install supports owner, collaborator, and client signup
   expect(secondProjectResponse.status()).toBe(201);
   const secondProjectId = ((await secondProjectResponse.json()) as { id: string }).id;
 
+  await page.goto(`/p/${firstProjectId}/settings`);
+  await expect(page.getByRole("heading", { name: "One identity, everywhere." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^(Brand|Branding)$/ })).toHaveCount(0);
+  await page.getByLabel("Client-facing name").fill("Northstar Studio");
+  await page.getByLabel("Accent color", { exact: true }).fill("#F4D35E");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "northstar.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAHklEQVR4nGP4cjnuPyWYYdSA/6NhEDcaBpeHRRgAAK2/JC6kUrydAAAAAElFTkSuQmCC",
+      "base64",
+    ),
+  });
+  const unsavedPreviewCommand = "pnpm dev --draft";
+  await page.getByLabel("Dev preview command").fill(unsavedPreviewCommand);
+  await expect(page.getByText("Northstar Studio", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Save brand" }).click();
+  await expect(page.getByText("Brand saved across client pages and emails.")).toBeVisible();
+  await expect(page.getByLabel("Dev preview command")).toHaveValue(unsavedPreviewCommand);
+
+  await page.reload();
+  await expect(page.getByLabel("Client-facing name")).toHaveValue("Northstar Studio");
+  await expect(page.getByLabel("Accent color", { exact: true })).toHaveValue("#F4D35E");
+  await expect(page.getByAltText("Northstar Studio logo preview")).toBeVisible();
+  await page.screenshot({
+    path: path.join(tmpdir(), "quillra-brand-studio-desktop.png"),
+    fullPage: true,
+  });
+
+  const anonymousLogoContext = await browser.newContext({
+    baseURL: new URL(page.url()).origin,
+  });
+  const publicLogo = await anonymousLogoContext.request.get(
+    `/api/clients/branding/${firstProjectId}/logo`,
+  );
+  expect(publicLogo.status()).toBe(200);
+  expect(publicLogo.headers()["content-type"]).toContain("image/png");
+  expect((await publicLogo.body()).byteLength).toBeGreaterThan(0);
+  await anonymousLogoContext.close();
+
+  await page.getByRole("button", { name: "Sign-in" }).click();
+  await expect(page.getByText("Welcome back")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+  await expect(page.getByRole("button", { name: "Save brand" })).toBeVisible();
+  await page.screenshot({
+    path: path.join(tmpdir(), "quillra-brand-studio-mobile.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   const collaboratorEmail = "collaborator@quillra.test";
+  const collaboratorInviteRequestedAt = Date.now();
   const collaboratorInviteResponse = await page.request.post(
     `/api/team/projects/${firstProjectId}/invites`,
     {
@@ -323,6 +405,16 @@ test("a fresh production install supports owner, collaborator, and client signup
   };
   expect(collaboratorInvite.emailConfigured).toBe(true);
   expect(collaboratorInvite.emailSent).toBe(true);
+  const deliveredCollaboratorInvite = await readDeliveredMessage(
+    collaboratorEmail,
+    collaboratorInviteRequestedAt,
+    /invited you to/i,
+  );
+  const collaboratorInviteRaw = deliveredCollaboratorInvite.raw.replace(/=\r?\n/g, "");
+  expect(collaboratorInviteRaw).toContain("Northstar Studio");
+  expect(collaboratorInviteRaw).toContain("#F4D35E");
+  expect(collaboratorInviteRaw).toContain(`/api/clients/branding/${firstProjectId}/logo`);
+  expect(collaboratorInviteRaw).not.toContain("Quillra Site One");
 
   const collaboratorContext = await browser.newContext({
     baseURL: new URL(page.url()).origin,
@@ -359,6 +451,7 @@ test("a fresh production install supports owner, collaborator, and client signup
   });
 
   const clientEmail = "client@quillra.test";
+  const clientInviteRequestedAt = Date.now();
   const clientInviteResponse = await page.request.post(
     `/api/team/projects/${firstProjectId}/invites`,
     { data: { email: clientEmail, name: "Quillra Client", role: "client" } },
@@ -371,6 +464,14 @@ test("a fresh production install supports owner, collaborator, and client signup
   };
   expect(clientInvite.emailConfigured).toBe(true);
   expect(clientInvite.emailSent).toBe(true);
+  const deliveredClientInvite = await readDeliveredMessage(
+    clientEmail,
+    clientInviteRequestedAt,
+    /invited you to/i,
+  );
+  const clientInviteRaw = deliveredClientInvite.raw.replace(/=\r?\n/g, "");
+  expect(clientInviteRaw).toContain("Northstar Studio");
+  expect(clientInviteRaw).toContain("#F4D35E");
 
   const clientContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
   const clientPage = await clientContext.newPage();
@@ -400,7 +501,7 @@ test("a fresh production install supports owner, collaborator, and client signup
   clientPage.on("pageerror", (error) => clientErrors.push(error.message));
 
   await clientPage.goto(clientInvite.inviteLink);
-  await expect(clientPage.getByRole("heading", { name: "Quillra Site One" })).toBeVisible();
+  await expect(clientPage.getByRole("heading", { name: "Northstar Studio" })).toBeVisible();
   await expect(clientPage.getByLabel("Email")).toHaveValue(clientEmail);
   const clientCodeRequestedAt = Date.now();
   await clientPage.getByRole("button", { name: "Continue" }).click();
@@ -455,6 +556,10 @@ test("a fresh production install supports owner, collaborator, and client signup
   expect(
     (await clientPage.request.get(`/api/team/projects/${firstProjectId}/members`)).status(),
   ).toBe(403);
+
+  const deleteResponse = await page.request.delete(`/api/projects/${secondProjectId}`);
+  expect(deleteResponse.status()).toBe(204);
+  expect((await page.request.get(`/api/projects/${secondProjectId}`)).status()).toBe(404);
 
   expect([...collaboratorExternalHosts]).toEqual([]);
   expect(collaboratorErrors).toEqual([]);

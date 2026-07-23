@@ -163,6 +163,17 @@ function deliveredLoginCode(send: ReturnType<typeof mockResend>): string {
   return code;
 }
 
+function deliveredEmails(send: ReturnType<typeof mockResend>) {
+  return send.mock.calls.map(
+    (call) =>
+      JSON.parse(String(call[1]?.body)) as {
+        subject: string;
+        html: string;
+        text: string;
+      },
+  );
+}
+
 beforeEach(() => {
   tempDirectory = mkdtempSync(path.join(tmpdir(), "quillra-project-invites-"));
   process.env.DATABASE_URL = `file:${path.join(tempDirectory, "cms.sqlite")}`;
@@ -185,6 +196,61 @@ afterEach(() => {
 });
 
 describe("project invite authorization", () => {
+  it("sends project invitations with project branding and inherited group identity", async () => {
+    process.env.EMAIL_PROVIDER = "resend";
+    process.env.RESEND_API_KEY = "re_project_invite_test";
+    const send = mockResend();
+    const { teamRouter, rawSqlite } = await loadRuntime();
+    seedProject(rawSqlite);
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO project_groups
+           (id, name, slug, brand_logo_url, brand_accent_color,
+            brand_display_name, brand_tagline, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "group-1",
+        "Internal agency group",
+        "northstar",
+        "https://assets.example.com/northstar-mark.png",
+        "#7C3AED",
+        "Northstar Group",
+        "Editorial clarity, without the busywork.",
+        now,
+        now,
+      );
+    rawSqlite
+      .prepare(
+        `UPDATE projects
+         SET name = ?, group_id = ?, brand_display_name = ?, brand_accent_color = ?
+         WHERE id = ?`,
+      )
+      .run("internal-repository-label", "group-1", "Northstar Editorial", "#2D6A4F", "project-1");
+    const app = teamApp(teamRouter);
+
+    const response = await createInvite(app, "writer@example.com", "editor");
+
+    await expect(response.json()).resolves.toMatchObject({
+      emailConfigured: true,
+      emailSent: true,
+    });
+    const [message] = deliveredEmails(send);
+    expect(message.subject).toBe("Owner invited you to Northstar Editorial");
+    expect(message.html).toContain("Northstar Editorial");
+    expect(message.html).toContain("Editorial clarity, without the busywork.");
+    expect(message.html).toContain("https://assets.example.com/northstar-mark.png");
+    expect(message.html).toContain("#2D6A4F");
+    expect(message.text).toContain("Northstar Editorial");
+    expect(message.text).toContain("Editorial clarity, without the busywork.");
+    for (const content of [message.subject, message.html, message.text]) {
+      expect(content).not.toContain("internal-repository-label");
+      expect(content).not.toContain("Northstar Group");
+      expect(content).not.toContain("#7C3AED");
+    }
+  });
+
   it("does not leave access when an invite is revoked after a code was issued", async () => {
     const { teamRouter, teamLoginRouter, rawSqlite } = await loadRuntime();
     seedProject(rawSqlite);

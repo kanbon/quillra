@@ -31,6 +31,7 @@ import { getCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { user } from "./db/auth-schema.js";
 import { db } from "./db/index.js";
+import { projects } from "./db/schema.js";
 import { type Session, type SessionUser, auth } from "./lib/auth.js";
 import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "./lib/session-cookies.js";
 import { adminRouter } from "./routes/admin.js";
@@ -62,7 +63,7 @@ import {
 import { readPreviewStatus } from "./services/preview-status.js";
 import { startReportScheduler } from "./services/report-scheduler.js";
 import { getTrustedOrigins, isTrustedBrowserRequest } from "./services/trusted-origins.js";
-import { getPreviewAddress } from "./services/workspace.js";
+import { getPreviewAddress, sweepOrphanedProjectWorkspaces } from "./services/workspace.js";
 import { chatWsHandler } from "./ws/chat-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -452,6 +453,19 @@ app.get("*", async (c) => {
   }
   return c.html(readFileSync(htmlPath, "utf-8"));
 });
+
+// Retry workspace deletions that were interrupted by a previous process or
+// container shutdown. Capture the active IDs and schedule the sweep before
+// binding the server so a newly-created project cannot race this snapshot.
+try {
+  const rows = await db.select({ id: projects.id }).from(projects);
+  const cleanups = sweepOrphanedProjectWorkspaces(rows.map((row) => row.id));
+  if (cleanups.length > 0) {
+    console.info(`[workspace] scheduled cleanup for ${cleanups.length} orphaned workspace(s)`);
+  }
+} catch (error) {
+  console.warn("[workspace] failed to schedule orphaned workspace cleanup:", error);
+}
 
 const port = Number(process.env.PORT ?? 3000);
 const hostname = resolveListenHost();

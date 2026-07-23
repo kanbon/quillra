@@ -38,8 +38,8 @@ import {
   hasValidPendingClientProjectInvite,
 } from "../lib/project-invites.js";
 import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "../lib/session-cookies.js";
-import { getProjectBrand } from "../services/branding.js";
-import { loginCodeEmailHtml } from "../services/email-templates.js";
+import { getProjectBrand, projectBrandForEmail } from "../services/branding.js";
+import { renderLoginCodeEmail } from "../services/email-templates.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 
 const CODE_TTL_MINUTES = 15;
@@ -71,6 +71,35 @@ export const clientsRouter = new Hono()
       accentColor: brand.accentColor,
       tagline: brand.tagline,
       poweredBy: brand.poweredBy,
+    });
+  })
+
+  /** Public rendering endpoint for uploaded data-URI logos in email clients. */
+  .get("/branding/:projectId/logo", async (c) => {
+    const projectId = c.req.param("projectId");
+    const [project] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    if (!project) return c.json({ error: "Not found" }, 404);
+
+    const brand = await getProjectBrand(projectId, new URL(c.req.url).host || null);
+    const match = brand.logoUrl?.match(
+      /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/,
+    );
+    if (!match) return c.json({ error: "Logo not available" }, 404);
+
+    const bytes = new Uint8Array(Buffer.from(match[2].replace(/\s/g, ""), "base64"));
+    if (bytes.byteLength === 0 || bytes.byteLength > 2_500_000) {
+      return c.json({ error: "Logo not available" }, 404);
+    }
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": match[1],
+        "Cache-Control": "public, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+      },
     });
   })
 
@@ -141,17 +170,22 @@ export const clientsRouter = new Hono()
         set: { id: codeId, codeHash, expiresAt, attempts: 0, createdAt },
       });
 
-    const html = loginCodeEmailHtml({
-      projectName: p.name,
-      projectLogoUrl: p.logoUrl,
+    const resolvedBrand = await getProjectBrand(projectId, new URL(c.req.url).host || null);
+    const publicOrigin = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(
+      /\/$/,
+      "",
+    );
+    const brand = projectBrandForEmail(resolvedBrand, projectId, publicOrigin);
+    const emailBody = renderLoginCodeEmail({
+      brand,
       code,
       expiresInMinutes: CODE_TTL_MINUTES,
     });
     const delivery = await sendEmail({
       to: email,
-      subject: `Your ${p.name} sign-in code: ${code}`,
-      html,
-      text: `Your sign-in code for ${p.name} is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+      subject: `Your ${brand.displayName} sign-in code: ${code}`,
+      html: emailBody.html,
+      text: emailBody.text,
     });
     if (!delivery.sent) {
       await db

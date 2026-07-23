@@ -9,6 +9,7 @@ const CONTROLLED_ENV_KEYS = [
   "DATABASE_URL",
   "QUILLRA_ENCRYPTION_KEY",
   "EMAIL_PROVIDER",
+  "RESEND_API_KEY",
   "NODE_ENV",
 ] as const;
 
@@ -39,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   openDatabase?.close();
   openDatabase = null;
+  vi.unstubAllGlobals();
   vi.resetModules();
   restoreEnvironment();
   rmSync(tempDirectory, { recursive: true, force: true });
@@ -110,6 +112,73 @@ describe("instance invites", () => {
       .prepare("SELECT expires_at AS expiresAt FROM instance_invites WHERE id = ?")
       .get("legacy-invite") as { expiresAt: number };
     expect(invite.expiresAt).toBeGreaterThan(now);
+  });
+
+  it("delivers instance invitations with the configured instance brand", async () => {
+    vi.resetModules();
+    const { adminRouter } = await import("./admin.js");
+    const { rawSqlite } = await import("../db/index.js");
+    const { setInstanceSetting } = await import("../services/instance-settings.js");
+    openDatabase = rawSqlite;
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO user
+           (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, 'owner', ?, ?)`,
+      )
+      .run("owner-1", "Avery Owner", "owner@example.com", now, now);
+    setInstanceSetting("EMAIL_PROVIDER", "resend");
+    setInstanceSetting("RESEND_API_KEY", "re_instance_invite_test");
+    setInstanceSetting("INSTANCE_NAME", "Atelier North");
+    setInstanceSetting("INSTANCE_LOGO_URL", "https://assets.example.test/atelier-north.png");
+    setInstanceSetting("INSTANCE_ACCENT_COLOR", "#1f6f5b");
+
+    const send = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ id: "instance-invite-email-1" }),
+    );
+    vi.stubGlobal("fetch", send);
+    const owner = {
+      id: "owner-1",
+      name: "Avery Owner",
+      email: "owner@example.com",
+    } as SessionUser;
+    const app = new Hono<{ Variables: { user: SessionUser | null } }>();
+    app.use("*", async (c, next) => {
+      c.set("user", owner);
+      await next();
+    });
+    app.route("/", adminRouter);
+
+    const response = await app.request("/invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "new.member@example.com" }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      email: "new.member@example.com",
+      emailConfigured: true,
+      emailed: true,
+    });
+    expect(send).toHaveBeenCalledOnce();
+    const [requestUrl, requestInit] = send.mock.calls[0];
+    expect(requestUrl).toBe("https://api.resend.com/emails");
+    const message = JSON.parse(String(requestInit?.body)) as {
+      to: string[];
+      subject: string;
+      html: string;
+      text: string;
+    };
+    expect(message.to).toEqual(["new.member@example.com"]);
+    expect(message.subject).toBe("You're invited to Atelier North");
+    expect(message.html).toContain("Atelier North");
+    expect(message.html).toContain("https://assets.example.test/atelier-north.png");
+    expect(message.html).toContain("#1F6F5B");
+    expect(message.text).toContain("Atelier North");
+    expect(message.text).toContain("Avery Owner invited you to Atelier North.");
   });
 
   it("revokes preview capabilities for every project when an instance member is removed", async () => {

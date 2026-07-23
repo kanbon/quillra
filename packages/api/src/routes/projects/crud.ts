@@ -4,7 +4,13 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import { projectMembers, projects } from "../../db/schema.js";
-import { clearProjectRepoClone } from "../../services/workspace.js";
+import { getProjectBrandContext } from "../../services/branding.js";
+import {
+  beginProjectDeletion,
+  cancelProjectDeletion,
+  clearProjectRepoClone,
+  scheduleDeletedProjectWorkspaceCleanup,
+} from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
 
 export const crudRouter = new Hono<{ Variables: Variables }>()
@@ -86,6 +92,7 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
     if (!m) return c.json({ error: "Not found" }, 404);
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
+    const brandContext = await getProjectBrandContext(projectId, new URL(c.req.url).host || null);
     return c.json({
       id: p.id,
       name: p.name,
@@ -96,6 +103,8 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
       brandDisplayName: p.brandDisplayName,
       brandAccentColor: p.brandAccentColor,
       groupId: p.groupId,
+      instanceBrand: brandContext.instanceBrand,
+      inheritedBrand: brandContext.inheritedBrand,
       migrationTarget: p.migrationTarget,
       role: m.role,
     });
@@ -167,7 +176,7 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
     const branchChanged =
       patch.defaultBranch !== undefined && patch.defaultBranch !== existing.defaultBranch;
     if (repoChanged || branchChanged) {
-      clearProjectRepoClone(projectId);
+      await clearProjectRepoClone(projectId);
     }
 
     await db.update(projects).set(patch).where(eq(projects.id, projectId));
@@ -179,9 +188,17 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
-    // Kill any running preview + wipe the cloned workspace (node_modules,
-    // git, everything) so deleted projects don't leave orphan files.
-    clearProjectRepoClone(projectId);
-    await db.delete(projects).where(eq(projects.id, projectId));
+    // Make the project unavailable to already-authorized in-flight workspace
+    // requests before removing its source-of-truth row. Filesystem cleanup is
+    // best-effort and happens second: a busy node_modules directory must never
+    // turn a successful logical delete into a visible 500.
+    beginProjectDeletion(projectId);
+    try {
+      await db.delete(projects).where(eq(projects.id, projectId));
+    } catch (error) {
+      cancelProjectDeletion(projectId);
+      throw error;
+    }
+    void scheduleDeletedProjectWorkspaceCleanup(projectId);
     return c.newResponse(null, 204);
   });

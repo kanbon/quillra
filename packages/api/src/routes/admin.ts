@@ -8,7 +8,8 @@ import { user } from "../db/auth-schema.js";
 import { db, rawSqlite } from "../db/index.js";
 import type { SessionUser } from "../lib/auth.js";
 import { emailEquals, normalizeEmail } from "../lib/email.js";
-import { inviteEmailHtml } from "../services/email-templates.js";
+import { getInstanceBrand } from "../services/branding.js";
+import { renderInviteEmail } from "../services/email-templates.js";
 import {
   clearGithubAppCredentials,
   listInstallations as listGithubAppInstallations,
@@ -136,9 +137,9 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
         const org = getOrganizationInfo();
         const base = (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
         const loginUrl = `${base}/login?email=${encodeURIComponent(email)}`;
-        const html = inviteEmailHtml({
-          projectName: org.instanceName,
-          projectLogoUrl: null,
+        const brand = getInstanceBrand(new URL(c.req.url).host || null);
+        const emailBody = renderInviteEmail({
+          brand,
           inviterName: r.user.name ?? r.user.email ?? null,
           role: "admin",
           acceptUrl: loginUrl,
@@ -146,8 +147,8 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
         const result = await sendEmail({
           to: email,
           subject: `You're invited to ${org.instanceName}`,
-          html,
-          text: `${r.user.name ?? r.user.email ?? "Someone"} invited you to ${org.instanceName}. Sign in at ${loginUrl} with your email, no GitHub account required.`,
+          html: emailBody.html,
+          text: emailBody.text,
         });
         emailed = result.sent;
       } catch {

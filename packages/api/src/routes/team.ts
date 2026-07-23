@@ -10,7 +10,8 @@ import { projectInvites, projectMembers, projects } from "../db/schema.js";
 import type { SessionUser } from "../lib/auth.js";
 import { emailEquals, normalizeEmail } from "../lib/email.js";
 import { acceptProjectInviteToken } from "../lib/project-invites.js";
-import { inviteEmailHtml } from "../services/email-templates.js";
+import { getProjectBrand, projectBrandForEmail } from "../services/branding.js";
+import { renderInviteEmail } from "../services/email-templates.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 import { revokePreviewCapability } from "../services/preview-capability.js";
 
@@ -165,9 +166,10 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     let emailSent = false;
     let emailError: string | null = null;
     if (emailConfigured) {
-      const html = inviteEmailHtml({
-        projectName: project.name,
-        projectLogoUrl: project.logoUrl,
+      const resolvedBrand = await getProjectBrand(projectId, new URL(c.req.url).host || null);
+      const brand = projectBrandForEmail(resolvedBrand, projectId, base);
+      const email = renderInviteEmail({
+        brand,
         inviterName: r.user.name ?? r.user.email ?? null,
         role,
         acceptUrl,
@@ -177,9 +179,9 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
 
       const result = await sendEmail({
         to: inviteEmail,
-        subject: `${r.user.name ?? "Someone"} invited you to ${project.name}`,
-        html,
-        text: `${r.user.name ?? "Someone"} invited you to ${project.name}. Open this link to accept: ${acceptUrl}`,
+        subject: `${r.user.name ?? "Someone"} invited you to ${brand.displayName}`,
+        html: email.html,
+        text: email.text,
         replyTo,
       });
       emailSent = result.sent;

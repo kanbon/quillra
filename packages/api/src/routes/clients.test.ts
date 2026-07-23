@@ -9,6 +9,8 @@ const CONTROLLED_ENV_KEYS = [
   "BETTER_AUTH_SECRET",
   "QUILLRA_ENCRYPTION_KEY",
   "EMAIL_PROVIDER",
+  "RESEND_API_KEY",
+  "BETTER_AUTH_URL",
   "NODE_ENV",
 ] as const;
 
@@ -34,6 +36,25 @@ function signedBetterAuthCookie(token: string): string {
   return encodeURIComponent(`${token}.${signature}`);
 }
 
+function mockResend() {
+  const send = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+    Response.json({ id: "email-1" }),
+  );
+  vi.stubGlobal("fetch", send);
+  return send;
+}
+
+function deliveredEmails(send: ReturnType<typeof mockResend>) {
+  return send.mock.calls.map(
+    (call) =>
+      JSON.parse(String(call[1]?.body)) as {
+        subject: string;
+        html: string;
+        text: string;
+      },
+  );
+}
+
 beforeEach(() => {
   tempDirectory = mkdtempSync(path.join(tmpdir(), "quillra-client-login-"));
   process.env.DATABASE_URL = `file:${path.join(tempDirectory, "cms.sqlite")}`;
@@ -41,11 +62,16 @@ beforeEach(() => {
   process.env.QUILLRA_ENCRYPTION_KEY = "a".repeat(64);
   process.env.EMAIL_PROVIDER = "none";
   process.env.NODE_ENV = "test";
+  // biome-ignore lint/performance/noDelete: tests opt into mail delivery explicitly
+  delete process.env.RESEND_API_KEY;
+  // biome-ignore lint/performance/noDelete: tests verify the controlled local fallback
+  delete process.env.BETTER_AUTH_URL;
 });
 
 afterEach(() => {
   openDatabase?.close();
   openDatabase = null;
+  vi.unstubAllGlobals();
   vi.resetModules();
   restoreEnvironment();
   rmSync(tempDirectory, { recursive: true, force: true });
@@ -62,6 +88,36 @@ describe("client login codes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ user: null });
+  });
+
+  it("serves an uploaded project logo anonymously with an image content type", async () => {
+    vi.resetModules();
+    const { clientsRouter } = await import("./clients.js");
+    const { rawSqlite } = await import("../db/index.js");
+    openDatabase = rawSqlite;
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO projects
+           (id, name, github_repo_full_name, logo_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "project-logo",
+        "Northstar",
+        "example/northstar",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+        now,
+        now,
+      );
+
+    const response = await clientsRouter.request("/branding/project-logo/logo");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    expect((await clientsRouter.request("/branding/missing/logo")).status).toBe(404);
   });
 
   it("does not create or disclose a code when email delivery is disabled", async () => {
@@ -114,6 +170,129 @@ describe("client login codes", () => {
     expect(rawSqlite.prepare("SELECT count(*) AS count FROM client_login_codes").get()).toEqual({
       count: 0,
     });
+  });
+
+  it("sends sign-in codes with the inherited project-group brand", async () => {
+    process.env.EMAIL_PROVIDER = "resend";
+    process.env.RESEND_API_KEY = "re_client_brand_test";
+    const send = mockResend();
+    vi.resetModules();
+    const { clientsRouter } = await import("./clients.js");
+    const { rawSqlite } = await import("../db/index.js");
+    openDatabase = rawSqlite;
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO project_groups
+           (id, name, slug, brand_logo_url, brand_accent_color,
+            brand_display_name, brand_tagline, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "group-1",
+        "Internal client group",
+        "cedar-house",
+        "https://assets.example.com/cedar-house.png",
+        "#0A7A5C",
+        "Cedar House",
+        "Thoughtful publishing, made simple.",
+        now,
+        now,
+      );
+    rawSqlite
+      .prepare(
+        `INSERT INTO projects
+           (id, name, github_repo_full_name, group_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "project-1",
+        "internal-client-repository",
+        "example/internal-client-repository",
+        "group-1",
+        now,
+        now,
+      );
+    rawSqlite
+      .prepare(
+        `INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, ?, ?)`,
+      )
+      .run("client-1", "Client", "client@example.com", now, now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO project_members (id, project_id, user_id, role, created_at)
+         VALUES (?, ?, ?, 'client', ?)`,
+      )
+      .run("membership-1", "project-1", "client-1", now);
+
+    const response = await clientsRouter.request("/request-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: "project-1", email: "client@example.com" }),
+    });
+
+    expect(response.status).toBe(200);
+    const [message] = deliveredEmails(send);
+    expect(message.subject).toMatch(/^Your Cedar House sign-in code: \d{6}$/);
+    expect(message.html).toContain("Cedar House");
+    expect(message.html).toContain("Thoughtful publishing, made simple.");
+    expect(message.html).toContain("https://assets.example.com/cedar-house.png");
+    expect(message.html).toContain("#0A7A5C");
+    expect(message.text).toContain("Cedar House");
+    expect(message.text).toContain("Thoughtful publishing, made simple.");
+    for (const content of [message.subject, message.html, message.text]) {
+      expect(content).not.toContain("internal-client-repository");
+      expect(content).not.toContain("Internal client group");
+    }
+  });
+
+  it("never builds an uploaded-logo email URL from an untrusted request host", async () => {
+    process.env.EMAIL_PROVIDER = "resend";
+    process.env.RESEND_API_KEY = "re_client_host_test";
+    const send = mockResend();
+    vi.resetModules();
+    const { clientsRouter } = await import("./clients.js");
+    const { rawSqlite } = await import("../db/index.js");
+    openDatabase = rawSqlite;
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO projects
+           (id, name, github_repo_full_name, logo_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "project-1",
+        "Northstar",
+        "example/northstar",
+        "data:image/png;base64,iVBORw0KGgo=",
+        now,
+        now,
+      );
+    rawSqlite
+      .prepare(
+        `INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, ?, ?)`,
+      )
+      .run("client-1", "Client", "client@example.com", now, now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO project_members (id, project_id, user_id, role, created_at)
+         VALUES (?, ?, ?, 'client', ?)`,
+      )
+      .run("membership-1", "project-1", "client-1", now);
+
+    const response = await clientsRouter.request("http://attacker.example/request-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: "attacker.example" },
+      body: JSON.stringify({ projectId: "project-1", email: "client@example.com" }),
+    });
+
+    expect(response.status).toBe(200);
+    const [message] = deliveredEmails(send);
+    expect(message.html).toContain("http://localhost:3000/api/clients/branding/project-1/logo");
+    expect(message.html).not.toContain("attacker.example");
   });
 
   it("reuses a mixed-case user and replaces conflicting team and Better Auth sessions", async () => {

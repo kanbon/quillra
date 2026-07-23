@@ -24,6 +24,7 @@ import { mapSdkMessageToClient } from "./agent-stream-mapper.js";
 import { ASTRO_MIGRATION_SYSTEM_PROMPT } from "./astro-migration-skill.js";
 import { createSafeSdkEnv } from "./child-process-env.js";
 import { getInstanceSetting } from "./instance-settings.js";
+import { registerProjectWriter } from "./project-workspace-lifecycle.js";
 import { type RoleName, getRolePrompt } from "./role-prompts.js";
 
 export { mapSdkMessageToClient } from "./agent-stream-mapper.js";
@@ -43,7 +44,7 @@ export type AgentRunUsage = {
   modelUsage: Record<string, unknown>;
 };
 
-export async function* runProjectAgent(params: {
+export type ProjectAgentParams = {
   cwd: string;
   prompt: string;
   role: ProjectRole;
@@ -64,7 +65,26 @@ export async function* runProjectAgent(params: {
    *  agent_runs row for the Usage tab. On error/abort the callback
    *  does not fire. */
   onResult?: (usage: AgentRunUsage) => void;
-}): AsyncGenerator<Record<string, unknown>> {
+};
+
+export async function* runProjectAgent(
+  params: ProjectAgentParams,
+): AsyncGenerator<Record<string, unknown>> {
+  const abortController = new AbortController();
+  const releaseProjectWriter = registerProjectWriter(params.projectId, () =>
+    abortController.abort(),
+  );
+  try {
+    yield* runRegisteredProjectAgent(params, abortController);
+  } finally {
+    releaseProjectWriter();
+  }
+}
+
+async function* runRegisteredProjectAgent(
+  params: ProjectAgentParams,
+  abortController: AbortController,
+): AsyncGenerator<Record<string, unknown>> {
   const apiKey = getInstanceSetting("ANTHROPIC_API_KEY");
   if (!apiKey) {
     yield { type: "error", message: "Quillra is not configured yet, finish the setup wizard." };
@@ -88,8 +108,6 @@ export async function* runProjectAgent(params: {
   const model = params.migrationMode
     ? process.env.CLAUDE_MIGRATION_MODEL?.trim() || "claude-opus-4-7"
     : process.env.CLAUDE_MODEL?.trim() || "claude-sonnet-4-6";
-  const abortController = new AbortController();
-
   // Build the system prompt with optional language + migration skill
   // appended. Migration mode deliberately keeps the base Quillra prompt
   // because the agent still needs to respect tool-call semantics; we

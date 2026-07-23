@@ -1,9 +1,7 @@
 /**
  * Project Settings page shell. Owns the project query, the shared
- * react-hook-form instance driving GeneralSection (brand + git
- * connection), and the logo-draft state that GeneralSection mutates
- * while editing. Each section organism handles its own mutations
- * and queries so this shell stays small.
+ * react-hook-form instance driving internal site and Git details.
+ * Client-facing identity is owned by the single Brand Studio section.
  */
 
 import { Heading } from "@/components/atoms/Heading";
@@ -22,7 +20,7 @@ import { apiJson } from "@/lib/api";
 import { parseRepoFullName } from "@/lib/github";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useParams } from "react-router-dom";
 
@@ -30,9 +28,8 @@ export function ProjectSettingsPage() {
   const { t } = useT();
   const { projectId } = useParams<{ projectId: string }>();
   const id = projectId ?? "";
-  const [preferManualGit, setPreferManualGit] = useState(false);
+  const [preferManualGit, setPreferManualGit] = useState(true);
   const [displayNameMode, setDisplayNameMode] = useState<"repo" | "full" | "custom">("repo");
-  const [logoUrlDraft, setLogoUrlDraft] = useState<string | null>(null);
 
   const projectQ = useQuery({
     queryKey: ["project", id],
@@ -48,6 +45,18 @@ export function ProjectSettingsPage() {
         brandDisplayName: string | null;
         brandAccentColor: string | null;
         groupId: string | null;
+        instanceBrand: {
+          displayName: string;
+          logoUrl: string | null;
+          accentColor: string;
+          tagline: string | null;
+        };
+        inheritedBrand: {
+          displayName: string;
+          logoUrl: string | null;
+          accentColor: string;
+          tagline: string | null;
+        };
       }>(`/api/projects/${id}`),
   });
 
@@ -80,10 +89,20 @@ export function ProjectSettingsPage() {
   const repoFull = watch("githubRepoFullName");
   const branch = watch("defaultBranch");
   const nameVal = watch("name");
+  const hydratedProjectDetails = useRef<string | null>(null);
 
   useEffect(() => {
     const p = projectQ.data;
     if (!p) return;
+    const detailsKey = JSON.stringify([
+      id,
+      p.name,
+      p.githubRepoFullName,
+      p.defaultBranch,
+      p.previewDevCommand,
+    ]);
+    if (hydratedProjectDetails.current === detailsKey) return;
+    hydratedProjectDetails.current = detailsKey;
     resetProject({
       name: p.name,
       githubRepoFullName: p.githubRepoFullName,
@@ -91,9 +110,8 @@ export function ProjectSettingsPage() {
       previewDevCommand: p.previewDevCommand ?? "",
     });
     setDisplayNameMode(inferDisplayNameMode(p.name, p.githubRepoFullName));
-    setPreferManualGit(false);
-    setLogoUrlDraft(p.logoUrl);
-  }, [projectQ.data, resetProject]);
+    setPreferManualGit(true);
+  }, [id, projectQ.data, resetProject]);
 
   useEffect(() => {
     if (displayNameMode === "custom") return;
@@ -107,10 +125,14 @@ export function ProjectSettingsPage() {
 
   return (
     <div className="min-h-screen bg-neutral-50">
-      <ProjectHeader projectId={id} projectName={projectQ.data?.name ?? "…"} />
-      <main className="mx-auto max-w-3xl px-4 py-10">
+      <ProjectHeader
+        projectId={id}
+        projectName={projectQ.data?.name ?? "…"}
+        detectFramework={false}
+      />
+      <main className="mx-auto max-w-5xl px-4 py-10">
         {/* Page heading */}
-        <div className="mb-8">
+        <div className="mb-8 max-w-3xl">
           <Heading as="h1" className="text-[26px] font-semibold tracking-tight text-neutral-900">
             {t("projectSettings.pageTitle")}
           </Heading>
@@ -120,45 +142,49 @@ export function ProjectSettingsPage() {
         </div>
 
         <div className="space-y-6">
-          {isAdmin && (
-            <GeneralSection
-              projectId={id}
-              projectName={projectQ.data?.name ?? ""}
-              logoUrlDraft={logoUrlDraft}
-              setLogoUrlDraft={setLogoUrlDraft}
-              displayNameMode={displayNameMode}
-              setDisplayNameMode={setDisplayNameMode}
-              preferManualGit={preferManualGit}
-              setPreferManualGit={setPreferManualGit}
-              registerProject={registerProject}
-              handleProjectSubmit={handleProjectSubmit}
-              setValue={setValue}
-              projectSubmitting={projectSubmitting}
-              projectErrors={projectErrors}
-              repoFull={repoFull}
-              branch={branch}
-              nameVal={nameVal}
-            />
-          )}
-
           {projectQ.data && (
             <BrandingSection
+              key={id}
               projectId={id}
+              projectName={projectQ.data?.name ?? ""}
+              logoUrl={projectQ.data.logoUrl}
               isAdmin={Boolean(isAdmin)}
               isOwner={Boolean(isOwner)}
               initial={{
                 brandDisplayName: projectQ.data.brandDisplayName,
                 brandAccentColor: projectQ.data.brandAccentColor,
                 groupId: projectQ.data.groupId,
+                instanceBrand: projectQ.data.instanceBrand,
+                inheritedBrand: projectQ.data.inheritedBrand,
               }}
             />
           )}
 
-          <TeamSection projectId={id} isAdmin={Boolean(isAdmin)} />
+          <div className="mx-auto max-w-3xl space-y-6">
+            {isAdmin && (
+              <GeneralSection
+                projectId={id}
+                displayNameMode={displayNameMode}
+                setDisplayNameMode={setDisplayNameMode}
+                preferManualGit={preferManualGit}
+                setPreferManualGit={setPreferManualGit}
+                registerProject={registerProject}
+                handleProjectSubmit={handleProjectSubmit}
+                setValue={setValue}
+                projectSubmitting={projectSubmitting}
+                projectErrors={projectErrors}
+                repoFull={repoFull}
+                branch={branch}
+                nameVal={nameVal}
+              />
+            )}
 
-          {isAdmin && projectQ.data && (
-            <DangerZoneSection projectId={id} projectName={projectQ.data.name} />
-          )}
+            <TeamSection projectId={id} isAdmin={Boolean(isAdmin)} />
+
+            {isAdmin && projectQ.data && (
+              <DangerZoneSection projectId={id} projectName={projectQ.data.name} />
+            )}
+          </div>
         </div>
       </main>
     </div>
