@@ -1,7 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { serve } from "@hono/node-server";
-import { createNodeWebSocket } from "@hono/node-ws";
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer } from "ws";
 import {
@@ -189,8 +188,10 @@ if (!config) throw new Error("Expected localhost preview origin configuration");
 const previewUrl = buildHostPreviewUrl(projectId, capability.token, config, environment);
 
 const app = new Hono();
-const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
-wss.options.maxPayload = PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES;
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
+});
 const gateway = createPreviewGateway(upgradeWebSocket, environment);
 app.use("*", gateway.middleware);
 app.get("/api/caddy-check", gateway.caddyCheck);
@@ -205,8 +206,12 @@ app.post("/fixture-revoke", (context) => {
   return context.json({ ok: true });
 });
 
-const gatewayServer = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: gatewayPort });
-injectWebSocket(gatewayServer);
+const gatewayServer = serve({
+  fetch: app.fetch,
+  hostname: "127.0.0.1",
+  port: gatewayPort,
+  websocket: { server: wss },
+});
 if (!gatewayServer.listening) {
   await new Promise((resolve, reject) => {
     gatewayServer.once("listening", resolve);

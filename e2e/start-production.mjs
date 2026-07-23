@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -23,6 +24,11 @@ const workspaceDir = path.join(dataDir, "workspaces");
 const origin = `http://localhost:${port}`;
 const mailboxPath = path.join(tmpdir(), `quillra-e2e-mailbox-${port}.jsonl`);
 rmSync(mailboxPath, { force: true });
+const { privateKey: githubAppPrivateKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+});
 
 const smtpServer = createServer((socket) => {
   socket.setEncoding("utf8");
@@ -98,11 +104,12 @@ Object.assign(appEnvironment, {
   QUILLRA_SETUP_TOKEN: "quillra-e2e-setup-token",
   EMAIL_PROVIDER: "none",
   GITHUB_APP_ID: "1000001",
+  GITHUB_APP_SLUG: "quillra-e2e",
   GITHUB_APP_NAME: "Quillra E2E",
-  // Setup only checks that a key is configured. The test never invokes a
-  // GitHub operation, so an invalid sentinel keeps accidental network use
-  // impossible and obvious.
-  GITHUB_APP_PRIVATE_KEY: "quillra-e2e-private-key-sentinel",
+  GITHUB_APP_CLIENT_ID: "Iv1.quillra-e2e",
+  GITHUB_APP_CLIENT_SECRET: "quillra-e2e-client-secret",
+  GITHUB_APP_PRIVATE_KEY: githubAppPrivateKey,
+  GITHUB_APP_OAUTH_CALLBACK_URL: `${origin}/api/github/connect/callback`,
 });
 
 function cleanup() {
@@ -111,11 +118,15 @@ function cleanup() {
   rmSync(mailboxPath, { force: true });
 }
 
-const api = spawn(process.execPath, ["packages/api/dist/index.js"], {
-  cwd: repoRoot,
-  env: appEnvironment,
-  stdio: ["ignore", "inherit", "inherit"],
-});
+const api = spawn(
+  process.execPath,
+  ["--import", "./e2e/github-fetch-mock.mjs", "packages/api/dist/index.js"],
+  {
+    cwd: repoRoot,
+    env: appEnvironment,
+    stdio: ["ignore", "inherit", "inherit"],
+  },
+);
 
 let stopping = false;
 
