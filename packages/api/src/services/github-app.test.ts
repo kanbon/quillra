@@ -5,14 +5,19 @@ const settingStore = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("./instance-settings.js", () => ({
   getInstanceSetting: vi.fn((key: string) => settingStore.get(key) ?? null),
-  setInstanceSetting: vi.fn((key: string, value: string | null) => {
-    if (value === null) settingStore.delete(key);
-    else settingStore.set(key, value);
-  }),
+  setInstanceSettingsAtomically: vi.fn(
+    (writes: ReadonlyArray<{ key: string; value: string | null }>) => {
+      for (const { key, value } of writes) {
+        if (value === null) settingStore.delete(key);
+        else settingStore.set(key, value);
+      }
+    },
+  ),
 }));
 
 import {
   clearGithubAppCredentials,
+  exchangeManifestCode,
   getGithubAppBotIdentity,
   getInstallationToken,
   resetGithubAppInstallationTokens,
@@ -40,6 +45,36 @@ afterEach(async () => {
 });
 
 describe("repository-scoped GitHub installation tokens", () => {
+  it("persists the manifest credentials and user OAuth callback as one bundle", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: 84,
+          slug: "quillra-test",
+          name: "Quillra Test",
+          client_id: "Iv1.test",
+          client_secret: "github-client-secret",
+          pem: "github-private-key",
+          webhook_secret: null,
+          html_url: "https://github.com/apps/quillra-test",
+        }),
+      ),
+    );
+
+    await exchangeManifestCode(
+      "one-time-code",
+      "https://cms.example.com/api/github/connect/callback",
+    );
+
+    expect(settingStore.get("GITHUB_APP_ID")).toBe("84");
+    expect(settingStore.get("GITHUB_APP_CLIENT_SECRET")).toBe("github-client-secret");
+    expect(settingStore.get("GITHUB_APP_PRIVATE_KEY")).toBe("github-private-key");
+    expect(settingStore.get("GITHUB_APP_OAUTH_CALLBACK_URL")).toBe(
+      "https://cms.example.com/api/github/connect/callback",
+    );
+  });
+
   it("requests exactly one repository and the requested contents permission", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>

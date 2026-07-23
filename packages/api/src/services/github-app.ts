@@ -22,7 +22,7 @@
  */
 
 import { createSign } from "node:crypto";
-import { getInstanceSetting, setInstanceSetting } from "./instance-settings.js";
+import { getInstanceSetting, setInstanceSettingsAtomically } from "./instance-settings.js";
 
 export type GithubAppCreds = {
   appId: string;
@@ -93,14 +93,16 @@ export function clearGithubAppCredentials(): void {
       "GitHub App credentials cannot be cleared before installation tokens are revoked.",
     );
   }
-  setInstanceSetting("GITHUB_APP_ID", null);
-  setInstanceSetting("GITHUB_APP_SLUG", null);
-  setInstanceSetting("GITHUB_APP_NAME", null);
-  setInstanceSetting("GITHUB_APP_CLIENT_ID", null);
-  setInstanceSetting("GITHUB_APP_CLIENT_SECRET", null);
-  setInstanceSetting("GITHUB_APP_PRIVATE_KEY", null);
-  setInstanceSetting("GITHUB_APP_WEBHOOK_SECRET", null);
-  setInstanceSetting("GITHUB_APP_OAUTH_CALLBACK_URL", null);
+  setInstanceSettingsAtomically([
+    { key: "GITHUB_APP_ID", value: null },
+    { key: "GITHUB_APP_SLUG", value: null },
+    { key: "GITHUB_APP_NAME", value: null },
+    { key: "GITHUB_APP_CLIENT_ID", value: null },
+    { key: "GITHUB_APP_CLIENT_SECRET", value: null },
+    { key: "GITHUB_APP_PRIVATE_KEY", value: null },
+    { key: "GITHUB_APP_WEBHOOK_SECRET", value: null },
+    { key: "GITHUB_APP_OAUTH_CALLBACK_URL", value: null },
+  ]);
   invalidateLocalGithubAppTokenState();
 }
 
@@ -469,7 +471,10 @@ export async function listInstallations(): Promise<InstallationsResult> {
  *
  * See: https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest#implementing-the-github-app-manifest-flow
  */
-export async function exchangeManifestCode(code: string): Promise<{
+export async function exchangeManifestCode(
+  code: string,
+  oauthCallbackUrl: string,
+): Promise<{
   id: number;
   slug: string;
   name: string;
@@ -504,15 +509,16 @@ export async function exchangeManifestCode(code: string): Promise<{
 
   // Persist every field, the secret ones go through the encryption layer
   // automatically via SECRET_KEYS in instance-settings.ts.
-  setInstanceSetting("GITHUB_APP_ID", String(data.id));
-  setInstanceSetting("GITHUB_APP_SLUG", data.slug);
-  setInstanceSetting("GITHUB_APP_NAME", data.name);
-  setInstanceSetting("GITHUB_APP_CLIENT_ID", data.client_id);
-  setInstanceSetting("GITHUB_APP_CLIENT_SECRET", data.client_secret);
-  setInstanceSetting("GITHUB_APP_PRIVATE_KEY", data.pem);
-  if (data.webhook_secret) {
-    setInstanceSetting("GITHUB_APP_WEBHOOK_SECRET", data.webhook_secret);
-  }
+  setInstanceSettingsAtomically([
+    { key: "GITHUB_APP_ID", value: String(data.id) },
+    { key: "GITHUB_APP_SLUG", value: data.slug },
+    { key: "GITHUB_APP_NAME", value: data.name },
+    { key: "GITHUB_APP_CLIENT_ID", value: data.client_id },
+    { key: "GITHUB_APP_CLIENT_SECRET", value: data.client_secret },
+    { key: "GITHUB_APP_PRIVATE_KEY", value: data.pem },
+    { key: "GITHUB_APP_WEBHOOK_SECRET", value: data.webhook_secret },
+    { key: "GITHUB_APP_OAUTH_CALLBACK_URL", value: oauthCallbackUrl },
+  ]);
 
   return data;
 }

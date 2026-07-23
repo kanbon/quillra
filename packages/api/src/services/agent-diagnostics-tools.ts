@@ -18,6 +18,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { detectFramework } from "./framework.js";
 import { getPreviewStatus, setPreviewStatus } from "./preview-status.js";
+import { previewUpstreamUrl } from "./preview-upstream.js";
 import {
   getPackageManager,
   getPreviewLogs,
@@ -31,6 +32,7 @@ import {
 
 type Params = {
   projectId: string;
+  githubBindingGeneration: number;
   repoPath: string;
   /** Mirrored from the projects.preview_dev_command column. */
   previewDevCommandOverride: string | null | undefined;
@@ -38,14 +40,20 @@ type Params = {
 
 /** Small upstream-probe with a tight timeout so an unresponsive dev
  *  server doesn't block the tool call for the SDK's default 60s. */
-async function probeUpstream(port: number): Promise<{
+async function probeUpstream(
+  projectId: string,
+  port: number,
+): Promise<{
   ok: boolean;
   status?: number;
   contentType?: string;
   error?: string;
 }> {
+  const upstream = previewUpstreamUrl(projectId, port, "/");
+  if (!upstream) return { ok: false, error: "Preview upstream is not registered." };
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/`, {
+    const res = await fetch(upstream.url, {
+      headers: upstream.headers,
       signal: AbortSignal.timeout(1500),
       redirect: "manual",
     });
@@ -86,7 +94,7 @@ async function buildStatusSnapshot(params: Params): Promise<StatusSnapshot> {
   const port = await reserveAvailablePreviewPort(params.projectId);
   const status = getPreviewStatus(params.projectId);
   const child = getPreviewProcessInfo(params.projectId);
-  const probe = await probeUpstream(port);
+  const probe = await probeUpstream(params.projectId, port);
   const fw = detectFramework(params.repoPath);
   const dev = resolveDevCommand(params.repoPath, port, params.previewDevCommandOverride) ?? null;
   const logs = getPreviewLogs(params.projectId);
@@ -196,6 +204,7 @@ export function buildAgentDiagnosticsMcpServer(params: Params) {
               params.projectId,
               params.repoPath,
               params.previewDevCommandOverride ?? null,
+              params.githubBindingGeneration,
             );
             // Let the child log for a moment before we read status so the
             // returned snapshot is more useful than an empty one.

@@ -3,10 +3,9 @@
  * and AES-256-GCM encryption at rest for values flagged as secrets.
  *
  * Precedence for reads: DB (decrypted on the fly) → env var → default.
- * Writes go straight to the DB, encrypted if the key is a secret. Env
- * vars always win when set, that gives operators a choice between
- * "manage everything in the browser UI" and "manage everything via env
- * vars at container start time".
+ * Writes go straight to the DB, encrypted if the key is a secret. Operators
+ * can seed values through environment variables, then explicitly replace
+ * them with browser-managed DB values. Verification trust flags are DB-only.
  *
  * Boot migration: the first start after this module is imported walks
  * every secret row and re-encrypts any legacy plaintext value in place.
@@ -20,6 +19,12 @@ type Row = { value: string | null };
 /** Keys the wizard is allowed to set. Anything else is rejected. */
 export const SETTABLE_KEYS = [
   "ANTHROPIC_API_KEY",
+  // Optional secure code-execution provider. E2B credentials may only be
+  // changed through the dedicated live-verification flow.
+  "E2B_ENABLED",
+  "E2B_API_KEY",
+  "E2B_TEMPLATE_ID",
+  "E2B_VERIFIED_AT",
   // GitHub OAuth app, only for owner wizard sign-in, never for git
   // operations. `GITHUB_CLIENT_SECRET` is a secret.
   "GITHUB_CLIENT_ID",
@@ -66,10 +71,11 @@ export const SETTABLE_KEYS = [
 ] as const;
 export type SettableKey = (typeof SETTABLE_KEYS)[number];
 
-/** Keys considered secret, encrypted at rest, masked when returned to
- *  the admin UI. */
+/** Keys considered secret, encrypted at rest, and either masked or omitted
+ *  when returned to the admin UI. */
 export const SECRET_KEYS = new Set<SettableKey>([
   "ANTHROPIC_API_KEY",
+  "E2B_API_KEY",
   "GITHUB_CLIENT_SECRET",
   "GITHUB_APP_CLIENT_SECRET",
   "GITHUB_APP_PRIVATE_KEY",
@@ -77,6 +83,11 @@ export const SECRET_KEYS = new Set<SettableKey>([
   "RESEND_API_KEY",
   "SMTP_PASSWORD",
 ]);
+
+/** Internal trust state must only come from a successful browser/API
+ * verification persisted in SQLite. Environment variables may supply the
+ * credential itself, but cannot bypass that live check. */
+const DATABASE_ONLY_KEYS = new Set<string>(["E2B_ENABLED", "E2B_VERIFIED_AT"]);
 
 /**
  * One-shot re-encryption pass at module init. Finds any row whose key is
@@ -148,23 +159,47 @@ export function getInstanceSetting(
 ): string | undefined {
   const v = readDbValue(key)?.trim();
   if (v) return v;
+  if (DATABASE_ONLY_KEYS.has(key)) return fallback;
   const envValue = process.env[envKey ?? key]?.trim();
   if (envValue) return envValue;
   return fallback;
 }
 
 export function setInstanceSetting(key: SettableKey, value: string | null): void {
-  if (value === null || value === "") {
-    rawSqlite.prepare("DELETE FROM instance_settings WHERE key = ?").run(key);
-    return;
-  }
-  const stored = SECRET_KEYS.has(key) ? encryptSecret(value) : value;
-  rawSqlite
-    .prepare(
-      `INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    )
-    .run(key, stored, Date.now());
+  setInstanceSettingsAtomically([{ key, value }]);
+}
+
+/**
+ * Apply related settings as one SQLite transaction. Secret encryption is
+ * completed before the transaction starts, so an encryption failure cannot
+ * leave half of a credential bundle persisted.
+ */
+export function setInstanceSettingsAtomically(
+  writes: ReadonlyArray<{ key: SettableKey; value: string | null }>,
+): void {
+  const now = Date.now();
+  const prepared = writes.map(({ key, value }) => ({
+    key,
+    stored:
+      value === null || value === "" ? null : SECRET_KEYS.has(key) ? encryptSecret(value) : value,
+  }));
+  const apply = rawSqlite.transaction(
+    (items: ReadonlyArray<{ key: SettableKey; stored: string | null }>) => {
+      const remove = rawSqlite.prepare("DELETE FROM instance_settings WHERE key = ?");
+      const upsert = rawSqlite.prepare(
+        `INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      );
+      for (const { key, stored } of items) {
+        if (stored === null) {
+          remove.run(key);
+        } else {
+          upsert.run(key, stored, now);
+        }
+      }
+    },
+  );
+  apply(prepared);
 }
 
 /**
@@ -209,13 +244,17 @@ export function getSetupStatus(): {
   const out: Record<string, { set: boolean; source: "db" | "env" | "none"; value?: string }> = {};
   for (const key of SETTABLE_KEYS) {
     const dbVal = readDbValue(key)?.trim() || undefined;
-    const envVal = process.env[key]?.trim();
+    const envVal = DATABASE_ONLY_KEYS.has(key) ? undefined : process.env[key]?.trim();
     const source: "db" | "env" | "none" = dbVal ? "db" : envVal ? "env" : "none";
     const set = Boolean(dbVal || envVal);
     const rawValue = dbVal ?? envVal;
     let value: string | undefined;
     if (rawValue !== undefined) {
-      if (SECRET_KEYS.has(key)) {
+      if (key === "E2B_API_KEY") {
+        // Do not return even a suffix of the E2B credential. The UI only
+        // needs the set/source flags to offer keep, replace, and reset.
+        value = undefined;
+      } else if (SECRET_KEYS.has(key)) {
         // Mask: show only last 4 chars
         value = rawValue.length > 6 ? `${"•".repeat(8)}${rawValue.slice(-4)}` : "••••";
       } else {
@@ -227,6 +266,15 @@ export function getSetupStatus(): {
   // Core runtime values that gate the wizard
   const missing: string[] = [];
   if (!out.ANTHROPIC_API_KEY.set) missing.push("ANTHROPIC_API_KEY");
+  const e2bVerifiedAt = out.E2B_VERIFIED_AT.value;
+  if (
+    !out.E2B_API_KEY.set ||
+    out.E2B_ENABLED.value !== "true" ||
+    !e2bVerifiedAt ||
+    Number.isNaN(Date.parse(e2bVerifiedAt))
+  ) {
+    missing.push("E2B");
+  }
   // GitHub App is mandatory, no PAT fallback.
   if (!out.GITHUB_APP_ID.set || !out.GITHUB_APP_PRIVATE_KEY.set) {
     missing.push("GITHUB_APP");

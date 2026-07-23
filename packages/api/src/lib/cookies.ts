@@ -9,3 +9,11 @@ export function shouldUseSecureCookies(): boolean {
     return false;
   }
 }
+
+/**
+ * Protect control-plane cookies from sibling preview subdomains. Browsers only
+ * accept `__Host-` cookies when they are Secure, Path=/, and have no Domain.
+ */
+export function controlPlaneCookieName(baseName: string): string {
+  return shouldUseSecureCookies() ? `__Host-${baseName}` : baseName;
+}

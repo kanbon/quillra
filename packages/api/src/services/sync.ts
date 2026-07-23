@@ -185,11 +185,6 @@ export async function getSyncStatus(projectId: string): Promise<SyncStatus> {
 
 type GitActor = { name: string; email: string };
 
-async function configureGitActor(g: ReturnType<typeof simpleGitForProject>, actor: GitActor) {
-  await g.addConfig("user.name", actor.name);
-  await g.addConfig("user.email", actor.email);
-}
-
 /**
  * Fast-forward silently when the working tree is clean. Used after a
  * behind-no-local-changes sync status.
@@ -265,8 +260,7 @@ export async function mergeRemote(projectId: string, actor: GitActor): Promise<M
     p.id,
     async () => {
       const networkGit = await authenticatedGitForProject(p.id, repoPath, p.githubRepoFullName);
-      const g = simpleGitForProject(repoPath);
-      await configureGitActor(g, actor);
+      const g = simpleGitForProject(repoPath, actor);
       await networkGit.fetch("origin", p.defaultBranch);
 
       const remoteRef = `origin/${p.defaultBranch}`;

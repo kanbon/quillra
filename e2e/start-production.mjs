@@ -102,6 +102,8 @@ Object.assign(appEnvironment, {
   BETTER_AUTH_SECRET: "quillra-e2e-session-secret-not-for-production",
   QUILLRA_ENCRYPTION_KEY: "ab".repeat(32),
   QUILLRA_SETUP_TOKEN: "quillra-e2e-setup-token",
+  QUILLRA_E2E_SEED_E2B: "1",
+  E2B_API_KEY: "e2b_playwright_fixture_not_a_real_key",
   EMAIL_PROVIDER: "none",
   GITHUB_APP_ID: "1000001",
   GITHUB_APP_SLUG: "quillra-e2e",
@@ -120,7 +122,13 @@ function cleanup() {
 
 const api = spawn(
   process.execPath,
-  ["--import", "./e2e/github-fetch-mock.mjs", "packages/api/dist/index.js"],
+  [
+    "--import",
+    "./e2e/seed-e2b-settings.mjs",
+    "--import",
+    "./e2e/github-fetch-mock.mjs",
+    "packages/api/dist/index.js",
+  ],
   {
     cwd: repoRoot,
     env: appEnvironment,

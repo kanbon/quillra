@@ -5,6 +5,7 @@ import { instanceInvites } from "../db/app-schema.js";
 import { type InstanceRole, user } from "../db/auth-schema.js";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
+import { shouldUseSecureCookies } from "./cookies.js";
 import { emailEquals, normalizeEmail } from "./email.js";
 import { findValidPendingInstanceInvite } from "./instance-invites.js";
 
@@ -19,8 +20,8 @@ function trustedOrigins(): string[] {
 }
 
 // `BETTER_AUTH_SECRET` is guaranteed to be populated by the time this
-// module loads: lib/boot-secrets.ts runs as the first side-effect
-// import in index.ts and either passes through the env value or
+// module loads: lib/boot-secrets.ts runs in index.ts before auth is imported
+// and either passes through the env value or
 // generates a persisted dev secret on disk. Refusing to fall back to a
 // well-known placeholder is intentional, "everyone in the world has
 // the same signing key" is a worse default than a loud failure.
@@ -30,6 +31,7 @@ if (!betterAuthSecret) {
     "BETTER_AUTH_SECRET is empty after boot-secrets ran. Set it in the environment, or check the [boot-secrets] log line on startup for the file path that should hold the persisted dev secret.",
   );
 }
+const secureAuthCookies = shouldUseSecureCookies();
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -40,6 +42,21 @@ export const auth = betterAuth({
   secret: betterAuthSecret,
   baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
   trustedOrigins: trustedOrigins(),
+  advanced: {
+    // Better Auth normally prepends `__Secure-`, which still permits a sibling
+    // preview subdomain to cookie-toss a Domain cookie with the same name.
+    // Disabling that automatic prefix and supplying our own production
+    // `__Host-` prefix protects every Better Auth cookie: browsers require
+    // Secure, Path=/, and no Domain for these names.
+    useSecureCookies: false,
+    cookiePrefix: secureAuthCookies ? "__Host-quillra" : "better-auth",
+    defaultCookieAttributes: {
+      secure: secureAuthCookies,
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+    },
+  },
   account: {
     // Better Auth's own social-login tokens are not used for repository
     // access, but they are still credentials and must not sit in SQLite as

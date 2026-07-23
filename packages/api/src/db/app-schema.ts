@@ -88,6 +88,30 @@ export const projects = sqliteTable("projects", {
 });
 
 /**
+ * Durable E2B allocation for a project. The project id is the primary key so a
+ * Quillra instance can never persist two sandboxes for the same project.
+ * Binding generations prevent an old repository sandbox from surviving a
+ * repository rebind.
+ */
+export const projectSandboxes = sqliteTable("project_sandboxes", {
+  projectId: text("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  sandboxId: text("sandbox_id").notNull().unique(),
+  githubBindingGeneration: integer("github_binding_generation").notNull(),
+  templateId: text("template_id").notNull(),
+  previewPid: integer("preview_pid"),
+  previewPort: integer("preview_port"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .$onUpdate(() => new Date())
+    .notNull(),
+});
+
+/**
  * One-time, user-bound GitHub App OAuth handshakes. Only a hash of the state
  * value is persisted; the PKCE verifier is encrypted at rest.
  */

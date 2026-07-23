@@ -26,6 +26,8 @@ import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
 
 const FILE_TOOLS = new Set(["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep"]);
+const EXECUTION_BASH_TOOL = "mcp__quillra-execution__bash";
+const PROMOTE_ATTACHMENT_TOOL = "mcp__quillra-execution__promote_attachment";
 
 function isInside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
@@ -147,6 +149,17 @@ function editorBlockedPath(filePath: string): boolean {
   );
 }
 
+/**
+ * Git metadata is control-plane state, not project content. Letting an agent
+ * edit `.git/config`, hooks, attributes, or refs would turn a later trusted
+ * publish/fetch into a code-execution primitive inside the Quillra container.
+ * This boundary applies even to admins and migration runs.
+ */
+function isGitMetadataPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  return normalized === ".git" || normalized.startsWith(".git/");
+}
+
 export function buildCanUseTool(
   role: ProjectRole,
   opts: { workspaceRoot: string; migrationMode?: boolean },
@@ -172,26 +185,43 @@ export function buildCanUseTool(
       };
     }
 
-    // Migration mode: bypass every role rule after the file-tool workspace
-    // boundary above. The migration
-    // agent has to delete old build configs, remove lockfiles, blow
-    // away source trees, rewrite package.json, and run arbitrary
-    // commands. The user is locked out of the composer while this
-    // runs (isMigratingToAstro flag in the Editor). The project-level
-    // authorization to kick this off happened at project creation, and the
-    // WebSocket handler enables this mode only for a current project admin.
+    if (
+      FILE_TOOLS.has(toolName) &&
+      typeof canonicalFilePath === "string" &&
+      isGitMetadataPath(canonicalFilePath)
+    ) {
+      return {
+        behavior: "deny",
+        message: "Git metadata is managed by Quillra.",
+        toolUseID: id,
+      };
+    }
+
+    // Migration mode needs broad file writes and remote shell execution, but
+    // still fails closed for every unknown/built-in tool. Bash is an alias for
+    // the project-scoped E2B MCP tool, never the SDK's local shell.
     if (opts.migrationMode) {
-      return { behavior: "allow", toolUseID: id };
+      if (
+        FILE_TOOLS.has(toolName) ||
+        toolName === EXECUTION_BASH_TOOL ||
+        toolName === PROMOTE_ATTACHMENT_TOOL ||
+        toolName.startsWith("mcp__quillra-diagnostics__")
+      ) {
+        return { behavior: "allow", toolUseID: id };
+      }
+      return { behavior: "deny", message: "Tool not allowed for migration.", toolUseID: id };
     }
 
     if (role === "admin") {
-      // Admins have full control of their own project workspace, every
-      // tool, every command, no paternalistic blocks. File tools remain
-      // confined above and the per-project clone is git-backed. Recovering
-      // from a broken install often means
-      // `rm -rf node_modules` and we shouldn't be the thing standing in
-      // the way.
-      return { behavior: "allow", toolUseID: id };
+      if (
+        FILE_TOOLS.has(toolName) ||
+        toolName === EXECUTION_BASH_TOOL ||
+        toolName === PROMOTE_ATTACHMENT_TOOL ||
+        toolName.startsWith("mcp__quillra-diagnostics__")
+      ) {
+        return { behavior: "allow", toolUseID: id };
+      }
+      return { behavior: "deny", message: "Tool not allowed for admins.", toolUseID: id };
     }
 
     if (role === "editor") {
@@ -199,6 +229,9 @@ export function buildCanUseTool(
       // restart). Editors are trusted enough to debug their own dev
       // server without jumping to admin.
       if (toolName.startsWith("mcp__quillra-diagnostics__")) {
+        return { behavior: "allow", toolUseID: id };
+      }
+      if (toolName === PROMOTE_ATTACHMENT_TOOL) {
         return { behavior: "allow", toolUseID: id };
       }
       if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
@@ -223,6 +256,9 @@ export function buildCanUseTool(
       // files (text/markdown/json) and image assets. No code, no config,
       // no shell, no git.
       if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
+        return { behavior: "allow", toolUseID: id };
+      }
+      if (toolName === PROMOTE_ATTACHMENT_TOOL) {
         return { behavior: "allow", toolUseID: id };
       }
       if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {

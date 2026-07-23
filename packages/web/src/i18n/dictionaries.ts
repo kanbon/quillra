@@ -304,6 +304,7 @@ const enDict = {
       aria: "{label}, step {current} of {total}",
       labelWelcome: "Welcome",
       labelAnthropic: "Anthropic",
+      labelSecureExecution: "Secure execution",
       labelGithubApp: "GitHub App",
       labelEmail: "Email",
       labelOrganization: "Organization",
@@ -333,9 +334,11 @@ const enDict = {
     welcome: {
       title: "Welcome to Quillra",
       body:
-        "A few short steps get this instance running. You'll connect Claude for the AI editor, install a GitHub App so Quillra can push to your repos, and create the owner account. Email delivery is optional for solo use and required before inviting other people.",
+        "A few short steps get this instance running. You'll connect Claude and isolated E2B sandboxes, install a GitHub App, and create the owner account. Email delivery is optional for solo use.",
       anthropicTitle: "Anthropic API key",
       anthropicBody: "Powers the chat-based editor",
+      secureExecutionTitle: "Isolated code execution",
+      secureExecutionBody: "Keeps project processes outside the Quillra container",
       githubTitle: "GitHub App",
       githubBody: "Scoped access to the repos you pick. Revoke anytime.",
       emailTitle: "Email delivery",
@@ -351,6 +354,29 @@ const enDict = {
       apiKeyLabel: "API key",
       configuredHelp:
         "A key is already configured. Leave this blank to keep it, or enter a replacement.",
+    },
+    secureExecution: {
+      title: "Secure code execution",
+      intro:
+        "E2B runs project dependencies, builds, and preview processes in isolated cloud sandboxes instead of inside the Quillra container.",
+      appLabel: "Application",
+      codeLabel: "Project code",
+      sandboxLabel: "E2B sandbox",
+      apiKeyLabel: "E2B API key",
+      keyHelp: "Quillra creates one short-lived sandbox now to verify the key.",
+      configuredHelp:
+        "A key is configured and never returned to the browser. Leave this blank to keep it.",
+      openE2b: "Open E2B",
+      templateLabel: "Template ID",
+      templateHelp: "Leave blank to use E2B's base template.",
+      enabled: "Secure execution is enabled.",
+      verifiedAt: "Secure execution verified {date}.",
+      requiredWarning:
+        "Secure execution is required. Quillra will not run untrusted project code in its own application container.",
+      keyRequired: "Enter an E2B API key to continue.",
+      verifying: "Creating test sandbox…",
+      verifyAndEnable: "Verify and enable",
+      verifyFailed: "E2B could not be verified.",
     },
     github: {
       title: "GitHub App",
@@ -731,6 +757,31 @@ const enDict = {
     testEmailFailed: "Could not send",
     saveBeforeTest: "Save your changes first, then send a test.",
     // Integrations tab
+    e2bTitle: "Secure execution with E2B",
+    e2bIntro:
+      "Project code runs in isolated E2B sandboxes. Quillra verifies new credentials before enabling them and never falls back to local execution.",
+    e2bActive: "Active",
+    e2bDisabled: "Disabled",
+    e2bApiKey: "E2B API key",
+    e2bApiKeyHelp: "Encrypted at rest and never returned to the browser.",
+    e2bOpenDashboard: "Open E2B dashboard →",
+    e2bTemplate: "Template ID · optional",
+    e2bTemplateHelp: "Leave blank for E2B's base template.",
+    e2bVerifiedAt: "Last verified {date}.",
+    e2bEnabledUnverified: "Enabled through server configuration; run verification to confirm it.",
+    e2bDisabledWarning:
+      "Project code execution is unavailable while E2B is disabled. There is no local container fallback.",
+    e2bVerifying: "Creating test sandbox…",
+    e2bVerifyAndSave: "Verify and save",
+    e2bVerified: "E2B verified and enabled.",
+    e2bVerificationFailed: "E2B could not be verified.",
+    e2bKeyRequired: "Enter an E2B API key.",
+    e2bReset: "Reset E2B",
+    e2bResetConfirm:
+      "Disable E2B and remove the stored credential? Active project sandboxes will be stopped first.",
+    e2bResetDone:
+      "E2B disabled. Database credentials were removed; environment-managed keys must be removed from the deployment separately.",
+    e2bResetFailed: "E2B could not be reset.",
     ghAppTitle: "GitHub App",
     ghAppIntro: "This is the App that actually commits. Installation tokens rotate hourly, no personal credentials involved.",
     ghAppActive: "Active",
@@ -1078,6 +1129,7 @@ export const de: Mirror<Dictionary> = {
       aria: "{label}, Schritt {current} von {total}",
       labelWelcome: "Willkommen",
       labelAnthropic: "Anthropic",
+      labelSecureExecution: "Sichere Ausführung",
       labelGithubApp: "GitHub App",
       labelEmail: "E-Mail",
       labelOrganization: "Organisation",
@@ -1107,9 +1159,11 @@ export const de: Mirror<Dictionary> = {
     welcome: {
       title: "Willkommen bei Quillra",
       body:
-        "In wenigen Schritten ist diese Instanz einsatzbereit. Sie verbinden Claude für den KI-Editor, installieren eine GitHub App, damit Quillra Änderungen in Ihre Repositories übertragen kann, und erstellen das Inhaberkonto. Für die alleinige Nutzung ist der E-Mail-Versand optional; vor Einladungen ist er erforderlich.",
+        "In wenigen Schritten ist diese Instanz einsatzbereit. Sie verbinden Claude und isolierte E2B-Sandboxes, installieren eine GitHub App und erstellen das Inhaberkonto. Für die alleinige Nutzung ist der E-Mail-Versand optional.",
       anthropicTitle: "Anthropic-API-Schlüssel",
       anthropicBody: "Ermöglicht den chatbasierten Editor",
+      secureExecutionTitle: "Isolierte Code-Ausführung",
+      secureExecutionBody: "Hält Projektprozesse aus dem Quillra-Container fern",
       githubTitle: "GitHub App",
       githubBody: "Beschränkter Zugriff auf ausgewählte Repositories. Jederzeit widerrufbar.",
       emailTitle: "E-Mail-Versand",
@@ -1125,6 +1179,29 @@ export const de: Mirror<Dictionary> = {
       apiKeyLabel: "API-Schlüssel",
       configuredHelp:
         "Ein Schlüssel ist bereits konfiguriert. Lassen Sie das Feld leer, um ihn beizubehalten, oder geben Sie einen neuen ein.",
+    },
+    secureExecution: {
+      title: "Sichere Code-Ausführung",
+      intro:
+        "E2B führt Projektabhängigkeiten, Builds und Vorschauprozesse in isolierten Cloud-Sandboxes statt im Quillra-Container aus.",
+      appLabel: "Anwendung",
+      codeLabel: "Projektcode",
+      sandboxLabel: "E2B-Sandbox",
+      apiKeyLabel: "E2B-API-Schlüssel",
+      keyHelp: "Quillra erstellt jetzt eine kurzlebige Sandbox, um den Schlüssel zu prüfen.",
+      configuredHelp:
+        "Ein Schlüssel ist konfiguriert und wird nie an den Browser zurückgegeben. Lassen Sie das Feld leer, um ihn beizubehalten.",
+      openE2b: "E2B öffnen",
+      templateLabel: "Template-ID",
+      templateHelp: "Leer lassen, um das Base-Template von E2B zu verwenden.",
+      enabled: "Sichere Ausführung ist aktiviert.",
+      verifiedAt: "Sichere Ausführung am {date} geprüft.",
+      requiredWarning:
+        "Sichere Ausführung ist erforderlich. Quillra führt nicht vertrauenswürdigen Projektcode nicht im eigenen Anwendungscontainer aus.",
+      keyRequired: "Geben Sie einen E2B-API-Schlüssel ein, um fortzufahren.",
+      verifying: "Test-Sandbox wird erstellt…",
+      verifyAndEnable: "Prüfen und aktivieren",
+      verifyFailed: "E2B konnte nicht geprüft werden.",
     },
     github: {
       title: "GitHub App",
@@ -1507,6 +1584,32 @@ export const de: Mirror<Dictionary> = {
     testEmailSent: "Test-E-Mail gesendet. Prüfen Sie Ihren Posteingang (oder Spam).",
     testEmailFailed: "Versand fehlgeschlagen",
     saveBeforeTest: "Bitte zuerst Änderungen speichern, dann testen.",
+    e2bTitle: "Sichere Ausführung mit E2B",
+    e2bIntro:
+      "Projektcode läuft in isolierten E2B-Sandboxes. Quillra prüft neue Zugangsdaten vor der Aktivierung und fällt nie auf lokale Ausführung zurück.",
+    e2bActive: "Aktiv",
+    e2bDisabled: "Deaktiviert",
+    e2bApiKey: "E2B-API-Schlüssel",
+    e2bApiKeyHelp: "Verschlüsselt gespeichert und nie an den Browser zurückgegeben.",
+    e2bOpenDashboard: "E2B-Dashboard öffnen →",
+    e2bTemplate: "Template-ID · optional",
+    e2bTemplateHelp: "Leer lassen für das Base-Template von E2B.",
+    e2bVerifiedAt: "Zuletzt geprüft: {date}.",
+    e2bEnabledUnverified:
+      "Über die Serverkonfiguration aktiviert; führen Sie die Prüfung zur Bestätigung aus.",
+    e2bDisabledWarning:
+      "Solange E2B deaktiviert ist, ist die Ausführung von Projektcode nicht verfügbar. Es gibt keinen lokalen Container-Fallback.",
+    e2bVerifying: "Test-Sandbox wird erstellt…",
+    e2bVerifyAndSave: "Prüfen und speichern",
+    e2bVerified: "E2B wurde geprüft und aktiviert.",
+    e2bVerificationFailed: "E2B konnte nicht geprüft werden.",
+    e2bKeyRequired: "Geben Sie einen E2B-API-Schlüssel ein.",
+    e2bReset: "E2B zurücksetzen",
+    e2bResetConfirm:
+      "E2B deaktivieren und den gespeicherten Schlüssel entfernen? Aktive Projekt-Sandboxes werden vorher beendet.",
+    e2bResetDone:
+      "E2B deaktiviert. Zugangsdaten aus der Datenbank wurden entfernt; umgebungsverwaltete Schlüssel müssen separat aus dem Deployment entfernt werden.",
+    e2bResetFailed: "E2B konnte nicht zurückgesetzt werden.",
     ghAppTitle: "GitHub App",
     ghAppIntro: "Diese App committet Ihre Änderungen. Installations-Tokens rotieren stündlich, keine persönlichen Zugangsdaten.",
     ghAppActive: "Aktiv",

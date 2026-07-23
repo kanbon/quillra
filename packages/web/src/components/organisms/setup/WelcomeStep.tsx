@@ -1,7 +1,7 @@
 /**
  * Welcome step: intro screen that lists what the wizard will collect
- * (Anthropic key, GitHub App, optional email delivery, owner account) and
- * hands the user off to the Anthropic step via a single CTA. Owns no values.
+ * (Anthropic key, E2B isolation, GitHub App, optional email
+ * delivery, owner account) and hands the user off to the Anthropic step.
  */
 export function WelcomeStep({ onNext }: { onNext: () => void }) {
   const { t } = useT();
@@ -38,6 +38,29 @@ export function WelcomeStep({ onNext }: { onNext: () => void }) {
               {t("setup.welcome.anthropicTitle")}
             </p>
             <p className="text-[12px] text-neutral-500">{t("setup.welcome.anthropicBody")}</p>
+          </div>
+        </li>
+        <li className="flex items-center gap-3 px-4 py-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-sky-700 ring-1 ring-sky-200">
+            <svg
+              className="h-4 w-4"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3 4.5 6v5.4c0 4.6 3.1 8 7.5 9.6 4.4-1.6 7.5-5 7.5-9.6V6L12 3Z" />
+              <path d="m9.5 12 1.7 1.7 3.5-4" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold text-neutral-900">
+              {t("setup.welcome.secureExecutionTitle")}
+            </p>
+            <p className="text-[12px] text-neutral-500">{t("setup.welcome.secureExecutionBody")}</p>
           </div>
         </li>
         <li className="flex items-center gap-3 px-4 py-3">

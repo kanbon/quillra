@@ -4,6 +4,7 @@ import { useT } from "@/i18n/i18n";
 const STEP_LABEL_KEYS: Record<Step, string> = {
   welcome: "setup.progress.labelWelcome",
   anthropic: "setup.progress.labelAnthropic",
+  secureExecution: "setup.progress.labelSecureExecution",
   githubApp: "setup.progress.labelGithubApp",
   email: "setup.progress.labelEmail",
   organization: "setup.progress.labelOrganization",

@@ -9,7 +9,11 @@ import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { issuePreviewCapability, revokePreviewCapability } from "./preview-capability.js";
+import {
+  issuePreviewCapability,
+  issuePreviewHandoff,
+  revokePreviewCapability,
+} from "./preview-capability.js";
 import {
   PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
   type PreviewGatewayEnv,
@@ -18,6 +22,7 @@ import {
 import {
   PREVIEW_ACCESS_QUERY,
   getPreviewOriginConfig,
+  previewHostAuthorityForProject,
   previewHostnameForProject,
 } from "./preview-origin.js";
 import {
@@ -25,8 +30,14 @@ import {
   registerPreviewPort,
   unregisterPreviewPort,
 } from "./preview-status.js";
+import {
+  E2B_TRAFFIC_ACCESS_HEADER,
+  registerLoopbackPreviewUpstreamForTests,
+  unregisterPreviewUpstream,
+} from "./preview-upstream.js";
 
 const PROJECT_ID = "preview-gateway-integration";
+const TRAFFIC_ACCESS_TOKEN = "preview-gateway-upstream-token";
 const ENVIRONMENT = {
   BETTER_AUTH_SECRET: "preview-gateway-integration-secret",
   BETTER_AUTH_URL: "http://localhost",
@@ -58,6 +69,7 @@ let upstreamPort: number;
 let gatewayPort: number;
 let previewHost: string;
 let capability: ReturnType<typeof issuePreviewCapability>;
+let handoff: ReturnType<typeof issuePreviewHandoff>;
 let upstreamRequests: UpstreamRequest[] = [];
 let webSocketUpgrades: WebSocketUpgrade[] = [];
 
@@ -135,11 +147,11 @@ function gatewayFetch(
 async function acquireAccessCookie(extraQuery = ""): Promise<string> {
   const separator = extraQuery ? "&" : "";
   const response = await gatewayFetch(
-    `/?${PREVIEW_ACCESS_QUERY}=${encodeURIComponent(capability.token)}${separator}${extraQuery}`,
+    `/?${PREVIEW_ACCESS_QUERY}=${encodeURIComponent(handoff.token)}${separator}${extraQuery}`,
   );
   expect(response.status).toBe(302);
   expect(response.headers.get("location")).toBe(extraQuery ? `/?${extraQuery}` : "/");
-  expect(response.headers.get("location")).not.toContain(capability.token);
+  expect(response.headers.get("location")).not.toContain(handoff.token);
   expect(upstreamRequests).toHaveLength(0);
   const setCookie = response.headers.get("set-cookie");
   expect(setCookie).toContain("__Host-quillra_preview=");
@@ -247,10 +259,21 @@ beforeAll(async () => {
 beforeEach(() => {
   upstreamRequests = [];
   webSocketUpgrades = [];
+  registerLoopbackPreviewUpstreamForTests(PROJECT_ID, upstreamPort, {
+    origin: `http://127.0.0.1:${upstreamPort}`,
+    headers: { [E2B_TRAFFIC_ACCESS_HEADER]: TRAFFIC_ACCESS_TOKEN },
+  });
   if (!registerPreviewPort(upstreamPort, PROJECT_ID)) {
     throw new Error("Unable to reserve the upstream fixture port");
   }
   capability = issuePreviewCapability(PROJECT_ID, upstreamPort);
+  const config = getPreviewOriginConfig(ENVIRONMENT);
+  if (!config) throw new Error("Expected localhost preview configuration");
+  handoff = issuePreviewHandoff(
+    PROJECT_ID,
+    upstreamPort,
+    previewHostAuthorityForProject(PROJECT_ID, config, ENVIRONMENT),
+  );
   if (!markPreviewPortActive(PROJECT_ID, upstreamPort)) {
     throw new Error("Unable to activate the upstream fixture port");
   }
@@ -259,6 +282,7 @@ beforeEach(() => {
 afterEach(() => {
   revokePreviewCapability(PROJECT_ID);
   unregisterPreviewPort(PROJECT_ID, upstreamPort);
+  unregisterPreviewUpstream(PROJECT_ID, upstreamPort);
 });
 
 afterAll(async () => {
@@ -270,8 +294,20 @@ afterAll(async () => {
 describe("host preview gateway integration", () => {
   it("exchanges the query capability for a private cookie without touching upstream", async () => {
     const cookie = await acquireAccessCookie("view=wide");
+    const cookieToken = cookie.split("=", 2)[1] ?? "";
 
     expect(cookie).toMatch(/^__Host-quillra_preview=[A-Za-z0-9_-]{32}$/);
+    expect(cookieToken).not.toBe(handoff.token);
+    expect(cookieToken).not.toBe(capability.token);
+
+    const replay = await gatewayFetch(
+      `/?${PREVIEW_ACCESS_QUERY}=${encodeURIComponent(handoff.token)}&view=wide`,
+      { headers: { cookie } },
+    );
+    expect(replay.status).toBe(404);
+    expect(replay.headers.get("set-cookie")).toBeNull();
+    expect(upstreamRequests).toHaveLength(0);
+
     const response = await gatewayFetch("/", {
       headers: { cookie },
     });
@@ -281,6 +317,32 @@ describe("host preview gateway integration", () => {
     expect(await response.text()).toContain('data-path="/"');
     expect(upstreamRequests).toHaveLength(1);
     expect(requestFor("/").headers.cookie).toBeUndefined();
+    expect(requestFor("/").headers[E2B_TRAFFIC_ACCESS_HEADER]).toBe(TRAFFIC_ACCESS_TOKEN);
+  });
+
+  it("never accepts a handoff or path capability as the host session cookie", async () => {
+    const handoffCookie = `__Host-quillra_preview=${handoff.token}`;
+    const capabilityCookie = `__Host-quillra_preview=${capability.token}`;
+
+    expect(
+      await gatewayFetch("/", { headers: { cookie: handoffCookie } }).then(
+        (response) => response.status,
+      ),
+    ).toBe(404);
+    expect(
+      await gatewayFetch("/", { headers: { cookie: capabilityCookie } }).then(
+        (response) => response.status,
+      ),
+    ).toBe(404);
+    expect(
+      await gatewayFetch(`/?${PREVIEW_ACCESS_QUERY}=${encodeURIComponent(capability.token)}`).then(
+        (response) => response.status,
+      ),
+    ).toBe(404);
+    expect(upstreamRequests).toHaveLength(0);
+
+    // Cookie misuse does not consume the real one-time query handoff.
+    expect(await acquireAccessCookie()).toMatch(/^__Host-quillra_preview=/);
   });
 
   it("forwards native root, deep, asset, and API paths and keeps bodies unmodified", async () => {

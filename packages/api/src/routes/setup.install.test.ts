@@ -1,7 +1,9 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionUser } from "../lib/auth.js";
 
 const EXPECTED_TABLES = [
   "account",
@@ -17,6 +19,7 @@ const EXPECTED_TABLES = [
   "project_groups",
   "project_invites",
   "project_members",
+  "project_sandboxes",
   "projects",
   "role_permission_prompts",
   "session",
@@ -103,6 +106,56 @@ afterEach(() => {
 });
 
 describe("first-install database bootstrap", () => {
+  it("does not let a project-scoped client session inherit setup-owner access", async () => {
+    const { setupRouter, rawSqlite } = await loadSetupRuntime();
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO user
+           (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, 'owner', ?, ?)`,
+      )
+      .run("owner-1", "Owner", "owner@example.com", now, now);
+
+    const app = new Hono<{
+      Variables: {
+        user: SessionUser | null;
+        clientSession: { projectId: string } | null;
+      };
+    }>();
+    app.use("*", async (c, next) => {
+      c.set("user", {
+        id: "owner-1",
+        name: "Owner",
+        email: "owner@example.com",
+      } as SessionUser);
+      c.set("clientSession", { projectId: "project-1" });
+      await next();
+    });
+    app.route("/", setupRouter);
+
+    const status = await app.request("/status");
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toEqual({
+      needsSetup: true,
+      needsOwner: false,
+      access: "owner-required",
+    });
+
+    const save = await app.request("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: { ANTHROPIC_API_KEY: "must-not-be-written" } }),
+    });
+    expect(save.status).toBe(403);
+    await expect(save.json()).resolves.toEqual({ error: "Owner only" });
+    expect(
+      rawSqlite
+        .prepare("SELECT value FROM instance_settings WHERE key = 'ANTHROPIC_API_KEY'")
+        .get(),
+    ).toBeUndefined();
+  });
+
   it("creates the complete schema and serves the setup API from an empty database", async () => {
     expect(existsSync(databasePath)).toBe(false);
 
@@ -140,7 +193,7 @@ describe("first-install database bootstrap", () => {
       needsSetup: true,
       needsOwner: true,
       access: "granted",
-      missing: ["ANTHROPIC_API_KEY", "GITHUB_APP", "__owner"],
+      missing: ["ANTHROPIC_API_KEY", "E2B", "GITHUB_APP", "__owner"],
     });
 
     const saveResponse = await setupRouter.request("/save", {

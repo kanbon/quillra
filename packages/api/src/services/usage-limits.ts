@@ -105,6 +105,7 @@ export async function shouldBlockRun(
   userId: string,
   roleInProject: ProjectRole,
   now: Date = new Date(),
+  options: { allowOwnerExemption?: boolean } = {},
 ): Promise<{ blocked: boolean; limits: EffectiveLimits; spend: number }> {
   const limits = getEffectiveLimits(userId, roleInProject);
   const spend = getMonthToDateSpend(userId, now);
@@ -113,14 +114,18 @@ export async function shouldBlockRun(
     return { blocked: false, limits, spend };
   }
 
-  // Owner exemption, never lock the operator out of their own instance.
-  const [u] = await db
-    .select({ instanceRole: user.instanceRole })
-    .from(user)
-    .where(eq(user.id, userId))
-    .limit(1);
-  if (u?.instanceRole === "owner") {
-    return { blocked: false, limits, spend };
+  // A global owner session can never lock the operator out of their instance.
+  // A project-scoped client session for that same user must not inherit this
+  // instance-wide privilege.
+  if (options.allowOwnerExemption !== false) {
+    const [u] = await db
+      .select({ instanceRole: user.instanceRole })
+      .from(user)
+      .where(eq(user.id, userId))
+      .limit(1);
+    if (u?.instanceRole === "owner") {
+      return { blocked: false, limits, spend };
+    }
   }
 
   return { blocked: spend >= limits.hardUsd, limits, spend };

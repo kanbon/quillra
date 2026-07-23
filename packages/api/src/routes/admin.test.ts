@@ -55,6 +55,43 @@ afterEach(() => {
 });
 
 describe("instance invites", () => {
+  it("does not let a project-scoped client session inherit the owner's global role", async () => {
+    vi.resetModules();
+    const { adminRouter } = await import("./admin.js");
+    const { rawSqlite } = await import("../db/index.js");
+    openDatabase = rawSqlite;
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO user
+           (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, 'owner', ?, ?)`,
+      )
+      .run("owner-1", "Owner", "owner@example.com", now, now);
+
+    const owner = {
+      id: "owner-1",
+      name: "Owner",
+      email: "owner@example.com",
+    } as SessionUser;
+    const app = new Hono<{
+      Variables: {
+        user: SessionUser | null;
+        clientSession: { projectId: string } | null;
+      };
+    }>();
+    app.use("*", async (c, next) => {
+      c.set("user", owner);
+      c.set("clientSession", { projectId: "project-1" });
+      await next();
+    });
+    app.route("/", adminRouter);
+
+    const response = await app.request("/members");
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Owner access required" });
+  });
+
   it("normalizes and refreshes a mixed-case invite without duplicating it", async () => {
     vi.resetModules();
     const { adminRouter } = await import("./admin.js");

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { shouldUseSecureCookies } from "./cookies.js";
+import { controlPlaneCookieName, shouldUseSecureCookies } from "./cookies.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -20,5 +20,12 @@ describe("cookie transport security", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("BETTER_AUTH_URL", "http://localhost:3000");
     expect(shouldUseSecureCookies()).toBe(false);
+    expect(controlPlaneCookieName("quillra_session")).toBe("quillra_session");
+  });
+
+  it("uses the browser-enforced __Host prefix for HTTPS control-plane cookies", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("BETTER_AUTH_URL", "https://cms.example.com");
+    expect(controlPlaneCookieName("quillra_session")).toBe("__Host-quillra_session");
   });
 });

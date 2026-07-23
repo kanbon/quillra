@@ -6,6 +6,7 @@ import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
 import { getPreviewStatus, isPreviewPortActive } from "../../services/preview-status.js";
+import { previewUpstreamUrl } from "../../services/preview-upstream.js";
 import {
   ensureRepoCloned,
   getPackageManager,
@@ -38,7 +39,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       });
       const { port, label } = await runInProjectLock(
         projectId,
-        () => startDevPreview(projectId, repoPath, p.previewDevCommand),
+        () => startDevPreview(projectId, repoPath, p.previewDevCommand, p.githubBindingGeneration),
         p,
       );
       const preview = getPreviewAddress(projectId, port);
@@ -182,9 +183,8 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const repoPath = projectRepoPath(projectId);
     const repoExists = fs.existsSync(repoPath);
     const pkgPath = path.join(repoPath, "package.json");
-    const nodeModulesPath = path.join(repoPath, "node_modules");
     const hasPackageJson = fs.existsSync(pkgPath);
-    const hasNodeModules = fs.existsSync(nodeModulesPath);
+    const hasNodeModules = null;
 
     let packageJsonScripts: Record<string, string> | null = null;
     let packageManager: string | null = null;
@@ -217,8 +217,11 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     // Probe the upstream dev server, short timeout so the modal is snappy
     type ProbeResult = { ok: boolean; status?: number; contentType?: string; error?: string };
     let probe: ProbeResult = { ok: false };
+    const upstream = previewUpstreamUrl(projectId, port, "/");
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/`, {
+      if (!upstream) throw new Error("Preview upstream is not registered.");
+      const res = await fetch(upstream.url, {
+        headers: upstream.headers,
         signal: AbortSignal.timeout(1500),
         redirect: "manual",
       });

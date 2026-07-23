@@ -4,6 +4,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cloneMock = vi.hoisted(() => vi.fn());
+const e2bRuntimeMock = vi.hoisted(() => ({
+  destroyProject: vi.fn(async () => undefined),
+  getPreviewAccess: vi.fn(async () => ({
+    origin: "https://preview.example.test",
+    headers: { "e2b-traffic-access-token": "test-preview-token" },
+  })),
+  runCommand: vi.fn(),
+  startPreview: vi.fn(async () => ({ pid: 42, port: 4321 })),
+  stopPreview: vi.fn(async () => undefined),
+}));
 
 vi.mock("simple-git", () => ({
   simpleGit: () => ({
@@ -25,6 +35,11 @@ vi.mock("./project-github-token.js", () => ({
   })),
 }));
 
+vi.mock("./e2b-runtime.js", () => ({
+  getDefaultE2BRuntime: () => e2bRuntimeMock,
+}));
+
+import { rawSqlite } from "../db/index.js";
 import {
   beginProjectWriterAuthorizationChange,
   cancelAndWaitForProjectWriters,
@@ -52,12 +67,17 @@ beforeEach(() => {
   tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "quillra-workspace-lifecycle-"));
   process.env.WORKSPACE_DIR = path.join(tempDirectory, "workspaces");
   cloneMock.mockReset();
+  for (const mock of Object.values(e2bRuntimeMock)) mock.mockClear();
 });
 
 afterEach(async () => {
   for (const projectId of cleanupProjectIds) {
     beginProjectDeletion(projectId);
     await removeDeletedProjectWorkspace(projectId).catch(() => undefined);
+  }
+  for (const projectId of cleanupProjectIds) {
+    rawSqlite.prepare("DELETE FROM project_sandboxes WHERE project_id = ?").run(projectId);
+    rawSqlite.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
   }
   cleanupProjectIds.clear();
   if (originalWorkspaceDirectory === undefined) {
@@ -67,6 +87,16 @@ afterEach(async () => {
   }
   fs.rmSync(tempDirectory, { recursive: true, force: true });
 });
+
+function ensureProjectRow(projectId: string): void {
+  rawSqlite
+    .prepare(
+      `INSERT OR IGNORE INTO projects
+         (id, name, github_repo_full_name, github_binding_generation, default_branch)
+       VALUES (?, ?, 'example/site', 1, 'main')`,
+    )
+    .run(projectId, projectId);
+}
 
 describe("project workspace lifecycle", () => {
   it("rejects cleanup paths that escape the managed workspace root", () => {
@@ -232,6 +262,7 @@ describe("project workspace lifecycle", () => {
   it("cancels and waits for an active locked writer before resetting its repository", async () => {
     const projectId = "agent-writer-reset";
     cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
     const repoPath = projectRepoPath(projectId);
     fs.mkdirSync(repoPath, { recursive: true });
     fs.writeFileSync(path.join(repoPath, "in-progress"), "agent output");
@@ -458,6 +489,7 @@ describe("project workspace lifecycle", () => {
   it("keeps writers blocked until every concurrent workspace reset has completed", async () => {
     const projectId = "concurrent-reset";
     cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
     const repoPath = projectRepoPath(projectId);
     fs.mkdirSync(repoPath, { recursive: true });
 
@@ -521,35 +553,24 @@ describe("project workspace lifecycle", () => {
     }
   });
 
-  it("force-stops a preview that keeps writing after SIGTERM before cleanup", async () => {
+  it("stops and destroys the remote preview before reset removes local files", async () => {
     const projectId = "busy-preview-delete";
     cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
     const repoPath = projectRepoPath(projectId);
     fs.mkdirSync(repoPath, { recursive: true });
-    const writerScript = path.join(tempDirectory, "writer.mjs");
-    fs.writeFileSync(
-      writerScript,
-      [
-        'import fs from "node:fs";',
-        'import path from "node:path";',
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {",
-        "  const dir = path.join(process.cwd(), 'node_modules', '.vite');",
-        "  fs.mkdirSync(dir, { recursive: true });",
-        "  fs.writeFileSync(path.join(dir, 'active'), String(Date.now()));",
-        "}, 5);",
-      ].join("\n"),
-    );
-    const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(writerScript)}`;
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
 
-    await startDevPreview(projectId, repoPath, command);
-    const activeMarker = path.join(repoPath, "node_modules", ".vite", "active");
-    await vi.waitFor(() => expect(fs.existsSync(activeMarker)).toBe(true), { timeout: 3_000 });
+    await startDevPreview(projectId, repoPath, "npm run dev");
+    expect(getPreviewProcessInfo(projectId).running).toBe(true);
+    await clearProjectRepoClone(projectId);
 
-    beginProjectDeletion(projectId);
-    await removeDeletedProjectWorkspace(projectId);
-
+    expect(e2bRuntimeMock.stopPreview).toHaveBeenCalled();
+    expect(e2bRuntimeMock.destroyProject).toHaveBeenCalledWith({
+      projectId,
+      githubBindingGeneration: 1,
+    });
     expect(getPreviewProcessInfo(projectId).running).toBe(false);
-    expect(fs.existsSync(path.dirname(repoPath))).toBe(false);
+    expect(fs.existsSync(repoPath)).toBe(false);
   });
 });

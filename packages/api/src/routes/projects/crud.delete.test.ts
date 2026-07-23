@@ -9,6 +9,7 @@ const workspaceMocks = vi.hoisted(() => ({
   beginProjectDeletion: vi.fn(),
   cancelProjectDeletion: vi.fn(),
   clearProjectRepoClone: vi.fn(),
+  destroyProjectExecution: vi.fn(),
   scheduleDeletedProjectWorkspaceCleanup: vi.fn(),
 }));
 
@@ -110,6 +111,7 @@ describe("project deletion", () => {
     const response = await app.request("/projects/project-1", { method: "DELETE" });
 
     expect(response.status).toBe(204);
+    expect(workspaceMocks.destroyProjectExecution).toHaveBeenCalledWith("project-1", 1);
     expect(rawSqlite.prepare("SELECT count(*) AS count FROM projects").get()).toEqual({ count: 0 });
     expect(workspaceMocks.scheduleDeletedProjectWorkspaceCleanup).toHaveBeenCalledWith("project-1");
   });
@@ -133,5 +135,21 @@ describe("project deletion", () => {
     expect(rawSqlite.prepare("SELECT count(*) AS count FROM project_members").get()).toEqual({
       count: 0,
     });
+  });
+
+  it("keeps the project row when the remote sandbox cannot be destroyed", async () => {
+    const { app, rawSqlite } = await createApp();
+    workspaceMocks.destroyProjectExecution.mockRejectedValue(
+      new Error("E2B sandbox destruction was not confirmed."),
+    );
+
+    const response = await app.request("/projects/project-1", { method: "DELETE" });
+
+    expect(response.status).toBe(500);
+    expect(workspaceMocks.cancelProjectDeletion).toHaveBeenCalledWith("project-1");
+    expect(rawSqlite.prepare("SELECT count(*) AS count FROM projects").get()).toEqual({
+      count: 1,
+    });
+    expect(workspaceMocks.scheduleDeletedProjectWorkspaceCleanup).not.toHaveBeenCalled();
   });
 });

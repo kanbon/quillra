@@ -12,7 +12,9 @@ function makeWorkspace(): string {
   fs.mkdirSync(path.join(root, "content"));
   fs.mkdirSync(path.join(root, "docs"));
   fs.mkdirSync(path.join(root, "src"));
+  fs.mkdirSync(path.join(root, ".git"));
   fs.writeFileSync(path.join(root, "content", "page.md"), "hello");
+  fs.writeFileSync(path.join(root, ".git", "config"), "[core]\n\thooksPath = /tmp/evil\n");
   fs.writeFileSync(path.join(root, "package.json"), "{}");
   fs.writeFileSync(path.join(root, "src", "index.ts"), "export {};");
   return root;
@@ -73,6 +75,19 @@ describe("buildCanUseTool workspace boundary", () => {
     ).resolves.toMatchObject({ behavior: "deny" });
   });
 
+  it.each(["admin", "editor", "client"] as const)(
+    "denies direct Git metadata access for the %s role",
+    async (role) => {
+      const root = makeWorkspace();
+      await expect(check(role, root, "Read", { file_path: ".git/config" })).resolves.toMatchObject({
+        behavior: "deny",
+      });
+      await expect(
+        check(role, root, "Write", { file_path: path.join(root, ".git", "config") }, true),
+      ).resolves.toMatchObject({ behavior: "deny" });
+    },
+  );
+
   it("applies editor path rules to notebook paths", async () => {
     const root = makeWorkspace();
     fs.writeFileSync(path.join(root, "src", "analysis.ipynb"), "{}");
@@ -125,7 +140,7 @@ describe("buildCanUseTool workspace boundary", () => {
     ).resolves.toMatchObject({ behavior: "deny" });
   });
 
-  it("removes general-purpose shell access from editors", async () => {
+  it("allows only the project-scoped E2B shell tool for admins and migrations", async () => {
     const root = makeWorkspace();
     for (const command of [
       "npm --version; cat /etc/passwd",
@@ -139,9 +154,35 @@ describe("buildCanUseTool workspace boundary", () => {
 
     await expect(
       check("admin", root, "Bash", { command: "node --version" }),
-    ).resolves.toMatchObject({ behavior: "allow" });
+    ).resolves.toMatchObject({ behavior: "deny" });
     await expect(
       check("editor", root, "Bash", { command: "node --version" }, true),
+    ).resolves.toMatchObject({ behavior: "deny" });
+    await expect(
+      check("admin", root, "mcp__quillra-execution__bash", {
+        command: "node --version",
+      }),
+    ).resolves.toMatchObject({ behavior: "allow" });
+    await expect(
+      check("editor", root, "mcp__quillra-execution__bash", { command: "node --version" }, true),
+    ).resolves.toMatchObject({ behavior: "allow" });
+    await expect(
+      check("client", root, "mcp__quillra-execution__bash", {
+        command: "node --version",
+      }),
+    ).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("fails closed for unknown tools while permitting attachment promotion", async () => {
+    const root = makeWorkspace();
+    await expect(check("admin", root, "FutureDangerousTool", {})).resolves.toMatchObject({
+      behavior: "deny",
+    });
+    await expect(
+      check("client", root, "mcp__quillra-execution__promote_attachment", {
+        source: ".quillra-temp/upload.png",
+        destination: "public/upload.png",
+      }),
     ).resolves.toMatchObject({ behavior: "allow" });
   });
 

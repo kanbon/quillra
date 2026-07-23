@@ -111,15 +111,21 @@ test("preview host preserves SPA routing, root assets, API calls, and Vite HMR",
   const state = (await (
     await request.get(`http://localhost:${gatewayPort}/fixture-state`)
   ).json()) as {
+    handoffUrl: string;
     requests: Array<{
       method: string;
       url: string;
       body: string;
       cookie: string;
       acceptEncoding: string;
+      trafficToken: string;
       serviceWorker: string;
     }>;
   };
+  const replay = await request.get(state.handoffUrl, { maxRedirects: 0 });
+  expect(replay.status()).toBe(404);
+  expect(await replay.text()).toBe("Preview not found");
+
   expect(state.requests).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ method: "GET", url: "/asset.js?build=browser" }),
@@ -136,6 +142,9 @@ test("preview host preserves SPA routing, root assets, API calls, and Vite HMR",
     ]),
   );
   expect(state.requests.every((entry) => !entry.cookie.includes("quillra_preview"))).toBe(true);
+  expect(
+    state.requests.every((entry) => entry.trafficToken === "preview-fixture-traffic-token"),
+  ).toBe(true);
   expect(
     state.requests
       .filter((entry) => entry.method !== "WS")

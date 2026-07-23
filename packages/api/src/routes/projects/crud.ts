@@ -15,6 +15,7 @@ import {
   beginProjectDeletion,
   cancelProjectDeletion,
   clearProjectRepoClone,
+  destroyProjectExecution,
   scheduleDeletedProjectWorkspaceCleanup,
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
@@ -328,12 +329,19 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
     const projectId = c.req.param("id");
     const m = await memberForProject(r.user.id, projectId);
     if (!m || m.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+    const [existing] = await db
+      .select({ githubBindingGeneration: projects.githubBindingGeneration })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    if (!existing) return c.json({ error: "Not found" }, 404);
     // Make the project unavailable to already-authorized in-flight workspace
     // requests before removing its source-of-truth row. Filesystem cleanup is
     // best-effort and happens second: a busy node_modules directory must never
     // turn a successful logical delete into a visible 500.
     beginProjectDeletion(projectId);
     try {
+      await destroyProjectExecution(projectId, existing.githubBindingGeneration);
       await db.delete(projects).where(eq(projects.id, projectId));
     } catch (error) {
       cancelProjectDeletion(projectId);

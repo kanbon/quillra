@@ -2,8 +2,8 @@
  * First-run instance setup wizard.
  *
  * Walks a fresh install through the values Quillra needs to actually
- * function: Anthropic key, GitHub App, optional email delivery, and the
- * first owner account.
+ * function: Anthropic key, verified E2B isolation, GitHub App, optional
+ * email delivery, and the first owner account.
  *
  * Routes-level guard: any time /api/setup/status says needsSetup is
  * true, the rest of the app bounces users here (see App.tsx).
@@ -14,6 +14,7 @@ import { AnthropicStep } from "@/components/organisms/setup/AnthropicStep";
 import { EmailStep } from "@/components/organisms/setup/EmailStep";
 import { GithubAppStep } from "@/components/organisms/setup/GithubAppStep";
 import { OrganizationStep } from "@/components/organisms/setup/OrganizationStep";
+import { SecureExecutionStep } from "@/components/organisms/setup/SecureExecutionStep";
 import { SetupAccessScreen } from "@/components/organisms/setup/SetupAccessScreen";
 import { SetupStatusScreen } from "@/components/organisms/setup/SetupStatusScreen";
 import { SigninStep } from "@/components/organisms/setup/SigninStep";
@@ -51,9 +52,19 @@ export function SetupPage() {
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
   const grantedStatus = status?.access === "granted" ? status : null;
+  const e2bConfigured = Boolean(grantedStatus?.values.E2B_API_KEY?.set);
+  const e2bVerifiedAt = grantedStatus?.values.E2B_VERIFIED_AT?.value;
+  const e2bReady = Boolean(
+    e2bConfigured &&
+      grantedStatus?.values.E2B_ENABLED?.value === "true" &&
+      e2bVerifiedAt &&
+      !Number.isNaN(Date.parse(e2bVerifiedAt)),
+  );
   const [unlocking, setUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [anthropicKey, setAnthropicKey] = useState("");
+  const [e2bApiKey, setE2bApiKey] = useState("");
+  const [e2bTemplateId, setE2bTemplateId] = useState("");
   const [emailProvider, setEmailProvider] = useState<"none" | "resend" | "smtp">("none");
   const [emailFrom, setEmailFrom] = useState("");
   const [resendKey, setResendKey] = useState("");
@@ -136,6 +147,7 @@ export function SetupPage() {
           user: nextStatus.values.SMTP_USER?.value ?? current.user,
           secure: nextStatus.values.SMTP_SECURE?.value ?? current.secure,
         }));
+        setE2bTemplateId(nextStatus.values.E2B_TEMPLATE_ID?.value ?? "");
         setOrg((current) => ({
           ...current,
           instanceName: nextStatus.values.INSTANCE_NAME?.value ?? current.instanceName,
@@ -205,15 +217,54 @@ export function SetupPage() {
       // Configured secrets are intentionally masked instead of copied into
       // the browser. Let the operator keep either a DB- or env-managed key.
       if (grantedStatus?.values.ANTHROPIC_API_KEY.set) {
-        moveToStep("githubApp");
+        moveToStep("secureExecution");
       }
       return;
     }
     try {
       await saveValues({ ANTHROPIC_API_KEY: anthropicKey.trim() });
-      moveToStep("githubApp");
+      moveToStep("secureExecution");
     } catch {
       /* stay on step */
+    }
+  }
+
+  async function handleSecureExecutionNext() {
+    if (saving) return;
+    const previousTemplate = grantedStatus?.values.E2B_TEMPLATE_ID?.value ?? "";
+    const apiKey = e2bApiKey.trim();
+    const templateId = e2bTemplateId.trim();
+
+    if (!apiKey && !e2bConfigured) {
+      setError(t("setup.secureExecution.keyRequired"));
+      return;
+    }
+    if (!apiKey && e2bReady && templateId === previousTemplate) {
+      moveToStep("githubApp");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await apiJson<{ ok: true; status: GrantedStatus }>("/api/setup/e2b", {
+        method: "POST",
+        body: JSON.stringify({
+          ...(apiKey ? { apiKey } : {}),
+          templateId: templateId || null,
+        }),
+      });
+      setStatus(response.status);
+      setE2bApiKey("");
+      moveToStep("githubApp");
+    } catch (verificationFailure) {
+      setError(
+        verificationFailure instanceof Error
+          ? verificationFailure.message
+          : t("setup.secureExecution.verifyFailed"),
+      );
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -357,6 +408,29 @@ export function SetupPage() {
             />
           )}
 
+          {step === "secureExecution" && (
+            <SecureExecutionStep
+              apiKey={e2bApiKey}
+              templateId={e2bTemplateId}
+              configured={e2bConfigured}
+              enabled={e2bReady}
+              needsVerification={Boolean(
+                e2bApiKey.trim() ||
+                  (e2bConfigured &&
+                    (!e2bReady ||
+                      e2bTemplateId.trim() !==
+                        (grantedStatus.values.E2B_TEMPLATE_ID?.value ?? ""))),
+              )}
+              verifiedAt={e2bVerifiedAt}
+              saving={saving}
+              error={error}
+              onApiKeyChange={setE2bApiKey}
+              onTemplateIdChange={setE2bTemplateId}
+              onBack={() => moveToStep("anthropic")}
+              onNext={handleSecureExecutionNext}
+            />
+          )}
+
           {step === "githubApp" && (
             <GithubAppStep
               appConfigured={Boolean(
@@ -364,7 +438,7 @@ export function SetupPage() {
                   grantedStatus.values.GITHUB_APP_PRIVATE_KEY?.set,
               )}
               appName={grantedStatus.values.GITHUB_APP_NAME?.value}
-              onBack={() => moveToStep("anthropic")}
+              onBack={() => moveToStep("secureExecution")}
               onNext={handleGithubAppNext}
             />
           )}

@@ -5,9 +5,10 @@ import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import { WebSocket as UpstreamWebSocket } from "ws";
 import { previewBootHtml } from "./preview-boot.js";
 import {
-  resolveActivePreviewCapabilityToken,
-  resolveReservedPreviewCapabilityToken,
+  consumeReservedPreviewHandoff,
+  resolveActivePreviewSessionToken,
   resolveReservedPreviewHost,
+  resolveReservedPreviewSessionToken,
 } from "./preview-capability.js";
 import {
   PREVIEW_ACCESS_QUERY,
@@ -18,11 +19,13 @@ import {
   previewLabelFromHost,
 } from "./preview-origin.js";
 import {
+  PREVIEW_UPSTREAM_TIMEOUT_MS,
   injectPreviewToolbarCss,
   sanitizeHostPreviewRequestHeaders,
   secureHostPreviewResponse,
 } from "./preview-proxy.js";
 import { readPreviewStatus } from "./preview-status.js";
+import { previewUpstreamUrl } from "./preview-upstream.js";
 
 type PreviewEnvironment = Record<string, string | undefined>;
 
@@ -142,25 +145,16 @@ export function createPreviewGateway<RawWebSocket>(
     return attributes.join("; ");
   }
 
-  function resolveAccess(
-    c: Context<PreviewGatewayEnv>,
-    options: { active: boolean; statusToken?: string | null },
-  ) {
+  function resolveAccess(c: Context<PreviewGatewayEnv>, options: { active: boolean }) {
     if (!config) return null;
     const host = c.req.header("host") ?? "";
-    const queryToken = options.statusToken ?? c.req.query(PREVIEW_ACCESS_QUERY);
     const cookieToken = getCookie(c, config.accessCookieName);
-    const tokens = [
-      ...new Set([queryToken, cookieToken].filter((value): value is string => !!value)),
-    ];
-
-    for (const token of tokens) {
-      const access = options.active
-        ? resolveActivePreviewCapabilityToken(token)
-        : resolveReservedPreviewCapabilityToken(token);
-      if (access.ok && isPreviewHostForProject(host, access.projectId, config, environment)) {
-        return { ...access, token };
-      }
+    if (!cookieToken) return null;
+    const access = options.active
+      ? resolveActivePreviewSessionToken(cookieToken, host)
+      : resolveReservedPreviewSessionToken(cookieToken, host);
+    if (access.ok && isPreviewHostForProject(host, access.projectId, config, environment)) {
+      return { ...access, token: cookieToken };
     }
     return null;
   }
@@ -210,9 +204,17 @@ export function createPreviewGateway<RawWebSocket>(
         }
 
         const requestUrl = new URL(c.req.url);
-        const target = new URL(
-          `ws://127.0.0.1:${access.port}${requestUrl.pathname}${requestUrl.search}`,
+        const upstreamAccess = previewUpstreamUrl(
+          access.projectId,
+          access.port,
+          requestUrl.pathname,
+          requestUrl.search,
+          true,
         );
+        if (!upstreamAccess) {
+          closeWebSocket(downstream, 1011, "Preview upstream is unavailable");
+          return;
+        }
         // Mirror the protocol already selected by the downstream server. If
         // the upstream selected a different item from the offered list, the
         // two sides would otherwise disagree about the wire format.
@@ -223,13 +225,14 @@ export function createPreviewGateway<RawWebSocket>(
         );
         const projectCookie = sanitized.get("cookie");
         const headers: Record<string, string> = {
-          origin: `http://127.0.0.1:${access.port}`,
+          ...upstreamAccess.headers,
+          origin: new URL(upstreamAccess.url).origin.replace(/^wss:/, "https:"),
           "x-forwarded-host": new URL(access.publicUrl).host,
           "x-forwarded-proto": config.protocol.slice(0, -1),
         };
         if (projectCookie) headers.cookie = projectCookie;
 
-        upstream = new UpstreamWebSocket(target, protocols, {
+        upstream = new UpstreamWebSocket(upstreamAccess.url, protocols, {
           headers,
           handshakeTimeout: 5_000,
           maxPayload: maxMessageBytes,
@@ -265,7 +268,10 @@ export function createPreviewGateway<RawWebSocket>(
         });
 
         validityTimer = setInterval(() => {
-          const current = resolveActivePreviewCapabilityToken(access.token);
+          const current = resolveActivePreviewSessionToken(
+            access.token,
+            new URL(access.publicUrl).host,
+          );
           if (
             !current.ok ||
             current.projectId !== access.projectId ||
@@ -279,7 +285,10 @@ export function createPreviewGateway<RawWebSocket>(
         validityTimer.unref?.();
       },
       onMessage(event) {
-        if (!access || !resolveActivePreviewCapabilityToken(access.token).ok) {
+        if (
+          !access ||
+          !resolveActivePreviewSessionToken(access.token, new URL(access.publicUrl).host).ok
+        ) {
           closeWebSocket(downstream, 1008, "Preview access expired");
           closeUpstreamWebSocket(upstream, 1_008, "Preview access expired");
           return;
@@ -328,11 +337,33 @@ export function createPreviewGateway<RawWebSocket>(
     if (!isPreviewDomainChild(host, config)) return next();
     if (!previewLabelFromHost(host, config)) return c.text("Preview not found", 404);
 
-    if (c.req.path === "/.quillra/preview-status") {
-      const access = resolveAccess(c, {
-        active: false,
-        statusToken: c.req.query(PREVIEW_ACCESS_QUERY),
+    const requestUrl = new URL(c.req.url);
+    if (requestUrl.searchParams.has(PREVIEW_ACCESS_QUERY)) {
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+        return c.text("Preview not found", 404);
+      }
+      const handoff = consumeReservedPreviewHandoff(
+        requestUrl.searchParams.get(PREVIEW_ACCESS_QUERY) ?? "",
+        host,
+      );
+      if (!handoff.ok || !isPreviewHostForProject(host, handoff.projectId, config, environment)) {
+        return c.text("Preview not found", 404);
+      }
+      const publicUrl = publicPreviewUrl(c, handoff.projectId);
+      publicUrl.searchParams.delete(PREVIEW_ACCESS_QUERY);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          "cache-control": "no-store",
+          location: `${publicUrl.pathname}${publicUrl.search}${publicUrl.hash}`,
+          "referrer-policy": "no-referrer",
+          "set-cookie": accessCookie(handoff.token, handoff.expiresAt),
+        },
       });
+    }
+
+    if (c.req.path === "/.quillra/preview-status") {
+      const access = resolveAccess(c, { active: false });
       if (!access) return c.json({ error: "Preview not found" }, 404);
       c.header("Cache-Control", "no-store");
       return c.json(await readPreviewStatus(access.projectId, access.port));
@@ -341,19 +372,6 @@ export function createPreviewGateway<RawWebSocket>(
     const reserved = resolveAccess(c, { active: false });
     if (!reserved) return c.text("Preview not found", 404);
     const publicUrl = publicPreviewUrl(c, reserved.projectId);
-
-    if (publicUrl.searchParams.has(PREVIEW_ACCESS_QUERY)) {
-      publicUrl.searchParams.delete(PREVIEW_ACCESS_QUERY);
-      return new Response(null, {
-        status: 302,
-        headers: {
-          "cache-control": "no-store",
-          location: `${publicUrl.pathname}${publicUrl.search}${publicUrl.hash}`,
-          "referrer-policy": "no-referrer",
-          "set-cookie": accessCookie(reserved.token, reserved.expiresAt),
-        },
-      });
-    }
 
     const active = resolveAccess(c, { active: true });
     if (c.req.header("upgrade")?.toLowerCase() === "websocket") {
@@ -366,11 +384,9 @@ export function createPreviewGateway<RawWebSocket>(
       if (c.req.method !== "GET" && c.req.method !== "HEAD") {
         return c.text("Preview is starting", 503);
       }
-      const statusUrl = `/.quillra/preview-status?${PREVIEW_ACCESS_QUERY}=${encodeURIComponent(
-        reserved.token,
-      )}`;
+      const statusUrl = "/.quillra/preview-status";
       const boot = new Response(
-        c.req.method === "HEAD" ? null : previewBootHtml(reserved.port, reserved.token, statusUrl),
+        c.req.method === "HEAD" ? null : previewBootHtml(reserved.port, "", statusUrl, "include"),
         { status: 200, headers: { "content-type": "text/html; charset=UTF-8" } },
       );
       return secureHostPreviewResponse(
@@ -382,16 +398,23 @@ export function createPreviewGateway<RawWebSocket>(
       );
     }
 
-    const requestUrl = new URL(c.req.url);
-    const target = new URL(`http://127.0.0.1:${active.port}${requestUrl.pathname}`);
-    target.search = requestUrl.search;
+    const upstreamAccess = previewUpstreamUrl(
+      active.projectId,
+      active.port,
+      requestUrl.pathname,
+      requestUrl.search,
+    );
+    if (!upstreamAccess) return c.text("Preview upstream is unavailable", 503);
     const headers = sanitizeHostPreviewRequestHeaders(c.req.raw.headers, config.accessCookieName);
+    for (const [name, value] of Object.entries(upstreamAccess.headers)) {
+      headers.set(name, value);
+    }
     headers.set("accept-encoding", "identity");
     headers.set("x-forwarded-host", publicUrl.host);
     headers.set("x-forwarded-proto", config.protocol.slice(0, -1));
     if (config.port) headers.set("x-forwarded-port", config.port);
     if (c.req.raw.headers.has("origin")) {
-      headers.set("origin", `http://127.0.0.1:${active.port}`);
+      headers.set("origin", new URL(upstreamAccess.url).origin);
     }
     if (c.req.header("service-worker")?.toLowerCase() === "script") {
       return c.text("Service workers are disabled in previews", 403);
@@ -403,10 +426,13 @@ export function createPreviewGateway<RawWebSocket>(
         headers,
         body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
         redirect: "manual",
-        signal: c.req.raw.signal,
+        signal: AbortSignal.any([
+          c.req.raw.signal,
+          AbortSignal.timeout(PREVIEW_UPSTREAM_TIMEOUT_MS),
+        ]),
       };
       if (init.body) init.duplex = "half";
-      const upstream = await fetch(target, init);
+      const upstream = await fetch(upstreamAccess.url, init);
       const withCss = await injectPreviewToolbarCss(upstream);
       return secureHostPreviewResponse(
         withCss,
@@ -414,6 +440,7 @@ export function createPreviewGateway<RawWebSocket>(
         active.port,
         config.controlOrigins,
         config.accessCookieName,
+        new URL(upstreamAccess.url).origin,
       );
     } catch (error) {
       console.warn(
@@ -425,11 +452,9 @@ export function createPreviewGateway<RawWebSocket>(
           c.req.header("sec-fetch-dest") === "document" ||
           (c.req.header("accept") ?? "").includes("text/html"));
       if (!isNavigation) return c.text("Preview upstream unavailable", 502);
-      const statusUrl = `/.quillra/preview-status?${PREVIEW_ACCESS_QUERY}=${encodeURIComponent(
-        active.token,
-      )}`;
+      const statusUrl = "/.quillra/preview-status";
       return secureHostPreviewResponse(
-        new Response(previewBootHtml(active.port, active.token, statusUrl), {
+        new Response(previewBootHtml(active.port, "", statusUrl, "include"), {
           status: 200,
           headers: { "content-type": "text/html; charset=UTF-8" },
         }),

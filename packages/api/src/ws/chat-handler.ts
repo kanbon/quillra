@@ -5,7 +5,8 @@
  *
  *   1. auth check (team / Better Auth / client session)
  *   2. project access check via projectMembers
- *   3. repo clone + npm install (non-fatal; errors become prompt context)
+ *   3. credential-free repo clone + E2B dependency install
+ *      (non-fatal; errors become prompt context)
  *   4. spend cap pre-check (blocks the run if the user is over cap)
  *   5. attachment handling (decides real-asset vs reference-only)
  *   6. agent run via runProjectAgent + auto-nudge retry on truncation
@@ -368,7 +369,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           lines.push("You must decide, per file, which of these two paths to take:");
           lines.push("");
           lines.push(
-            "  A) REAL ASSET, the file is supposed to end up on the live site (hero image, product photo, downloadable PDF, translated content, etc.). In that case you must MOVE it out of `.quillra-temp/` into the appropriate asset path for this framework (e.g. `public/`, `src/assets/`, `src/content/`, etc.) AND update the relevant source files to reference the new path. Use Bash `mv` or the Write/Read tools to move the file, then delete the original from `.quillra-temp/` so it's not duplicated.",
+            "  A) REAL ASSET, the file is supposed to end up on the live site (hero image, product photo, downloadable PDF, translated content, etc.). In that case call `mcp__quillra-execution__promote_attachment` to move it out of `.quillra-temp/` into the appropriate asset path for this framework (e.g. `public/`, `src/assets/`, `src/content/`, etc.), then update the relevant source files to reference the new path. Do not use Bash for this.",
           );
           lines.push("");
           lines.push(
@@ -433,9 +434,12 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
         // Pre-run spend cap check. If the user has already crossed their
         // effective hard cap this month, refuse the run with a friendly
         // message BEFORE the agent starts doing anything, no partial
-        // work, no surprise charge, no race with the cap. Owner users
-        // always bypass this (see shouldBlockRun).
-        const block = await shouldBlockRun(wsUser.id, role);
+        // work, no surprise charge, no race with the cap. A global owner
+        // session bypasses the cap, but a project-scoped client cookie never
+        // inherits that instance-wide privilege from the same user row.
+        const block = await shouldBlockRun(wsUser.id, role, new Date(), {
+          allowOwnerExemption: !wsClientSession,
+        });
         if (block.blocked) {
           ws.send(
             JSON.stringify({
@@ -544,6 +548,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
                 prompt,
                 role,
                 projectId,
+                githubBindingGeneration: p.githubBindingGeneration,
                 userId: wsUser.id,
                 authorizationEpoch,
                 previewDevCommandOverride: p.previewDevCommand ?? null,

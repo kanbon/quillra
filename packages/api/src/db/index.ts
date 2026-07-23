@@ -113,6 +113,17 @@ function bootstrapCoreSchema() {
         updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
       );
 
+      CREATE TABLE IF NOT EXISTS project_sandboxes (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        sandbox_id TEXT NOT NULL UNIQUE,
+        github_binding_generation INTEGER NOT NULL,
+        template_id TEXT NOT NULL,
+        preview_pid INTEGER,
+        preview_port INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+        updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+      );
+
       CREATE TABLE IF NOT EXISTS project_members (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

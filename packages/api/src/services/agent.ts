@@ -18,6 +18,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
 import { buildAgentDiagnosticsMcpServer } from "./agent-diagnostics-tools.js";
+import { AGENT_BASH_TOOL_ALIAS, buildAgentExecutionMcpServer } from "./agent-execution-tools.js";
 import { buildCanUseTool } from "./agent-permissions.js";
 import { DIAGNOSTICS_TOOL_HINT, LANGUAGE_NAMES, QUILLRA_SYSTEM_PROMPT } from "./agent-prompts.js";
 import { mapSdkMessageToClient } from "./agent-stream-mapper.js";
@@ -49,6 +50,8 @@ export type ProjectAgentParams = {
   prompt: string;
   role: ProjectRole;
   projectId: string;
+  /** Monotonic repository binding epoch captured with the project row. */
+  githubBindingGeneration: number;
   /** Authorization epoch captured before the caller read this user's project
    * membership. Registration fails if that membership changed in between. */
   userId: string;
@@ -167,10 +170,20 @@ async function* runRegisteredProjectAgent(
     diagnosticsEligible
       ? buildAgentDiagnosticsMcpServer({
           projectId: params.projectId,
+          githubBindingGeneration: params.githubBindingGeneration,
           repoPath: params.cwd,
           previewDevCommandOverride: params.previewDevCommandOverride ?? null,
         })
       : null;
+  const buildExecutionForThisQuery = () =>
+    buildAgentExecutionMcpServer({
+      projectId: params.projectId,
+      githubBindingGeneration: params.githubBindingGeneration,
+      repoPath: params.cwd,
+      role: params.role,
+      migrationMode: params.migrationMode === true,
+      signal: abortController.signal,
+    });
 
   params.abortSignal?.addEventListener("abort", () => abortController.abort(), { once: true });
 
@@ -180,6 +193,7 @@ async function* runRegisteredProjectAgent(
 
   async function* run(sessionId: string | null): AsyncGenerator<Record<string, unknown>> {
     const diagnosticsServer = buildDiagnosticsForThisQuery();
+    const executionServer = buildExecutionForThisQuery();
     const q = query({
       prompt: params.prompt,
       options: {
@@ -191,17 +205,25 @@ async function* runRegisteredProjectAgent(
         env: createSafeSdkEnv({
           ANTHROPIC_API_KEY: anthropicApiKey,
           CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
-          // IS_SANDBOX=1 bypasses the CLI's refusal to run
-          // --dangerously-skip-permissions as root. We legitimately
-          // run as root inside a Docker container. This flag tells the CLI it
-          // is in the product's containerized execution context. Without it
-          // the subprocess exits 1 on startup with "cannot be used
-          // with root/sudo privileges for security reasons" and the
-          // whole chat falls over.
+          // The SDK requires its container marker when Quillra supplies the
+          // non-interactive permission callback below. This describes the
+          // control-plane runtime; repository shell execution still happens
+          // exclusively in the project-fenced E2B MCP tool.
           IS_SANDBOX: "1",
         }),
-        tools: { type: "preset", preset: "claude_code" },
-        ...(diagnosticsServer ? { mcpServers: { "quillra-diagnostics": diagnosticsServer } } : {}),
+        // Project code never receives the SDK's local Bash, Web, Skill, Agent,
+        // or settings-driven tools. Admin/migration Bash calls are redirected
+        // to the project-fenced E2B MCP tool below.
+        tools: ["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep"],
+        ...(params.role === "admin" || params.migrationMode
+          ? { toolAliases: { Bash: AGENT_BASH_TOOL_ALIAS } }
+          : {}),
+        mcpServers: {
+          "quillra-execution": executionServer,
+          ...(diagnosticsServer ? { "quillra-diagnostics": diagnosticsServer } : {}),
+        },
+        settingSources: [],
+        strictMcpConfig: true,
         // Opus 4.7 (and the Claude 4.6+ line) requires BOTH adaptive
         // thinking AND an explicit effort level, setting one without
         // the other either triggers an API 400 (on Opus) or silently

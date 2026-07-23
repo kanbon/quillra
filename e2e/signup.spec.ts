@@ -157,6 +157,12 @@ test("a fresh production install supports owner, collaborator, and client signup
   await page.getByPlaceholder(/sk-ant-api03/).fill("sk-ant-e2e-placeholder-not-a-real-key");
   await page.getByRole("button", { name: "Continue" }).click();
 
+  const secureExecutionHeading = page.getByRole("heading", { name: "Secure code execution" });
+  await expect(secureExecutionHeading).toBeVisible();
+  await expect(page.getByText(/A key is configured and never returned/i)).toBeVisible();
+  await expect(page.getByLabel("E2B API key")).toHaveValue("");
+  await page.getByRole("button", { name: "Continue" }).click();
+
   await expect(page.getByRole("heading", { name: "GitHub App" })).toBeVisible();
   const seededSmtp = await page.request.post("/api/setup/save", {
     data: {
@@ -179,6 +185,11 @@ test("a fresh production install supports owner, collaborator, and client signup
   await expect(page.getByText(/key is already configured/i)).toBeVisible();
   await expect(page.getByLabel("API key")).toHaveValue("");
   await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  await expect(secureExecutionHeading).toBeVisible();
+  await expect(page.getByText(/A key is configured and never returned/i)).toBeVisible();
+  await expect(page.getByLabel("E2B API key")).toHaveValue("");
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByRole("heading", { name: "GitHub App" })).toBeVisible();
@@ -273,6 +284,8 @@ test("a fresh production install supports owner, collaborator, and client signup
     missing: [],
     values: {
       ANTHROPIC_API_KEY: { set: true, source: "db" },
+      E2B_API_KEY: { set: true, source: "env" },
+      E2B_ENABLED: { set: true, source: "db", value: "true" },
       GITHUB_APP_ID: { set: true, source: "env" },
       GITHUB_APP_PRIVATE_KEY: { set: true, source: "env" },
     },
