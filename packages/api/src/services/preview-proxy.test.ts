@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   rewritePreviewResourcePaths,
+  sanitizeHostPreviewRequestHeaders,
   sanitizePreviewRequestHeaders,
+  secureHostPreviewResponseHeaders,
   securePreviewResponseHeaders,
 } from "./preview-proxy.js";
 
@@ -28,6 +30,22 @@ describe("preview proxy isolation", () => {
     );
 
     expect(Object.fromEntries(headers)).toEqual({ accept: "text/html" });
+  });
+
+  it("consumes the gateway cookie while preserving unrelated project cookies", () => {
+    const headers = sanitizeHostPreviewRequestHeaders(
+      new Headers({
+        authorization: "Bearer control-secret",
+        cookie:
+          "__Host-quillra_preview=cap; quillra_team_session=control; project_session=site-value",
+        "x-forwarded-for": "203.0.113.1",
+      }),
+      "__Host-quillra_preview",
+    );
+
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("x-forwarded-for")).toBeNull();
+    expect(headers.get("cookie")).toBe("project_session=site-value");
   });
 
   it("strips state-changing response headers and applies a strict sandbox", () => {
@@ -57,6 +75,22 @@ describe("preview proxy isolation", () => {
     expect(csp).toContain(`form-action https://quillra.example${PREVIEW_ROOT}`);
     expect(csp).not.toContain("allow-same-origin");
     expect(csp).not.toContain("allow-top-navigation");
+  });
+
+  it("keeps project cookies host-only and rejects control-plane cookie names", () => {
+    const upstream = new Headers();
+    upstream.append("set-cookie", "project_session=value; Domain=example.net; Path=/; HttpOnly");
+    upstream.append("set-cookie", "quillra_team_session=forged; Domain=example.net; Path=/");
+
+    const headers = secureHostPreviewResponseHeaders(
+      upstream,
+      "https://p-deadbeef.preview.example.net/",
+      4_321,
+      ["https://cms.example.com"],
+      "__Host-quillra_preview",
+    );
+    const cookies = (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
+    expect(cookies).toEqual(["project_session=value; Path=/; HttpOnly"]);
   });
 
   it("keeps redirects and preload links inside the guarded preview path", () => {
@@ -114,5 +148,67 @@ describe("preview proxy isolation", () => {
     );
     expect(rewritten.headers.get("content-encoding")).toBeNull();
     expect(rewritten.headers.get("content-length")).toBeNull();
+  });
+
+  it("keeps host-preview paths native and allows framing only from control origins", () => {
+    const publicUrl = "https://p-deadbeef.preview.example.net/dashboard?tab=one";
+    const headers = secureHostPreviewResponseHeaders(
+      new Headers({
+        location: "/login?next=%2Fdashboard#form",
+        "set-cookie": "upstream=unsafe; Domain=example.net",
+        "x-frame-options": "DENY",
+      }),
+      publicUrl,
+      4_321,
+      ["https://cms.example.com", "https://edit.example.com"],
+    );
+
+    expect(headers.get("location")).toBe("/login?next=%2Fdashboard#form");
+    expect(headers.get("set-cookie")).toBe("upstream=unsafe");
+    expect(headers.get("x-frame-options")).toBeNull();
+    const csp = headers.get("content-security-policy") ?? "";
+    expect(csp).toContain(
+      "sandbox allow-scripts allow-forms allow-modals allow-downloads allow-same-origin",
+    );
+    expect(csp).toContain("frame-ancestors https://cms.example.com https://edit.example.com");
+    expect(csp).toContain("connect-src 'self' wss://p-deadbeef.preview.example.net");
+    expect(csp).toContain("worker-src 'self' blob:");
+  });
+
+  it("rewrites only loopback redirects in host mode", () => {
+    const publicUrl = "https://p-deadbeef.preview.example.net/account";
+    const loopback = secureHostPreviewResponseHeaders(
+      new Headers({ location: "http://127.0.0.1:4321/login?from=account" }),
+      publicUrl,
+      4_321,
+      ["https://cms.example.com"],
+    );
+    expect(loopback.get("location")).toBe(
+      "https://p-deadbeef.preview.example.net/login?from=account",
+    );
+
+    const external = secureHostPreviewResponseHeaders(
+      new Headers({ location: "https://accounts.example.org/login" }),
+      publicUrl,
+      4_321,
+      ["https://cms.example.com"],
+    );
+    expect(external.get("location")).toBe("https://accounts.example.org/login");
+
+    const controlPlane = secureHostPreviewResponseHeaders(
+      new Headers({ location: "https://cms.example.com/api/session" }),
+      publicUrl,
+      4_321,
+      ["https://cms.example.com"],
+    );
+    expect(controlPlane.get("location")).toBeNull();
+
+    const unsafe = secureHostPreviewResponseHeaders(
+      new Headers({ location: "javascript:alert(1)" }),
+      publicUrl,
+      4_321,
+      ["https://cms.example.com"],
+    );
+    expect(unsafe.get("location")).toBeNull();
   });
 });

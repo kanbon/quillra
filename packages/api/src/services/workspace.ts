@@ -11,6 +11,7 @@ import {
   isGithubAppConfigured,
 } from "./github-app.js";
 import { issuePreviewCapability, revokePreviewCapability } from "./preview-capability.js";
+import { buildHostPreviewUrl, getPreviewOriginConfig } from "./preview-origin.js";
 import {
   getPortByProject,
   markPreviewPortActive,
@@ -684,12 +685,25 @@ export function startDevPreview(
   return next;
 }
 
-export function getPreviewUrl(projectId: string, port: number): string {
+export type PreviewAddress = { url: string; mode: "host" | "path" };
+
+export function getPreviewAddress(projectId: string, port: number): PreviewAddress {
   const base = (
     process.env.BETTER_AUTH_URL ?? `http://localhost:${process.env.PORT ?? 3000}`
   ).replace(/\/+$/, "");
   const capability = issuePreviewCapability(projectId, port);
-  return `${base}/__preview/${port}/${capability.token}/`;
+  const hostConfig = getPreviewOriginConfig();
+  if (hostConfig) {
+    return {
+      url: buildHostPreviewUrl(projectId, capability.token, hostConfig),
+      mode: "host",
+    };
+  }
+  return { url: `${base}/__preview/${port}/${capability.token}/`, mode: "path" };
+}
+
+export function getPreviewUrl(projectId: string, port: number): string {
+  return getPreviewAddress(projectId, port).url;
 }
 
 export async function pushToGitHub(

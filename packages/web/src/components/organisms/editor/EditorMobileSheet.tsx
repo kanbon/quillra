@@ -24,6 +24,7 @@ type Props = {
   cancelMigration?: () => Promise<void>;
 
   previewSrc: string | null;
+  previewMode: "host" | "path" | null;
   previewLabel: string;
   previewError: string | null;
   startLabel: string;
@@ -42,6 +43,7 @@ export function EditorMobileSheet({
   isMigratingToAstro,
   cancelMigration,
   previewSrc,
+  previewMode,
   previewLabel,
   previewError,
   startLabel,
@@ -58,6 +60,7 @@ export function EditorMobileSheet({
         <PreviewPane
           projectId={id}
           src={previewSrc}
+          previewMode={previewMode}
           onRefresh={onRefresh}
           onStartPreview={onStartPreview}
           starting={starting}

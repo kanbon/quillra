@@ -3,10 +3,14 @@ import {
   PREVIEW_CAPABILITY_TTL_MS,
   issuePreviewCapability,
   resolveActivePreviewCapability,
+  resolveActivePreviewCapabilityToken,
   resolvePreviewCapability,
   resolveReservedPreviewCapability,
+  resolveReservedPreviewCapabilityToken,
+  resolveReservedPreviewHost,
   revokePreviewCapability,
 } from "./preview-capability.js";
+import { getPreviewOriginConfig, previewHostnameForProject } from "./preview-origin.js";
 import {
   markPreviewPortActive,
   registerPreviewPort,
@@ -70,10 +74,38 @@ describe("preview capabilities", () => {
     const issued = issuePreviewCapability("project-cap-active", 4_321, 7_000);
 
     expect(resolveReservedPreviewCapability("4321", issued.token, 7_000).ok).toBe(true);
+    expect(resolveReservedPreviewCapabilityToken(issued.token, 7_000).ok).toBe(true);
     expect(resolveActivePreviewCapability("4321", issued.token, 7_000)).toEqual({ ok: false });
+    expect(resolveActivePreviewCapabilityToken(issued.token, 7_000)).toEqual({ ok: false });
     expect(markPreviewPortActive("project-cap-active", 4_321)).toBe(true);
     expect(resolveActivePreviewCapability("4321", issued.token, 7_000).ok).toBe(true);
+    expect(resolveActivePreviewCapabilityToken(issued.token, 7_000).ok).toBe(true);
     unregisterPreviewPort("project-cap-active");
     expect(resolveActivePreviewCapability("4321", issued.token, 7_000)).toEqual({ ok: false });
+  });
+
+  it("allows TLS only for a currently reserved opaque project host", () => {
+    const projectId = "project-cap-binding";
+    const environment = {
+      BETTER_AUTH_URL: "https://cms.example.com",
+      BETTER_AUTH_SECRET: "capability-host-test-secret",
+      PREVIEW_DOMAIN: "preview.example.net",
+    };
+    const config = getPreviewOriginConfig(environment);
+    expect(config).not.toBeNull();
+    if (!config) return;
+
+    registerPreviewPort(4_321, projectId);
+    issuePreviewCapability(projectId, 4_321, 8_000);
+    const hostname = previewHostnameForProject(projectId, config, environment);
+
+    expect(resolveReservedPreviewHost(hostname, config, 8_000, environment).ok).toBe(true);
+    expect(
+      resolveReservedPreviewHost(`other.${config.hostname}`, config, 8_000, environment),
+    ).toEqual({ ok: false });
+    unregisterPreviewPort(projectId);
+    expect(resolveReservedPreviewHost(hostname, config, 8_000, environment)).toEqual({
+      ok: false,
+    });
   });
 });

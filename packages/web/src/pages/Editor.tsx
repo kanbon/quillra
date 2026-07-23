@@ -111,6 +111,7 @@ export function EditorPage() {
 
   const {
     previewSrc,
+    previewMode,
     previewLabel,
     previewError,
     startLabel,
@@ -215,6 +216,7 @@ export function EditorPage() {
           isMigratingToAstro={isMigratingToAstro}
           cancelMigration={cancelMigration}
           previewSrc={previewSrc}
+          previewMode={previewMode}
           previewLabel={previewLabel}
           previewError={previewError}
           startLabel={startLabel}
@@ -236,6 +238,7 @@ export function EditorPage() {
         isMigratingToAstro={isMigratingToAstro}
         cancelMigration={cancelMigration}
         previewSrc={previewSrc}
+        previewMode={previewMode}
         previewLabel={previewLabel}
         previewError={previewError}
         startLabel={startLabel}

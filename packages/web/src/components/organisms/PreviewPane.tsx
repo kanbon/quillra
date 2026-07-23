@@ -9,6 +9,7 @@ import { useCallback, useRef, useState } from "react";
 type Props = {
   projectId: string;
   src: string | null;
+  previewMode: "host" | "path" | null;
   onRefresh: () => void;
   onStartPreview: () => void;
   starting?: boolean;
@@ -27,6 +28,7 @@ type Props = {
 export function PreviewPane({
   projectId,
   src,
+  previewMode,
   onRefresh,
   onStartPreview,
   starting,
@@ -97,7 +99,7 @@ export function PreviewPane({
           {hasFrame && (
             <div className="flex items-center overflow-hidden rounded-lg border border-neutral-200 bg-white">
               <a
-                href={ready && src ? src.split("?")[0] : "#"}
+                href={ready && src ? src : "#"}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
@@ -202,7 +204,9 @@ export function PreviewPane({
               ref={iframeRef}
               title={t("preview.iframeTitle")}
               src={src!}
-              sandbox="allow-scripts allow-forms allow-modals allow-downloads"
+              sandbox={`allow-scripts allow-forms allow-modals allow-downloads${
+                previewMode === "host" ? " allow-same-origin" : ""
+              }`}
               referrerPolicy="no-referrer"
               className="h-full w-full border-0 bg-white shadow-inner animate-[fadeIn_0.3s_ease-out]"
               onLoad={handleIframeLoad}
@@ -250,6 +254,7 @@ export function PreviewPane({
             <Button
               variant="brand"
               type="button"
+              disabled={starting}
               className="min-w-[200px] rounded-xl px-8 py-3 text-[15px] font-semibold shadow-md transition-transform hover:shadow-lg"
               onClick={onStartPreview}
             >

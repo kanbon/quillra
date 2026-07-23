@@ -115,6 +115,7 @@ You deploy **one Quillra instance** (VPS, internal server, Docker). There are no
 | `QUILLRA_ENCRYPTION_KEY` | Encrypts credentials stored in SQLite (`openssl rand -hex 32`) |
 | `QUILLRA_SETUP_TOKEN` | Optional operator-chosen token that protects first-run setup and no-email recovery |
 | `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
+| `PREVIEW_DOMAIN` | Dedicated wildcard parent domain for router-correct live previews |
 | `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server |
 | `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`, powers invites, warnings, and monthly reports |
 
@@ -130,10 +131,18 @@ Quillra derives an installation-specific token and prints it only to the server
 logs (`docker compose logs cms`). With email delivery disabled, that same proof
 is required before a one-time owner or recovery code can be shown in the browser.
 
-Live previews are served through a capability-protected, sandboxed path on the
-Quillra origin. Built-in framework commands bind their dev servers to loopback.
-If you configure a custom preview command, keep it on `127.0.0.1`; never expose
-workspace ports or wildcard preview subdomains publicly.
+Live previews use opaque, capability-authenticated child hosts of
+`PREVIEW_DOMAIN`. Browser and dev server therefore see the same path, so SPA
+routers, root-relative assets, fetch calls, and hot-reload WebSockets work
+without repository-specific base-path changes. Wildcard DNS and TLS terminate
+at Quillra's validating gateway; the workspace ports themselves remain bound to
+loopback and must never be exposed publicly. A dedicated same-site subdomain
+(for example, `cms.example.com` with `preview.example.com`) has the broadest
+browser-cookie compatibility. A separate registrable domain adds isolation but
+depends on browser support for partitioned third-party cookies. Local
+development uses `*.localhost` automatically. Without `PREVIEW_DOMAIN`,
+non-local installations fall back to the older path proxy, which cannot be
+fully transparent to every client-side router.
 
 Quillra installs dependencies and runs development commands from connected
 repositories inside the application container. The browser preview is
@@ -166,7 +175,7 @@ openssl rand -base64 32  # BETTER_AUTH_SECRET
 openssl rand -hex 32     # QUILLRA_ENCRYPTION_KEY
 openssl rand -base64 24  # QUILLRA_SETUP_TOKEN
 
-# Also set BETTER_AUTH_URL, TRUSTED_ORIGINS, and ANTHROPIC_API_KEY.
+# Also set BETTER_AUTH_URL, TRUSTED_ORIGINS, PREVIEW_DOMAIN, and ANTHROPIC_API_KEY.
 ${EDITOR:-vi} packages/api/.env
 docker compose up -d --build
 docker compose ps
@@ -175,10 +184,18 @@ curl -fsS http://127.0.0.1:3000/api/setup/status
 ```
 
 Compose publishes Quillra only on host loopback. To terminate TLS with Caddy,
-copy the `cms.example.com` site block from [`Caddyfile`](./Caddyfile) into the
-host's Caddy configuration, replace the example domain, and keep the upstream
-as `127.0.0.1:3000`. On a shared Caddy host, merge the block instead of replacing
-the whole configuration.
+copy both site blocks and the `on_demand_tls` policy from
+[`Caddyfile`](./Caddyfile), replace both example domains, create an `A`/`AAAA`
+wildcard record for the preview domain, and set `PREVIEW_DOMAIN` to its parent.
+Keep the upstream as `127.0.0.1:3000`. The ask endpoint permits on-demand leaf
+certificates only for previews already reserved by an authorized user. Stable
+project hosts avoid repeated issuance when access capabilities rotate. For many
+projects, provision a real wildcard certificate through a DNS challenge instead
+of issuing one leaf certificate per project. The validating `ask` URL is the
+abuse boundary in the included example; add issuance limits only when sized for
+your expected project count. The `on_demand_tls` policy is global in Caddy, so
+merge it carefully on a shared server rather than replacing or silently
+changing policy for unrelated sites.
 
 ```bash
 sudo caddy fmt --overwrite /etc/caddy/Caddyfile

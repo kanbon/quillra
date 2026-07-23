@@ -18,7 +18,7 @@ import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 import { buildPreviewDebugPrompt } from "@/lib/preview-debug-prompt";
 import type { PreviewStatus } from "@/lib/use-preview-status";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Props = {
   projectId: string;
@@ -26,6 +26,7 @@ type Props = {
   cancelMigration?: () => Promise<void>;
 
   previewSrc: string | null;
+  previewMode: "host" | "path" | null;
   previewLabel: string;
   previewError: string | null;
   startLabel: string;
@@ -45,6 +46,7 @@ export function EditorPreviewPanel({
   isMigratingToAstro,
   cancelMigration,
   previewSrc,
+  previewMode,
   previewLabel,
   previewError,
   startLabel,
@@ -57,6 +59,17 @@ export function EditorPreviewPanel({
 }: Props) {
   const { t } = useT();
   const [dragging, setDragging] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === "undefined" ? true : window.matchMedia("(min-width: 768px)").matches,
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)");
+    const update = () => setIsDesktop(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   return (
     <>
@@ -123,23 +136,25 @@ export function EditorPreviewPanel({
           Mobile: hidden here and rendered inside the bottom sheet below.
           While migrating to Astro: replaced by the MigrationBanner,             no preview makes sense while the project is being rewritten. */}
       <section className="hidden min-w-0 flex-1 md:block">
-        {isMigratingToAstro ? (
-          <MigrationBanner onCancel={cancelMigration} />
-        ) : (
-          <PreviewPane
-            projectId={id}
-            src={previewSrc}
-            onRefresh={onRefresh}
-            onStartPreview={onStartPreview}
-            starting={starting}
-            engineLabel={previewLabel || undefined}
-            startLabel={startLabel}
-            errorMessage={previewError}
-            onDebugWithChat={(status: PreviewStatus) => {
-              send(buildPreviewDebugPrompt(status));
-            }}
-          />
-        )}
+        {isDesktop &&
+          (isMigratingToAstro ? (
+            <MigrationBanner onCancel={cancelMigration} />
+          ) : (
+            <PreviewPane
+              projectId={id}
+              src={previewSrc}
+              previewMode={previewMode}
+              onRefresh={onRefresh}
+              onStartPreview={onStartPreview}
+              starting={starting}
+              engineLabel={previewLabel || undefined}
+              startLabel={startLabel}
+              errorMessage={previewError}
+              onDebugWithChat={(status: PreviewStatus) => {
+                send(buildPreviewDebugPrompt(status));
+              }}
+            />
+          ))}
       </section>
     </>
   );

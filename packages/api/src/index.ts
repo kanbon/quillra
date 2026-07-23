@@ -43,18 +43,26 @@ import { getTeamSessionFromCookie, teamLoginRouter } from "./routes/team-login.j
 import { teamRouter } from "./routes/team.js";
 import { resolveListenHost } from "./services/listen-host.js";
 import { resolvePreviewAccess } from "./services/preview-access.js";
+import { previewBootHtml } from "./services/preview-boot.js";
 import {
   resolveActivePreviewCapability,
   resolveReservedPreviewCapability,
 } from "./services/preview-capability.js";
 import {
+  PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  type PreviewGatewayAccess,
+  createPreviewGateway,
+} from "./services/preview-gateway.js";
+import {
+  injectPreviewToolbarCss,
   rewritePreviewResourcePaths,
   sanitizePreviewRequestHeaders,
   securePreviewResponse,
 } from "./services/preview-proxy.js";
-import { describeStage, getPreviewStatus, isPreviewPortActive } from "./services/preview-status.js";
+import { readPreviewStatus } from "./services/preview-status.js";
 import { startReportScheduler } from "./services/report-scheduler.js";
-import { getPreviewUrl } from "./services/workspace.js";
+import { getTrustedOrigins, isTrustedBrowserRequest } from "./services/trusted-origins.js";
+import { getPreviewAddress } from "./services/workspace.js";
 import { chatWsHandler } from "./ws/chat-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,6 +73,7 @@ type Variables = {
   session: Session | null;
   /** Set when the request was authenticated via the client session cookie */
   clientSession: { projectId: string } | null;
+  previewAccess: PreviewGatewayAccess | null;
 };
 
 async function requirePreviewAccess(c: Context<{ Variables: Variables }>, rawPort: string) {
@@ -83,14 +92,14 @@ async function requirePreviewAccess(c: Context<{ Variables: Variables }>, rawPor
   return { error: c.json({ error: "Preview not found" }, 404) } as const;
 }
 
-function trustedOriginsList(): string[] {
-  const raw =
-    process.env.TRUSTED_ORIGINS ??
-    "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173";
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+function externalPreviewRequestUrl(c: Context): string {
+  const request = new URL(c.req.url);
+  try {
+    const publicOrigin = new URL(process.env.BETTER_AUTH_URL ?? request.origin);
+    return new URL(`${request.pathname}${request.search}`, publicOrigin).toString();
+  } catch {
+    return request.toString();
+  }
 }
 
 const app = new Hono<{ Variables: Variables }>();
@@ -117,193 +126,11 @@ app.onError((err, c) => {
   );
 });
 
-const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
-/**
- * Build the polling HTML shown while the preview is starting up. Includes
- * the inline JS that checks the capability-protected preview status and
- * updates the stage label until the upstream is ready.
- */
-function previewBootHtml(port: number, capability: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Starting preview…</title>
-<style>
-  html, body { margin: 0; padding: 0; height: 100%; background: #fafafa; font-family: -apple-system, system-ui, sans-serif; color: #525252; }
-  .wrap { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; }
-  .card { width: 100%; max-width: 360px; }
-  h1 { font-size: 15px; font-weight: 600; margin: 0 0 22px; color: #262626; text-align: center; }
-  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
-  .step { display: flex; align-items: center; gap: 12px; font-size: 13px; line-height: 1.4; transition: color .25s, opacity .25s; color: #a3a3a3; opacity: 0.6; }
-  .step.active { color: #262626; opacity: 1; }
-  .step.done { color: #525252; opacity: 1; }
-  .step.failed { color: #b91c1c; opacity: 1; }
-  .bullet { width: 18px; height: 18px; flex-shrink: 0; position: relative; }
-  .bullet > * { position: absolute; inset: 0; margin: auto; display: none; }
-  .bullet .dot { width: 6px; height: 6px; border-radius: 50%; background: #d4d4d4; display: block; }
-  .bullet .spinner { width: 14px; height: 14px; border: 2px solid #e5e5e5; border-top-color: #262626; border-radius: 50%; animation: spin 0.9s linear infinite; box-sizing: border-box; }
-  .bullet .check, .bullet .x { width: 18px; height: 18px; }
-  .bullet .check { color: #22c55e; }
-  .bullet .x { color: #ef4444; }
-  .step.active .dot, .step.done .dot, .step.failed .dot { display: none; }
-  .step.active .spinner { display: block; }
-  .step.done .check { display: block; }
-  .step.failed .x { display: block; }
-  .detail { margin: 22px 0 0; font-size: 12px; line-height: 1.5; color: #a3a3a3; text-align: center; min-height: 1.2em; }
-  .retry { display: block; margin: 22px auto 0; padding: 8px 18px; font-size: 12px; font-weight: 500; background: #262626; color: white; border: none; border-radius: 8px; cursor: pointer; }
-  .retry:hover { background: #525252; }
-  .hidden { display: none !important; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <h1 id="label">Starting your preview</h1>
-    <ul class="steps">
-      <li class="step" data-stage="cloning">
-        <span class="bullet">
-          <span class="dot"></span>
-          <span class="spinner"></span>
-          <svg class="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-          <svg class="x" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-        </span>
-        Fetching your site files
-      </li>
-      <li class="step" data-stage="installing">
-        <span class="bullet">
-          <span class="dot"></span>
-          <span class="spinner"></span>
-          <svg class="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-          <svg class="x" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-        </span>
-        Setting things up (one-time, can take a minute)
-      </li>
-      <li class="step" data-stage="starting">
-        <span class="bullet">
-          <span class="dot"></span>
-          <span class="spinner"></span>
-          <svg class="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-          <svg class="x" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-        </span>
-        Opening your preview
-      </li>
-    </ul>
-    <p class="detail" id="detail">Getting things ready…</p>
-    <button id="retry" class="retry hidden" onclick="window.location.reload()">Retry</button>
-  </div>
-</div>
-<script>
-(function() {
-  var stages = ['cloning', 'installing', 'starting', 'ready'];
-  var steps = document.querySelectorAll('.step');
-  var attempts = 0;
-  var pollId = 0;
-  // Once we latch into "errored" we stop touching the DOM, otherwise a
-  // stale poll that started before the error flips us back to spinner.
-  var errored = false;
-
-  function setStage(stage) {
-    if (errored) return;
-    var idx = stages.indexOf(stage);
-    if (idx === -1) idx = 0;
-    steps.forEach(function(s) {
-      var sIdx = stages.indexOf(s.dataset.stage);
-      s.classList.remove('active', 'done', 'failed');
-      if (sIdx < idx) s.classList.add('done');
-      else if (sIdx === idx) s.classList.add('active');
-    });
-  }
-
-  function showError(label, detail) {
-    if (errored) return;
-    errored = true;
-    if (pollId) { clearInterval(pollId); pollId = 0; }
-    document.getElementById('label').textContent = label || 'Preview unavailable';
-    document.getElementById('detail').textContent = detail || 'Something went wrong while starting your preview.';
-    document.getElementById('retry').classList.remove('hidden');
-    // Mark the active (or first not-done) step as failed; leave previous as done
-    var active = document.querySelector('.step.active');
-    if (active) {
-      active.classList.remove('active');
-      active.classList.add('failed');
-    } else {
-      steps[steps.length - 1].classList.add('failed');
-    }
-  }
-
-  function tick() {
-    if (errored) return;
-    attempts++;
-    fetch('/api/preview-status?port=${port}&cap=${encodeURIComponent(capability)}', { credentials: 'omit' })
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(data) {
-        if (errored || !data) return;
-        if (data.stage === 'error') {
-          showError(data.label, data.detail);
-          return;
-        }
-        if (data.detail) document.getElementById('detail').textContent = data.detail;
-        setStage(data.stage);
-        if (data.stage === 'ready') {
-          if (pollId) { clearInterval(pollId); pollId = 0; }
-          steps.forEach(function(s) { s.classList.remove('active', 'failed'); s.classList.add('done'); });
-          setTimeout(function() { window.location.reload(); }, 400);
-        }
-      })
-      .catch(function() {});
-
-    if (attempts >= 30) {
-      showError('Taking longer than expected', 'Your preview is still starting up. You can wait or retry.');
-    }
-  }
-  tick();
-  pollId = setInterval(tick, 1500);
-})();
-</script>
-</body>
-</html>`;
-}
-
-/**
- * CSS injected into preview HTML responses to hide framework dev toolbars
- * (Astro dev toolbar, Next.js indicators, SvelteKit, Vue, etc.) so the
- * preview iframe shows a clean rendering of the user's site.
- */
-// Only hide the mini dev toolbars that float at the bottom of the page.
-// NEVER hide error overlays (vite-error-overlay, astro-error-overlay, etc.)
-//, those exist to tell the user something is broken in their code and
-// swallowing them makes compile errors appear as blank pages.
-const HIDE_DEV_TOOLBARS_CSS = `
-<style data-quillra-preview>
-  astro-dev-toolbar { display: none !important; }
-  #__next-build-watcher, [data-nextjs-toast-wrapper] { display: none !important; }
-  #svelte-kit-toolbar, [data-sveltekit-dev-toolbar] { display: none !important; }
-</style>
-`;
-
-/** Inject the hide-toolbar style into a fetched HTML response, transparently. */
-async function injectHideToolbarCss(upstream: Response): Promise<Response> {
-  const ct = upstream.headers.get("content-type") ?? "";
-  // Only touch successful HTML responses; never modify errors or assets
-  if (upstream.status !== 200 || !ct.includes("text/html")) return upstream;
-  // Clone first so we can fall back to the original body if something fails
-  const cloned = upstream.clone();
-  try {
-    const html = await cloned.text();
-    const injected = html.includes("</head>")
-      ? html.replace("</head>", `${HIDE_DEV_TOOLBARS_CSS}</head>`)
-      : `${HIDE_DEV_TOOLBARS_CSS}${html}`;
-    const headers = new Headers(upstream.headers);
-    headers.delete("content-length");
-    headers.delete("content-encoding");
-    return new Response(injected, { status: upstream.status, headers });
-  } catch {
-    // upstream still has its body intact because we cloned
-    return upstream;
-  }
-}
+const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
+wss.options.maxPayload = PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES;
+const previewGateway = createPreviewGateway(upgradeWebSocket);
+app.use("*", previewGateway.middleware);
+app.get("/api/caddy-check", previewGateway.caddyCheck);
 
 function allowSandboxOrigin(c: Context): void {
   c.res.headers.set("Access-Control-Allow-Origin", "null");
@@ -324,7 +151,7 @@ app.use("/__preview/:port{[0-9]+}/:cap/*", async (c, next) => {
 
     const response = securePreviewResponse(
       new Response(null, { status: 204 }),
-      c.req.url,
+      externalPreviewRequestUrl(c),
       access.port,
       c.req.param("cap"),
     );
@@ -354,7 +181,7 @@ app.use(
   "*",
   cors({
     origin: (origin) => {
-      const list = trustedOriginsList();
+      const list = getTrustedOrigins();
       if (!origin) return list[0] ?? "";
       return list.includes(origin) ? origin : (list[0] ?? "");
     },
@@ -364,6 +191,18 @@ app.use(
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   }),
 );
+
+// Browsers attach Origin to state-changing fetch and form requests. Keep a
+// preview, including a same-site deployment, from issuing blind credentialed
+// mutations against Quillra's control API. Server and CLI calls without a
+// browser origin remain supported.
+app.use("/api/*", async (c, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return next();
+  if (!isTrustedBrowserRequest(c.req.raw.headers)) {
+    return c.json({ error: "Untrusted request origin" }, 403);
+  }
+  return next();
+});
 
 app.use("*", async (c, next) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
@@ -436,23 +275,7 @@ app.get("/api/preview-status", async (c) => {
 
   // Probe only after resolving this port to an authorized project. Otherwise
   // this endpoint becomes an authenticated localhost port scanner.
-  if (isPreviewPortActive(projectId, port)) {
-    try {
-      const probe = await fetch(`http://127.0.0.1:${port}/`, {
-        signal: AbortSignal.timeout(1500),
-        redirect: "manual",
-      });
-      if (probe.status > 0) {
-        return c.json({ stage: "ready", label: "Ready", detail: "Loading your site…" });
-      }
-    } catch {
-      /* not reachable yet, fall through to status reporting */
-    }
-  }
-
-  const status = getPreviewStatus(projectId);
-  const desc = describeStage(status.stage);
-  return c.json({ stage: status.stage, label: desc.label, detail: status.message ?? desc.detail });
+  return c.json(await readPreviewStatus(projectId, port));
 });
 
 app.get("/api/session", async (c) => {
@@ -495,6 +318,12 @@ app.route("/api/team-login", teamLoginRouter);
 app.route("/api/setup", setupRouter);
 app.route("/api/instance", instanceRouter);
 
+app.use("/ws/chat/*", async (c, next) => {
+  if (!isTrustedBrowserRequest(c.req.raw.headers)) {
+    return c.json({ error: "Untrusted request origin" }, 403);
+  }
+  return next();
+});
 app.get("/ws/chat/:projectId", upgradeWebSocket(chatWsHandler));
 
 app.all("/__preview/:port{[0-9]+}/:cap", (c) => {
@@ -507,7 +336,7 @@ app.all("/__preview/:port{[0-9]+}/:cap", (c) => {
       status: 302,
       headers: { location: `/__preview/${access.port}/${capability}/` },
     }),
-    c.req.url,
+    externalPreviewRequestUrl(c),
     access.port,
     capability,
   );
@@ -529,7 +358,7 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
         status: 200,
         headers: { "content-type": "text/html; charset=UTF-8" },
       }),
-      c.req.url,
+      externalPreviewRequestUrl(c),
       port,
       capability,
     );
@@ -540,18 +369,21 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
   url.search = new URL(c.req.url).search;
 
   const headers = sanitizePreviewRequestHeaders(c.req.raw.headers);
+  headers.set("accept-encoding", "identity");
 
   try {
-    const upstream = await fetch(url.toString(), {
+    const init: RequestInit & { duplex?: "half" } = {
       method: c.req.method,
       headers,
       body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
       redirect: "manual",
-    });
+    };
+    if (init.body) init.duplex = "half";
+    const upstream = await fetch(url.toString(), init);
 
-    const withCss = await injectHideToolbarCss(upstream);
+    const withCss = await injectPreviewToolbarCss(upstream);
     const withScopedPaths = await rewritePreviewResourcePaths(withCss, port, capability);
-    return securePreviewResponse(withScopedPaths, c.req.url, port, capability);
+    return securePreviewResponse(withScopedPaths, externalPreviewRequestUrl(c), port, capability);
   } catch {
     return securePreviewResponse(
       new Response(previewBootHtml(port, capability), {
@@ -561,7 +393,7 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
         status: 200,
         headers: { "content-type": "text/html; charset=UTF-8" },
       }),
-      c.req.url,
+      externalPreviewRequestUrl(c),
       port,
       capability,
     );
@@ -572,7 +404,7 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
 app.all("/__preview/:port{[0-9]+}", async (c) => {
   const access = await requirePreviewAccess(c, c.req.param("port"));
   if ("error" in access) return access.error;
-  return c.redirect(new URL(getPreviewUrl(access.projectId, access.port)).pathname, 302);
+  return c.redirect(getPreviewAddress(access.projectId, access.port).url, 302);
 });
 
 app.use(

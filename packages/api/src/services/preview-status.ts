@@ -93,3 +93,28 @@ export function describeStage(stage: PreviewStage): { label: string; detail: str
       return { label: "Preparing", detail: "Getting things ready…" };
   }
 }
+
+/** Capability resolution must happen before calling this loopback probe. */
+export async function readPreviewStatus(projectId: string, port: number) {
+  if (isPreviewPortActive(projectId, port)) {
+    try {
+      const probe = await fetch(`http://127.0.0.1:${port}/`, {
+        signal: AbortSignal.timeout(1_500),
+        redirect: "manual",
+      });
+      if (probe.status > 0) {
+        return { stage: "ready" as const, label: "Ready", detail: "Loading your site…" };
+      }
+    } catch {
+      /* not reachable yet, fall through to the tracked lifecycle */
+    }
+  }
+
+  const status = getPreviewStatus(projectId);
+  const description = describeStage(status.stage);
+  return {
+    stage: status.stage,
+    label: description.label,
+    detail: status.message ?? description.detail,
+  };
+}

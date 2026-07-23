@@ -5,13 +5,13 @@ import { Hono } from "hono";
 import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
-import { getPreviewStatus } from "../../services/preview-status.js";
+import { getPreviewStatus, isPreviewPortActive } from "../../services/preview-status.js";
 import {
   ensureRepoCloned,
   getPackageManager,
+  getPreviewAddress,
   getPreviewLogs,
   getPreviewProcessInfo,
-  getPreviewUrl,
   projectRepoPath,
   reinstallProjectDependencies,
   reserveAvailablePreviewPort,
@@ -34,8 +34,8 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
       const { port, label } = await startDevPreview(projectId, repoPath, p.previewDevCommand);
-      const url = getPreviewUrl(projectId, port);
-      return c.json({ url, port, previewLabel: label });
+      const preview = getPreviewAddress(projectId, port);
+      return c.json({ url: preview.url, previewMode: preview.mode, port, previewLabel: label });
     } catch (e) {
       stopPreview(projectId);
       return c.json({ error: e instanceof Error ? e.message : "Failed to start preview" }, 500);
@@ -132,13 +132,19 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     const port = await reserveAvailablePreviewPort(projectId);
-    const url = getPreviewUrl(projectId, port);
+    const preview = getPreviewAddress(projectId, port);
     let previewLabel = "-";
     const repo = projectRepoPath(projectId);
     if (fs.existsSync(path.join(repo, "package.json"))) {
       previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
     }
-    return c.json({ url, port, previewLabel });
+    return c.json({
+      url: preview.url,
+      previewMode: preview.mode,
+      previewActive: isPreviewPortActive(projectId, port),
+      port,
+      previewLabel,
+    });
   })
   /**
    * Deep debug snapshot for the live-preview pipeline. Used by the Debug
@@ -156,7 +162,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
 
     const port = await reserveAvailablePreviewPort(projectId);
-    const previewUrl = getPreviewUrl(projectId, port);
+    const previewAddress = getPreviewAddress(projectId, port);
     const repoPath = projectRepoPath(projectId);
     const repoExists = fs.existsSync(repoPath);
     const pkgPath = path.join(repoPath, "package.json");
@@ -241,7 +247,8 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       devCommand: dev ? { command: dev.command, args: dev.args, label: dev.label } : null,
       preview: {
         port,
-        previewUrl,
+        previewUrl: previewAddress.url,
+        previewMode: previewAddress.mode,
         stage: previewStatus.stage,
         stageMessage: previewStatus.message ?? null,
         stageUpdatedAt: previewStatus.updatedAt,

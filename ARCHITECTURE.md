@@ -151,10 +151,14 @@ Every project has exactly one clone on disk under
 `$WORKSPACE_DIR/<projectId>/` (default: `packages/api/data/workspaces/<projectId>/`)
 and, while active, one preview dev server. The preview is a child process
 the backend starts on demand; the user's browser talks to it through a
-capability-protected path on the Quillra origin. Built-in framework commands
-bind the child process to loopback, and the browser renders the proxy response
-inside a restricted iframe. Workspace ports and wildcard preview subdomains
-must never be exposed publicly.
+capability-authenticated host gateway. Its opaque per-project hostname keeps the
+browser path identical to the loopback dev-server path, which makes SPA history,
+root-relative resources, and HMR WebSockets framework-transparent. The browser
+renders that separate origin inside a restricted iframe. Built-in framework
+commands bind the child process to loopback; only Quillra's validating HTTP/WS
+gateway and TLS terminator are public, never the workspace ports themselves.
+Installations without wildcard DNS retain a compatibility path proxy with the
+known limitation that a browser router can still observe its mount prefix.
 
 Git operations are serialised per project with an in-process mutex because
 concurrent chat turns used to race on `.git/index.lock`.

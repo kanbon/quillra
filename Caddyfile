@@ -1,10 +1,28 @@
-# Example: TLS terminate at Caddy, proxy to Quillra Node server.
-# Replace cms.example.com with your domain.
+# Standalone example: TLS-terminate Quillra and its isolated previews.
+# Use a dedicated same-site preview subdomain for broad browser compatibility,
+# create wildcard DNS (*.preview.example.com -> this server), and set
+# PREVIEW_DOMAIN=preview.example.com. The on-demand policy below is global;
+# merge it deliberately if this Caddy instance serves other on-demand sites.
+{
+	on_demand_tls {
+		ask http://127.0.0.1:3000/api/caddy-check
+	}
+}
 
 cms.example.com {
 	encode gzip
 	reverse_proxy 127.0.0.1:3000 {
-		header_up X-Forwarded-For {remote_host}
+		header_up -CF-Connecting-IP
+		header_up -X-Real-IP
+	}
+}
+
+*.preview.example.com {
+	encode gzip
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:3000 {
 		header_up -CF-Connecting-IP
 		header_up -X-Real-IP
 	}

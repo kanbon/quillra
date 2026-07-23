@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolvePreviewCapability, revokePreviewCapability } from "./preview-capability.js";
+import {
+  resolvePreviewCapability,
+  resolvePreviewCapabilityToken,
+  revokePreviewCapability,
+} from "./preview-capability.js";
 import { unregisterPreviewPort } from "./preview-status.js";
 import {
   getPackageManager,
@@ -47,6 +51,23 @@ describe("getPreviewUrl", () => {
     expect(url.origin).toBe("https://quillra.example");
     expect(url.pathname).toMatch(/^\/__preview\/4321\/[A-Za-z0-9_-]{32}\/$/);
     expect(resolvePreviewCapability("4321", capability)).toMatchObject({
+      ok: true,
+      projectId: "project-preview-url",
+      port: 4_321,
+    });
+  });
+
+  it("uses an isolated preview host when PREVIEW_DOMAIN is configured", () => {
+    vi.stubEnv("BETTER_AUTH_URL", "https://cms.example.com");
+    vi.stubEnv("BETTER_AUTH_SECRET", "workspace-preview-host-secret");
+    vi.stubEnv("PREVIEW_DOMAIN", "preview.example.net");
+
+    const url = new URL(getPreviewUrl("project-preview-url", 4_321));
+    const capability = url.searchParams.get("__quillra_preview") ?? "";
+
+    expect(url.hostname).toMatch(/^p-[a-f0-9]{40}\.preview\.example\.net$/);
+    expect(url.pathname).toBe("/");
+    expect(resolvePreviewCapabilityToken(capability)).toMatchObject({
       ok: true,
       projectId: "project-preview-url",
       port: 4_321,
