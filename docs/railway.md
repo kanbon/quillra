@@ -56,6 +56,10 @@ state to an ephemeral filesystem.
    live check succeeds and the sandbox is removed. Do not add or set
    `E2B_ENABLED` as a Railway variable.
 
+   When a published Template generated `QUILLRA_SETUP_TOKEN`, open the
+   deployed service's **Variables** tab in Railway and copy that value into the
+   first-access screen.
+
 `DATABASE_URL=file:./data/cms.sqlite` and
 `WORKSPACE_DIR=./data/workspaces` are the correct image defaults. Railway
 provides `PORT`; Quillra listens on `0.0.0.0:$PORT`. The configured healthcheck
@@ -97,9 +101,19 @@ session bound to the exact project host and port.
 
 ## Published Railway Template checklist
 
-`railway.json` configures one service deployment, but it cannot publish a
-Marketplace Template, claim Template ownership, or attach account-owned
-infrastructure. In Railway's Template Composer, the publisher must configure:
+`railway.json` configures one service deployment, but the Template Composer
+still owns the reusable infrastructure snapshot and its generated variables.
+Create an unpublished draft only from a clean reference project that contains
+no provider credentials or customer data:
+
+```bash
+railway templates create \
+  --project <reference-project-id> \
+  --environment production \
+  --json
+```
+
+In Railway's Template Composer, the publisher must verify:
 
 - this repository and its root `Dockerfile`;
 - HTTP Public Networking with a generated domain;
@@ -116,10 +130,20 @@ Do not put `E2B_API_KEY`, `ANTHROPIC_API_KEY`, GitHub App credentials, or mail
 credentials into the published Template. The owner enters them through
 Quillra's authenticated setup wizard on first access.
 
-The publisher must create and publish the Template in Railway's dashboard.
-Marketplace publication, Template ownership, billing, and the generated
-Deploy-on-Railway URL are external Railway state. Repository configuration
-alone cannot perform those account-level actions.
+Test the unpublished draft in a fresh project before publishing it. The
+Marketplace overview in `docs/railway-template.md` can then be applied with:
+
+```bash
+railway templates publish <template-id> \
+  --category CMS \
+  --description "Self-host Quillra on Railway with isolated E2B project sandboxes" \
+  --readme-file docs/railway-template.md \
+  --json
+```
+
+Template ownership, billing, generated-secret definitions, and the
+Deploy-on-Railway URL remain account-level Railway state rather than repository
+configuration.
 
 ## Security and recovery
 
