@@ -17,7 +17,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "check:em-dashes": "node scripts/check-em-dashes.mjs",
-    "check": "turbo run typecheck && biome check . && node scripts/check-em-dashes.mjs && turbo run test"
+    "check": "turbo run typecheck && biome check . && node scripts/check-em-dashes.mjs && node scripts/check-railway-config.mjs && turbo run test"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
