@@ -342,6 +342,12 @@ function cappedForwarder(
   };
 }
 
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("The operation was aborted.", "AbortError");
+}
+
 async function waitForProcess(
   process: E2BProcess,
   signal?: AbortSignal,
@@ -349,9 +355,7 @@ async function waitForProcess(
   if (!signal) return process.wait();
   if (signal.aborted) {
     await process.kill().catch(() => undefined);
-    throw signal.reason instanceof Error
-      ? signal.reason
-      : new DOMException("The operation was aborted.", "AbortError");
+    throw abortReason(signal);
   }
 
   let rejectAbort: ((reason: unknown) => void) | undefined;
@@ -363,11 +367,7 @@ async function waitForProcess(
       .kill()
       .catch(() => undefined)
       .finally(() => {
-        rejectAbort?.(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new DOMException("The operation was aborted.", "AbortError"),
-        );
+        rejectAbort?.(abortReason(signal));
       });
   };
   signal.addEventListener("abort", onAbort, { once: true });
@@ -582,6 +582,13 @@ export class E2BRuntime {
           onStderr: cappedForwarder(options.onStderr),
         });
       } catch (error) {
+        if (
+          error instanceof E2BTrustedEnvironmentError &&
+          (error.stage === "relay-start" || error.stage === "relay-ready")
+        ) {
+          const cleanupStatus = await this.discardUnsafeSandbox(record, sandbox);
+          throw new E2BTrustedEnvironmentError(error.stage, cleanupStatus);
+        }
         await this.quarantinePreviewFailure(record, sandbox);
         throw error;
       }
@@ -839,6 +846,7 @@ export class E2BRuntime {
         if (error instanceof E2BTrustedEnvironmentError) {
           if (error.cleanupStatus === "confirmed") {
             this.store.delete(record.projectId, record.sandboxId);
+            if (signal?.aborted) throw abortReason(signal);
           } else {
             // A failed cleanup is materially different from a confirmed
             // provider "not found". Keep the identifier for a later retry.
@@ -851,29 +859,95 @@ export class E2BRuntime {
       }
     }
 
-    const sandbox = await this.adapter.create({
-      apiKey: config.apiKey,
-      templateId: config.templateId,
-      projectId: fence.projectId,
-      timeoutMs: config.sandboxTimeoutMs,
-      requestTimeoutMs: config.requestTimeoutMs,
-      signal,
-    });
-    const createdRecord: E2BProjectSandboxRecord = {
-      projectId: fence.projectId,
-      sandboxId: sandbox.sandboxId,
-      githubBindingGeneration: fence.githubBindingGeneration,
-      templateId: config.templateId,
-      previewPid: null,
-      previewPort: null,
+    let provisionalRecord: E2BProjectSandboxRecord | undefined;
+    const rememberCreatedSandbox = (sandboxId: string) => {
+      provisionalRecord = {
+        projectId: fence.projectId,
+        sandboxId,
+        githubBindingGeneration: fence.githubBindingGeneration,
+        templateId: config.templateId,
+        previewPid: null,
+        previewPort: null,
+      };
+      // Persist before trusted bootstrap. A process crash or failed provider
+      // cleanup must never turn a persistent sandbox into an untracked orphan.
+      this.store.save(provisionalRecord);
     };
+
+    let sandbox: E2BSandboxHandle;
+    try {
+      sandbox = await this.adapter.create({
+        apiKey: config.apiKey,
+        templateId: config.templateId,
+        projectId: fence.projectId,
+        timeoutMs: config.sandboxTimeoutMs,
+        requestTimeoutMs: config.requestTimeoutMs,
+        onSandboxCreated: rememberCreatedSandbox,
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof E2BTrustedEnvironmentError) {
+        const sandboxId = provisionalRecord?.sandboxId ?? error.sandboxId;
+        if (sandboxId && error.cleanupStatus === "confirmed") {
+          this.store.delete(fence.projectId, sandboxId);
+        } else if (sandboxId) {
+          // Keep the provisional row so credential rotation or the next
+          // project operation can retry removal with the same provider ID.
+          this.store.setPreview(fence.projectId, sandboxId, null);
+        }
+        if (error.cleanupStatus === "confirmed" && signal?.aborted) {
+          throw abortReason(signal);
+        }
+      }
+      throw error;
+    }
+    const createdRecord =
+      provisionalRecord ??
+      ({
+        projectId: fence.projectId,
+        sandboxId: sandbox.sandboxId,
+        githubBindingGeneration: fence.githubBindingGeneration,
+        templateId: config.templateId,
+        previewPid: null,
+        previewPort: null,
+      } satisfies E2BProjectSandboxRecord);
+    if (createdRecord.sandboxId !== sandbox.sandboxId) {
+      let cleanupStatus: "confirmed" | "failed";
+      try {
+        await sandbox.kill();
+        cleanupStatus = "confirmed";
+        this.store.delete(createdRecord.projectId, createdRecord.sandboxId);
+      } catch {
+        cleanupStatus = "failed";
+        // The handle's id is the only identifier known to address the sandbox
+        // that could not be killed. Replace the provisional callback value so
+        // a later credential rotation can retry provider cleanup.
+        this.store.delete(createdRecord.projectId, createdRecord.sandboxId);
+        this.store.save({
+          ...createdRecord,
+          sandboxId: sandbox.sandboxId,
+          previewPid: null,
+          previewPort: null,
+        });
+      }
+      throw new E2BTrustedEnvironmentError(
+        "bootstrap",
+        cleanupStatus,
+        cleanupStatus === "failed" ? sandbox.sandboxId : undefined,
+      );
+    }
     try {
       await this.store.assertFence(fence);
       await this.ensureRemoteRoots(sandbox, signal);
       this.store.save(createdRecord);
       return { sandbox, record: createdRecord };
     } catch (error) {
-      await sandbox.kill().catch(() => undefined);
+      try {
+        await sandbox.kill();
+        this.store.delete(createdRecord.projectId, createdRecord.sandboxId);
+      } catch {
+        this.store.setPreview(createdRecord.projectId, createdRecord.sandboxId, null);
+      }
       throw error;
     }
   }

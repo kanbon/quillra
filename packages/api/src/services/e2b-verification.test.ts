@@ -1,5 +1,56 @@
 import { AuthenticationError } from "e2b";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const websocketGateway = vi.hoisted(() => ({
+  allowUnauthenticated: false,
+  calls: [] as Array<{ headers?: Record<string, string>; url: string }>,
+  rejectionStatus: 403,
+}));
+
+vi.mock("ws", () => {
+  class TestWebSocket {
+    private readonly listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+
+    constructor(url: string, options?: { headers?: Record<string, string> }) {
+      websocketGateway.calls.push({
+        url,
+        ...(options?.headers ? { headers: options.headers } : {}),
+      });
+      queueMicrotask(() => {
+        if (websocketGateway.allowUnauthenticated) {
+          this.emit("open");
+          return;
+        }
+        this.emit(
+          "unexpected-response",
+          {},
+          {
+            statusCode: websocketGateway.rejectionStatus,
+            resume: () => undefined,
+          },
+        );
+      });
+    }
+
+    once(event: string, listener: (...args: unknown[]) => void): this {
+      this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+      return this;
+    }
+
+    terminate(): void {
+      // The verification helper owns bounded cleanup; this fake has no socket.
+    }
+
+    private emit(event: string, ...args: unknown[]): void {
+      const listeners = this.listeners.get(event) ?? [];
+      this.listeners.delete(event);
+      for (const listener of listeners) listener(...args);
+    }
+  }
+
+  return { default: TestWebSocket };
+});
+
 import { E2BTrustedEnvironmentError, E2B_PREVIEW_RELAY_PORT } from "./e2b-preview-relay.js";
 import { E2bVerificationError, verifyE2bConfiguration } from "./e2b-verification.js";
 
@@ -11,9 +62,14 @@ function installTrafficGateway(
     trafficHeaderPresent?: boolean;
     relayMetadataPresent?: boolean;
     allowUnauthenticated?: boolean;
+    allowUnauthenticatedWebSocket?: boolean;
+    httpRejectionStatus?: number;
+    webSocketRejectionStatus?: number;
     payload?: Record<string, unknown>;
   } = {},
 ) {
+  websocketGateway.allowUnauthenticated = options.allowUnauthenticatedWebSocket ?? false;
+  websocketGateway.rejectionStatus = options.webSocketRejectionStatus ?? 403;
   const request = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
     const token = new Headers(init?.headers).get("e2b-traffic-access-token");
     if (token === "traffic-token") {
@@ -32,7 +88,9 @@ function installTrafficGateway(
     }
     return options.allowUnauthenticated
       ? Response.json({ accepted: true })
-      : new Response("Forbidden", { status: 403 });
+      : new Response("Forbidden", {
+          status: options.httpRejectionStatus ?? 403,
+        });
   });
   vi.stubGlobal("fetch", request);
   return request;
@@ -41,12 +99,23 @@ function installTrafficGateway(
 function verificationSandbox(
   options: {
     trafficAccessToken?: string;
+    networkResult?: { exitCode: number; stdout: string; stderr?: string };
     prerequisiteResult?: { exitCode: number; stdout: string; stderr?: string };
     prepare?: () => Promise<void>;
     startRelay?: (targetPort: number) => Promise<void>;
     kill?: () => Promise<boolean>;
   } = {},
 ) {
+  const networkProcess = {
+    pid: 40,
+    wait: vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "quillra-e2b-egress-blocked",
+      stderr: "",
+      ...options.networkResult,
+    })),
+    kill: vi.fn(async () => true),
+  };
   const prerequisiteProcess = {
     pid: 41,
     wait: vi.fn(async () => ({
@@ -64,6 +133,7 @@ function verificationSandbox(
   };
   const startCommand = vi
     .fn()
+    .mockResolvedValueOnce(networkProcess)
     .mockResolvedValueOnce(prerequisiteProcess)
     .mockResolvedValueOnce(trafficProcess);
   const prepareExecutionEnvironment = vi.fn(options.prepare ?? (async () => undefined));
@@ -80,6 +150,7 @@ function verificationSandbox(
       kill,
     },
     kill,
+    networkProcess,
     prepareExecutionEnvironment,
     prerequisiteProcess,
     startCommand,
@@ -90,6 +161,9 @@ function verificationSandbox(
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  websocketGateway.allowUnauthenticated = false;
+  websocketGateway.calls = [];
+  websocketGateway.rejectionStatus = 403;
 });
 
 describe("E2B configuration verification", () => {
@@ -109,9 +183,22 @@ describe("E2B configuration verification", () => {
     });
     expect(sandbox.prepareExecutionEnvironment).toHaveBeenCalledOnce();
     expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(6_317);
-    expect(sandbox.startCommand).toHaveBeenCalledTimes(2);
+    expect(sandbox.startCommand).toHaveBeenCalledTimes(3);
 
-    const [prerequisiteProbe, prerequisiteOptions] = sandbox.startCommand.mock.calls[0] ?? [];
+    const [networkProbe, networkOptions] = sandbox.startCommand.mock.calls[0] ?? [];
+    expect(networkProbe).toContain('"1.1.1.1",80,"one.one.one.one"');
+    expect(networkProbe).toContain('"8.8.8.8",80,"dns.google"');
+    expect(networkProbe).toContain('"2606:4700:4700::1111",80');
+    expect(networkProbe).toContain('"2001:4860:4860::8888",80');
+    expect(networkProbe).toContain("sock.sendall(request)");
+    expect(networkProbe).toContain("if sock.recv(1):");
+    expect(networkOptions).toMatchObject({
+      cwd: "/home/quillra-project",
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_024,
+    });
+
+    const [prerequisiteProbe, prerequisiteOptions] = sandbox.startCommand.mock.calls[1] ?? [];
     for (const tool of [
       "/bin/bash",
       "/bin/rm",
@@ -127,6 +214,9 @@ describe("E2B configuration verification", () => {
     ]) {
       expect(prerequisiteProbe).toContain(tool);
     }
+    expect(prerequisiteProbe).toContain("for quillra_tool in node npm git");
+    expect(prerequisiteProbe).toContain('type -P "$quillra_tool"');
+    expect(prerequisiteProbe).toContain('"$quillra_tool_path" --version');
     expect(prerequisiteProbe).toContain('[ "$(/usr/bin/id -u)" -ne 0 ]');
     expect(prerequisiteOptions).toMatchObject({
       cwd: "/home/quillra-project",
@@ -134,7 +224,7 @@ describe("E2B configuration verification", () => {
       maxOutputBytes: 1_024,
     });
 
-    const [trafficProbe, trafficOptions] = sandbox.startCommand.mock.calls[1] ?? [];
+    const [trafficProbe, trafficOptions] = sandbox.startCommand.mock.calls[2] ?? [];
     expect(trafficProbe).toContain(`"127.0.0.1",6317`);
     expect(trafficProbe).toContain("e2b-traffic-access-token");
     expect(trafficOptions).toMatchObject({
@@ -160,6 +250,15 @@ describe("E2B configuration verification", () => {
     expect(fetchMock.mock.calls[2]?.[1]?.headers).toEqual({
       "e2b-traffic-access-token": "quillra-invalid-traffic-credential",
     });
+    expect(websocketGateway.calls).toEqual([
+      { url: "wss://39177-probe.example.test/" },
+      {
+        url: "wss://39177-probe.example.test/",
+        headers: {
+          "e2b-traffic-access-token": "quillra-invalid-traffic-credential",
+        },
+      },
+    ]);
     expect(sandbox.handle.getHost).toHaveBeenCalledWith(E2B_PREVIEW_RELAY_PORT);
     expect(sandbox.trafficProcess.kill).toHaveBeenCalledOnce();
     expect(sandbox.kill).toHaveBeenCalledWith();
@@ -167,6 +266,26 @@ describe("E2B configuration verification", () => {
     expect(report.stages.every(({ status }) => status === "passed")).toBe(true);
     expect(JSON.stringify(report)).not.toContain("traffic-token");
     expect(JSON.stringify(report)).not.toContain("e2b_live_secret");
+  });
+
+  it("fails closed and removes the sandbox when outbound data exchange succeeds", async () => {
+    const sandbox = verificationSandbox({
+      networkResult: { exitCode: 41, stdout: "" },
+    });
+
+    const failure = await verifyE2bConfiguration(
+      { apiKey: "e2b_open_egress" },
+      async () => sandbox.handle,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(E2bVerificationError);
+    expect(failure).toMatchObject({
+      code: "probe-failed",
+      verification: { failedStage: "sandbox" },
+    });
+    expect(JSON.stringify(failure)).toContain("Fixed command exited with code 41");
+    expect(sandbox.prepareExecutionEnvironment).not.toHaveBeenCalled();
+    expect(sandbox.kill).toHaveBeenCalledOnce();
   });
 
   it("removes a sandbox whose non-root prerequisite probe fails", async () => {
@@ -303,6 +422,66 @@ describe("E2B configuration verification", () => {
     expect(sandbox.kill).toHaveBeenCalledOnce();
   });
 
+  it("does not mistake an unrelated HTTP error for an authentication rejection", async () => {
+    installTrafficGateway({ httpRejectionStatus: 502 });
+    const sandbox = verificationSandbox();
+
+    const failure = await verifyE2bConfiguration(
+      { apiKey: "e2b_broken_gateway" },
+      async () => sandbox.handle,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      code: "probe-failed",
+      verification: { failedStage: "unauthenticated-access" },
+    });
+    expect(JSON.stringify(failure)).toContain(
+      "Private HTTP ingress returned unexpected authentication status 502 or 502.",
+    );
+    expect(websocketGateway.calls).toHaveLength(0);
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when private WebSocket ingress accepts a missing credential", async () => {
+    installTrafficGateway({ allowUnauthenticatedWebSocket: true });
+    const sandbox = verificationSandbox();
+
+    const failure = await verifyE2bConfiguration(
+      { apiKey: "e2b_unprotected_websocket" },
+      async () => sandbox.handle,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      code: "probe-failed",
+      verification: { failedStage: "unauthenticated-access" },
+    });
+    expect(JSON.stringify(failure)).toContain(
+      "Private WebSocket ingress accepted the missing credential.",
+    );
+    expect(websocketGateway.calls).toHaveLength(1);
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+  });
+
+  it("does not mistake an unrelated WebSocket response for an authentication rejection", async () => {
+    installTrafficGateway({ webSocketRejectionStatus: 404 });
+    const sandbox = verificationSandbox();
+
+    const failure = await verifyE2bConfiguration(
+      { apiKey: "e2b_broken_websocket_gateway" },
+      async () => sandbox.handle,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      code: "probe-failed",
+      verification: { failedStage: "unauthenticated-access" },
+    });
+    expect(JSON.stringify(failure)).toContain(
+      "The missing WebSocket request returned unexpected HTTP 404.",
+    );
+    expect(websocketGateway.calls).toHaveLength(1);
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+  });
+
   it("rejects an oversized protected response before parsing it", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
       new Headers(init?.headers).get("e2b-traffic-access-token") === "traffic-token"
@@ -345,8 +524,9 @@ describe("E2B configuration verification", () => {
     });
     const report = (failure as E2bVerificationError).verification;
     expect(report.stages.find(({ id }) => id === "provider")?.status).toBe("passed");
-    expect(report.stages.find(({ id }) => id === "sandbox")?.status).toBe("passed");
+    expect(report.stages.find(({ id }) => id === "sandbox")?.status).toBe("skipped");
     expect(report.stages.find(({ id }) => id === "cleanup")?.status).toBe("skipped");
+    expect(report.logs.some(({ message }) => message.includes("external IPv4/IPv6"))).toBe(false);
     expect(JSON.stringify(report)).not.toContain("e2b_template_without_runtime");
   });
 });

@@ -6,6 +6,7 @@ import {
   TemplateError,
   TimeoutError,
 } from "e2b";
+import WebSocket from "ws";
 import { type E2BProcess, type E2BSandboxHandle, E2BSdkAdapter } from "./e2b-adapter.js";
 import {
   E2BTrustedEnvironmentError,
@@ -14,6 +15,7 @@ import {
 } from "./e2b-preview-relay.js";
 
 const PROBE_OUTPUT = "quillra-e2b-ok";
+const NETWORK_PROBE_OUTPUT = "quillra-e2b-egress-blocked";
 const TRAFFIC_ACCESS_HEADER = "e2b-traffic-access-token";
 const TRAFFIC_PROBE_PORT = 6_317;
 const PROBE_SANDBOX_TIMEOUT_MS = 60_000;
@@ -37,6 +39,7 @@ const REQUIRED_RUNTIME_TOOLS = [
   "/usr/bin/python3",
   "/usr/bin/setsid",
 ] as const;
+const REQUIRED_PROJECT_TOOLS = ["node", "npm", "git"] as const;
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
@@ -47,10 +50,43 @@ const PREREQUISITE_PROBE_SCRIPT = [
   `for quillra_tool in ${REQUIRED_RUNTIME_TOOLS.join(" ")}; do`,
   '  [ -x "$quillra_tool" ]',
   "done",
+  `for quillra_tool in ${REQUIRED_PROJECT_TOOLS.join(" ")}; do`,
+  '  quillra_tool_path="$(type -P "$quillra_tool")"',
+  '  [ -n "$quillra_tool_path" ]',
+  '  [ -x "$quillra_tool_path" ]',
+  '  "$quillra_tool_path" --version >/dev/null',
+  "done",
   '[ "$(/usr/bin/id -u)" -ne 0 ]',
   `/usr/bin/python3 -I -S -c 'import base64,http.server,json,os,stat,sys;sys.stdout.write("${PROBE_OUTPUT}")'`,
 ].join("\n");
 const PREREQUISITE_PROBE_COMMAND = `/bin/bash -c ${shellQuote(PREREQUISITE_PROBE_SCRIPT)}`;
+const NETWORK_PROBE_SCRIPT = [
+  "import socket,sys",
+  "targets=(",
+  ' (socket.AF_INET,"1.1.1.1",80,"one.one.one.one"),',
+  ' (socket.AF_INET,"8.8.8.8",80,"dns.google"),',
+  ' (socket.AF_INET6,"2606:4700:4700::1111",80,"one.one.one.one"),',
+  ' (socket.AF_INET6,"2001:4860:4860::8888",80,"dns.google"),',
+  ")",
+  "for family,host,port,http_host in targets:",
+  " sock=None",
+  " try:",
+  "  sock=socket.socket(family,socket.SOCK_STREAM)",
+  "  sock.settimeout(1.25)",
+  "  address=(host,port) if family==socket.AF_INET else (host,port,0,0)",
+  "  sock.connect(address)",
+  '  request=("GET / HTTP/1.0\\r\\nHost: "+http_host+"\\r\\nConnection: close\\r\\n\\r\\n").encode("ascii")',
+  "  sock.sendall(request)",
+  "  if sock.recv(1):",
+  "   sys.exit(41)",
+  " except OSError:",
+  "  continue",
+  " finally:",
+  "  if sock is not None:",
+  "   sock.close()",
+  `sys.stdout.write("${NETWORK_PROBE_OUTPUT}")`,
+].join("\n");
+const NETWORK_PROBE_COMMAND = `/usr/bin/python3 -I -S -c ${shellQuote(NETWORK_PROBE_SCRIPT)}`;
 const TRAFFIC_PROBE_SCRIPT = [
   "import http.server,json,os",
   "class Handler(http.server.BaseHTTPRequestHandler):",
@@ -111,7 +147,10 @@ const VERIFICATION_STAGE_DEFINITIONS = [
   { id: "traffic-server", message: "Start the isolated test service" },
   { id: "protected-ingress", message: "Check authenticated private ingress" },
   { id: "payload", message: "Confirm credentials stay outside project code" },
-  { id: "unauthenticated-access", message: "Reject unauthenticated preview traffic" },
+  {
+    id: "unauthenticated-access",
+    message: "Reject unauthenticated preview traffic",
+  },
   { id: "cleanup", message: "Remove the test sandbox" },
 ] as const;
 
@@ -282,13 +321,90 @@ function providerFailureDetail(error: unknown): string {
 function assertProbeCommandResult(
   result: { exitCode: number; stdout: string },
   stage: VerificationStageId,
+  expectedOutput = PROBE_OUTPUT,
 ): void {
   if (result.exitCode !== 0) {
     throw new VerificationProbeFailure(stage, `Fixed command exited with code ${result.exitCode}.`);
   }
-  if (result.stdout !== PROBE_OUTPUT) {
+  if (result.stdout !== expectedOutput) {
     throw new VerificationProbeFailure(stage, "Fixed command returned an unexpected marker.");
   }
+}
+
+function isPrivateIngressRejection(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
+function fetchRejectedWebSocket(
+  url: string,
+  headers: Record<string, string> | undefined,
+  credentialDescription: string,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const socket = new WebSocket(url, {
+      ...(headers ? { headers } : {}),
+      followRedirects: false,
+      handshakeTimeout: PROBE_HTTP_TIMEOUT_MS,
+      maxPayload: PROBE_HTTP_BODY_LIMIT_BYTES,
+    });
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.terminate();
+      reject(
+        new VerificationProbeFailure(
+          "unauthenticated-access",
+          `The ${credentialDescription} WebSocket request did not return a bounded authentication response.`,
+        ),
+      );
+    }, PROBE_HTTP_TIMEOUT_MS);
+
+    const finish = (operation: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      operation();
+    };
+
+    socket.once("unexpected-response", (_request, response) => {
+      response.resume();
+      finish(() => {
+        const status = response.statusCode ?? 0;
+        if (isPrivateIngressRejection(status)) {
+          resolve(status);
+          return;
+        }
+        reject(
+          new VerificationProbeFailure(
+            "unauthenticated-access",
+            `The ${credentialDescription} WebSocket request returned unexpected HTTP ${status}.`,
+          ),
+        );
+      });
+    });
+    socket.once("open", () => {
+      finish(() => {
+        socket.terminate();
+        reject(
+          new VerificationProbeFailure(
+            "unauthenticated-access",
+            `Private WebSocket ingress accepted the ${credentialDescription} credential.`,
+          ),
+        );
+      });
+    });
+    socket.once("error", () => {
+      finish(() =>
+        reject(
+          new VerificationProbeFailure(
+            "unauthenticated-access",
+            `The ${credentialDescription} WebSocket request could not be evaluated.`,
+          ),
+        ),
+      );
+    });
+  });
 }
 
 async function readBoundedJson(response: Response, stage: VerificationStageId): Promise<unknown> {
@@ -426,7 +542,9 @@ async function fetchProtectedTrafficProbe(
       signal: AbortSignal.timeout(PROBE_HTTP_TIMEOUT_MS),
     });
     incorrectResponse = await fetch(url, {
-      headers: { [TRAFFIC_ACCESS_HEADER]: "quillra-invalid-traffic-credential" },
+      headers: {
+        [TRAFFIC_ACCESS_HEADER]: "quillra-invalid-traffic-credential",
+      },
       redirect: "manual",
       signal: AbortSignal.timeout(PROBE_HTTP_TIMEOUT_MS),
     });
@@ -436,17 +554,27 @@ async function fetchProtectedTrafficProbe(
       "A bounded unauthenticated request could not be evaluated.",
     );
   }
-  if (missingResponse.ok || incorrectResponse.ok) {
-    throw new VerificationProbeFailure(
-      "unauthenticated-access",
-      "Private ingress accepted a missing or incorrect traffic credential.",
-    );
-  }
+  const missingStatus = missingResponse.status;
+  const incorrectStatus = incorrectResponse.status;
   await missingResponse.body?.cancel().catch(() => undefined);
   await incorrectResponse.body?.cancel().catch(() => undefined);
+  if (!isPrivateIngressRejection(missingStatus) || !isPrivateIngressRejection(incorrectStatus)) {
+    throw new VerificationProbeFailure(
+      "unauthenticated-access",
+      `Private HTTP ingress returned unexpected authentication status ${missingStatus} or ${incorrectStatus}.`,
+    );
+  }
+
+  const websocketUrl = url.replace(/^https:/, "wss:");
+  const missingWebSocketStatus = await fetchRejectedWebSocket(websocketUrl, undefined, "missing");
+  const incorrectWebSocketStatus = await fetchRejectedWebSocket(
+    websocketUrl,
+    { [TRAFFIC_ACCESS_HEADER]: "quillra-invalid-traffic-credential" },
+    "incorrect",
+  );
   report.pass(
     "unauthenticated-access",
-    `Missing and incorrect credentials were rejected with HTTP ${missingResponse.status} and ${incorrectResponse.status}.`,
+    `Missing and incorrect credentials were rejected for HTTP (${missingStatus}/${incorrectStatus}) and WebSocket (${missingWebSocketStatus}/${incorrectWebSocketStatus}).`,
   );
 }
 
@@ -464,7 +592,11 @@ export async function verifyE2bConfiguration(
   let sandbox: VerificationSandbox | undefined;
   let trafficProcess: E2BProcess | undefined;
   let verificationFailure:
-    | { code: "unavailable" | "probe-failed"; stage: VerificationStageId; detail: string }
+    | {
+        code: "unavailable" | "probe-failed";
+        stage: VerificationStageId;
+        detail: string;
+      }
     | undefined;
   let adapterCleanupStatus: "confirmed" | "failed" | undefined;
 
@@ -472,7 +604,19 @@ export async function verifyE2bConfiguration(
     report.start("provider");
     sandbox = await createSandbox(input);
     report.pass("provider", "The API key and template were accepted.");
-    report.pass("sandbox", "The isolated test sandbox started.");
+
+    report.start("sandbox");
+    const networkProcess = await sandbox.startCommand(NETWORK_PROBE_COMMAND, {
+      cwd: E2B_PROJECT_HOME,
+      timeoutMs: PROBE_COMMAND_TIMEOUT_MS,
+      maxOutputBytes: 1_024,
+    });
+    const networkResult = await networkProcess.wait();
+    assertProbeCommandResult(networkResult, "sandbox", NETWORK_PROBE_OUTPUT);
+    report.pass(
+      "sandbox",
+      "The isolated test sandbox started and external IPv4/IPv6 data exchange was blocked.",
+    );
 
     report.start("prerequisite");
     await sandbox.prepareExecutionEnvironment();
@@ -485,7 +629,7 @@ export async function verifyE2bConfiguration(
     assertProbeCommandResult(prerequisiteResult, "prerequisite");
     report.pass(
       "prerequisite",
-      `Locked non-root project user and ${REQUIRED_RUNTIME_TOOLS.length} fixed tools verified.`,
+      `Locked non-root project user, ${REQUIRED_RUNTIME_TOOLS.length} fixed tools, and Node/npm/Git verified.`,
     );
 
     report.start("relay");
@@ -523,9 +667,9 @@ export async function verifyE2bConfiguration(
       if (!sandbox) {
         // This sanitized adapter error is only emitted after E2B created the
         // sandbox and attempted trusted bootstrapping. The adapter removes it
-        // before propagating the error.
+        // before propagating the error. Provider acceptance is known, but the
+        // active egress probe has not run, so the sandbox stage must not pass.
         report.pass("provider", "The API key and template were accepted.");
-        report.pass("sandbox", "The isolated test sandbox started.");
         adapterCleanupStatus = error.cleanupStatus;
       }
     } else if (!sandbox) {

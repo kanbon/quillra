@@ -7,8 +7,14 @@ export const E2B_PREVIEW_RELAY_PORT = 733;
 export const E2B_ENVD_PORT = 49_983;
 export const E2B_PREVIEW_TARGET_MIN_PORT = 1_024;
 export const E2B_PREVIEW_TARGET_MAX_PORT = 32_767;
-export const E2B_RELAY_RUNTIME_ROOT = "/run/quillra-preview";
-export const E2B_RELAY_INSTALL_PATH = "/usr/local/libexec/quillra-preview-relay.mjs";
+// E2B's default template deliberately makes /usr/local writable by its
+// developer user. Relay trust material therefore lives below /opt, whose
+// root-owned parent is not project-writable and persists across pause/resume.
+export const E2B_RELAY_RUNTIME_ROOT = "/opt/quillra";
+export const E2B_RELAY_BIN_ROOT = `${E2B_RELAY_RUNTIME_ROOT}/bin`;
+export const E2B_RELAY_STAGING_ROOT = `${E2B_RELAY_RUNTIME_ROOT}/staging`;
+export const E2B_RELAY_INSTALL_PATH = `${E2B_RELAY_BIN_ROOT}/quillra-preview-relay.mjs`;
+export const E2B_RELAY_NODE_PATH = `${E2B_RELAY_BIN_ROOT}/node`;
 
 export type E2BTrustedEnvironmentStage =
   | "bootstrap"
@@ -31,6 +37,7 @@ export class E2BTrustedEnvironmentError extends Error {
   constructor(
     readonly stage: E2BTrustedEnvironmentStage,
     readonly cleanupStatus?: E2BTrustedEnvironmentCleanupStatus,
+    readonly sandboxId?: string,
   ) {
     super(
       cleanupStatus === "failed"
@@ -424,7 +431,7 @@ function dropRelayPrivileges() {
     throw new Error("privilege-drop-failed");
   }
   const status = readFileSync("/proc/self/status", "utf8");
-  const field = (name) => status.match(new RegExp("^" + name + ":\\\\s*(\\\\S+)", "m"))?.[1];
+  const field = (name) => status.match(new RegExp("^" + name + ":\\s*(\\S+)", "m"))?.[1];
   if (
     field("NoNewPrivs") !== "1" ||
     !["CapInh", "CapPrm", "CapEff", "CapAmb"].every(
