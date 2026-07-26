@@ -7,13 +7,18 @@
  * installation token in workspace.ts.
  */
 import {
+  GithubProviderError,
+  GithubResponseTooLargeError,
   type GithubUserRepository,
   getGithubRepositoryForUserByFullName,
   githubJsonForUserRepository,
+  githubTextForUserRepository,
   listGithubRepositoriesForUser,
 } from "./github-user-connection.js";
 
 export type GithubRepoListItem = GithubUserRepository;
+const MAX_GITHUB_PAGES = 50;
+const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
 export async function listAccessibleRepos(userId: string): Promise<GithubRepoListItem[]> {
   return listGithubRepositoriesForUser(userId);
@@ -38,7 +43,12 @@ export async function listBranches(
   repository: GithubUserRepository,
 ): Promise<string[]> {
   const names: string[] = [];
-  for (let page = 1; page <= 50; page++) {
+  for (let page = 1; ; page++) {
+    if (page > MAX_GITHUB_PAGES) {
+      throw new GithubProviderError(null, {
+        message: "GitHub returned too many branch pages to inspect safely.",
+      });
+    }
     const batch = await githubJsonForUserRepository<Array<{ name: string }>>(
       userId,
       repository,
@@ -51,16 +61,13 @@ export async function listBranches(
   return names;
 }
 
-export async function getRepoMeta(
-  userId: string,
-  repository: GithubUserRepository,
-): Promise<{ defaultBranch: string }> {
-  const data = await githubJsonForUserRepository<{ default_branch: string }>(
-    userId,
-    repository,
-    repositoryApiPath(repository),
-  );
-  return { defaultBranch: data.default_branch };
+export class GithubRepositoryInspectionError extends Error {
+  readonly code = "github_repository_inspection_failed";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "GithubRepositoryInspectionError";
+  }
 }
 
 /**
@@ -78,36 +85,45 @@ export async function fetchRepoManifest(
   } | null;
   rootFiles: string[];
 }> {
-  let rootFiles: string[] = [];
-  try {
-    const tree = await githubJsonForUserRepository<Array<{ name: string; type: string }>>(
-      userId,
-      repository,
-      repositoryApiPath(repository, `/contents?ref=${encodeURIComponent(ref)}`),
+  const tree = await githubJsonForUserRepository<Array<{ name: string; type: string }>>(
+    userId,
+    repository,
+    repositoryApiPath(repository, `/contents?ref=${encodeURIComponent(ref)}`),
+  );
+  if (!Array.isArray(tree)) {
+    throw new GithubRepositoryInspectionError(
+      "GitHub returned an unexpected repository contents response.",
     );
-    rootFiles = tree.map((entry) => entry.name);
-  } catch {
-    // Empty repositories and missing branches are represented as no manifest.
   }
+  const rootFiles = tree.map((entry) => entry.name);
 
   let packageJson: {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
   } | null = null;
   if (rootFiles.includes("package.json")) {
+    let raw: string;
     try {
-      const file = await githubJsonForUserRepository<{ content: string; encoding: string }>(
+      raw = await githubTextForUserRepository(
         userId,
         repository,
         repositoryApiPath(repository, `/contents/package.json?ref=${encodeURIComponent(ref)}`),
+        MAX_PACKAGE_JSON_BYTES,
       );
-      const raw =
-        file.encoding === "base64"
-          ? Buffer.from(file.content, "base64").toString("utf8")
-          : file.content;
+    } catch (error) {
+      if (error instanceof GithubResponseTooLargeError) {
+        throw new GithubRepositoryInspectionError(
+          "The repository package.json is too large for Quillra to inspect safely.",
+        );
+      }
+      throw error;
+    }
+    try {
       packageJson = JSON.parse(raw);
     } catch {
-      // Malformed or inaccessible package.json; the detector can use root files.
+      throw new GithubRepositoryInspectionError(
+        "The repository package.json is not valid JSON, so Quillra could not inspect it.",
+      );
     }
   }
 

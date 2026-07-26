@@ -39,6 +39,8 @@ beforeEach(() => {
 afterEach(() => {
   openDatabase?.close();
   openDatabase = null;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.resetModules();
   for (const key of CONTROLLED_ENV_KEYS) {
     const value = originalEnv.get(key);
@@ -112,6 +114,131 @@ describe("GitHub user connection callback migration", () => {
     expect(location.searchParams.get("code_challenge_method")).toBe("S256");
     expect(rawSqlite.prepare("SELECT count(*) AS count FROM github_oauth_states").get()).toEqual({
       count: 1,
+    });
+  });
+});
+
+describe("GitHub repository discovery", () => {
+  async function connectGithubUser(
+    rawSqlite: typeof import("../db/index.js")["rawSqlite"],
+  ): Promise<void> {
+    const { encryptSecret } = await import("../services/crypto.js");
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("user-1", "1", "alice", encryptSecret("user-token"), now, now);
+  }
+
+  it("detects Vite through supported GitHub App user-token endpoints", async () => {
+    const { app, rawSqlite } = await createApp();
+    await connectGithubUser(rawSqlite);
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        expect(init?.headers).toMatchObject({ Authorization: "Bearer user-token" });
+        const url = new URL(String(input));
+        if (url.pathname === "/user/installations") {
+          return Response.json({
+            installations: [{ id: 11, permissions: { contents: "write" } }],
+          });
+        }
+        if (url.pathname === "/user/installations/11/repositories") {
+          return Response.json({
+            repositories: [
+              {
+                id: 101,
+                full_name: "kanbon/moduvista-website",
+                default_branch: "main",
+                permissions: { push: true, pull: true },
+              },
+            ],
+          });
+        }
+        if (url.pathname === "/repos/kanbon/moduvista-website/branches") {
+          return Response.json([{ name: "main" }]);
+        }
+        if (url.pathname === "/repos/kanbon/moduvista-website/contents") {
+          return Response.json([
+            { name: "package.json", type: "file" },
+            { name: "vite.config.ts", type: "file" },
+          ]);
+        }
+        if (url.pathname === "/repos/kanbon/moduvista-website/contents/package.json") {
+          expect(init?.headers).toMatchObject({
+            Accept: "application/vnd.github.raw+json",
+          });
+          return new Response(
+            JSON.stringify({
+              scripts: { dev: "vite --host 0.0.0.0" },
+              devDependencies: { vite: "^7.0.0", "@vitejs/plugin-react": "^4.0.0" },
+            }),
+          );
+        }
+        return Response.json({ message: "not found" }, { status: 404 });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const branches = await app.request("/github/repos/kanbon/moduvista-website/branches");
+    expect(branches.status).toBe(200);
+    await expect(branches.json()).resolves.toEqual({
+      branches: ["main"],
+      defaultBranch: "main",
+    });
+
+    const framework = await app.request(
+      "/github/repos/kanbon/moduvista-website/framework?ref=main",
+    );
+    expect(framework.status).toBe(200);
+    await expect(framework.json()).resolves.toMatchObject({
+      supported: true,
+      framework: { id: "vite", label: "Vite" },
+    });
+
+    for (const [input] of fetchMock.mock.calls) {
+      expect(new URL(String(input)).pathname).not.toBe("/user/installations/11");
+    }
+  });
+
+  it("reports a GitHub outage instead of claiming the user lacks write access", async () => {
+    const { app, rawSqlite } = await createApp();
+    await connectGithubUser(rawSqlite);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ message: "unavailable" }, { status: 503 })),
+    );
+
+    const response = await app.request("/github/repos/kanbon/moduvista-website/branches");
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "github_provider_error",
+      error: "GitHub is temporarily unavailable. Try again.",
+    });
+  });
+
+  it("reports GitHub's HTTP 403 rate limit as a temporary provider error", async () => {
+    const { app, rawSqlite } = await createApp();
+    await connectGithubUser(rawSqlite);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { message: "rate limit exceeded" },
+          { status: 403, headers: { "X-RateLimit-Remaining": "0" } },
+        ),
+      ),
+    );
+
+    const response = await app.request("/github/repos/kanbon/moduvista-website/branches");
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "github_provider_error",
+      error: "GitHub's API rate limit has been reached. Try again later.",
     });
   });
 });

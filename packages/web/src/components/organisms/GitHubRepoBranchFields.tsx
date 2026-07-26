@@ -64,12 +64,14 @@ export function GitHubRepoBranchFields({
   const apiDefault = branchesQ.data?.defaultBranch;
   const branchConnectionRequired = isGitHubConnectionRequired(branchesQ.error);
   const needsConnection = connectionRequired || branchConnectionRequired;
+  const branchesBusy = branchesQ.isPending || branchesQ.isFetching;
 
   useEffect(() => {
-    if (!branches.length || branches.includes(branch)) return;
+    if (!branchesQ.isSuccess || branchesQ.isFetching || !branches.length) return;
+    if (branches.includes(branch)) return;
     const next = apiDefault && branches.includes(apiDefault) ? apiDefault : branches[0];
     if (next) onBranchChange(next);
-  }, [branches, branch, apiDefault, onBranchChange]);
+  }, [branches, branch, apiDefault, branchesQ.isFetching, branchesQ.isSuccess, onBranchChange]);
 
   if (needsConnection) {
     return (
@@ -179,18 +181,23 @@ export function GitHubRepoBranchFields({
             <label htmlFor={branchId} className="mb-1 block text-xs font-medium text-neutral-600">
               {t("github.branch")}
             </label>
-            {selectedRepo && branchesQ.isError ? (
-              <>
-                <input
-                  id={branchId}
-                  className={selectLikeInputClassName()}
-                  placeholder={t("github.branchPlaceholder")}
-                  value={branch}
-                  onChange={(event) => onBranchChange(event.target.value.trim())}
-                  disabled={disabled}
-                />
-                <p className="mt-1 text-xs text-neutral-500">{t("github.branchTypeHelp")}</p>
-              </>
+            {selectedRepo && branchesQ.isError && !branchesQ.isFetching ? (
+              <div
+                role="alert"
+                className="rounded-lg border border-red-200 bg-red-50/60 p-3 text-xs text-red-700"
+              >
+                <p className="font-medium">Couldn't load branches.</p>
+                <p className="mt-1 text-red-600/80">
+                  {branchesQ.error.message || "GitHub did not return a branch list."}
+                </p>
+                <button
+                  type="button"
+                  className="mt-2 font-medium underline underline-offset-2"
+                  onClick={() => void branchesQ.refetch()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
             ) : (
               <select
                 id={branchId}
@@ -199,13 +206,13 @@ export function GitHubRepoBranchFields({
                 disabled={
                   disabled ||
                   !selectedRepo ||
-                  branchesQ.isLoading ||
+                  branchesBusy ||
                   (!branchesQ.isError && branches.length === 0)
                 }
                 onChange={(event) => onBranchChange(event.target.value)}
               >
                 {!selectedRepo && branch && <option value={branch}>{branch}</option>}
-                {selectedRepo && branchesQ.isLoading && (
+                {selectedRepo && branchesBusy && (
                   <option value={branch}>{t("github.loadingBranches")}</option>
                 )}
                 {branches.map((item) => (

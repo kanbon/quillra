@@ -8,6 +8,7 @@ import { getProjectBrandContext } from "../../services/branding.js";
 import { listBranches } from "../../services/github-rest.js";
 import {
   GithubConnectionRequiredError,
+  GithubProviderError,
   GithubRepositoryAccessError,
   getGithubRepositoryForUser,
 } from "../../services/github-user-connection.js";
@@ -64,7 +65,7 @@ async function verifyRepositorySelection(args: {
 }
 
 function githubSelectionError(error: unknown): {
-  status: 403 | 409;
+  status: 403 | 409 | 502 | 503;
   body: { error: string; code: string; connectUrl?: string };
 } | null {
   if (error instanceof GithubConnectionRequiredError) {
@@ -79,6 +80,16 @@ function githubSelectionError(error: unknown): {
   }
   if (error instanceof GithubRepositoryAccessError) {
     return { status: 403, body: { error: error.message, code: error.code } };
+  }
+  if (error instanceof GithubProviderError) {
+    const status =
+      error.rateLimited ||
+      error.upstreamStatus === null ||
+      error.upstreamStatus === 429 ||
+      error.upstreamStatus >= 500
+        ? 503
+        : 502;
+    return { status, body: { error: error.message, code: error.code } };
   }
   return null;
 }

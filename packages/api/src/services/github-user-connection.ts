@@ -79,6 +79,43 @@ export class GithubRepositoryAccessError extends Error {
   }
 }
 
+export class GithubProviderError extends Error {
+  readonly code = "github_provider_error";
+  readonly rateLimited: boolean;
+
+  constructor(
+    readonly upstreamStatus: number | null,
+    options: { rateLimited?: boolean; message?: string } = {},
+  ) {
+    const rateLimited = options.rateLimited === true;
+    const message =
+      options.message ??
+      (rateLimited
+        ? "GitHub's API rate limit has been reached. Try again later."
+        : upstreamStatus === 403
+          ? "GitHub refused the repository request. Review the GitHub App access and try again."
+          : upstreamStatus === 404
+            ? "GitHub could not find the requested repository resource."
+            : upstreamStatus === 422
+              ? "GitHub rejected the repository request."
+              : upstreamStatus === null || upstreamStatus >= 500
+                ? "GitHub is temporarily unavailable. Try again."
+                : "GitHub could not complete the repository request.");
+    super(message);
+    this.name = "GithubProviderError";
+    this.rateLimited = rateLimited;
+  }
+}
+
+export class GithubResponseTooLargeError extends Error {
+  readonly code = "github_response_too_large";
+
+  constructor() {
+    super("The GitHub repository file is too large for Quillra to inspect.");
+    this.name = "GithubResponseTooLargeError";
+  }
+}
+
 function githubOauthCredentials(): { clientId: string; clientSecret: string } {
   const creds = getGithubAppCredentials();
   if (!creds?.clientId || !creds.clientSecret) {
@@ -201,25 +238,82 @@ async function exchangeToken(body: URLSearchParams): Promise<GithubTokenResponse
   return data;
 }
 
-async function githubUserJson<T>(token: string, path: string): Promise<T> {
-  const res = await fetch(`${GITHUB_API}${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": API_VERSION,
-      "User-Agent": "Quillra-Self-Hosted",
-    },
-  });
+async function githubUserResponse(
+  token: string,
+  path: string,
+  accept = "application/vnd.github+json",
+): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(`${GITHUB_API}${path}`, {
+      headers: {
+        Accept: accept,
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": API_VERSION,
+        "User-Agent": "Quillra-Self-Hosted",
+      },
+    });
+  } catch {
+    throw new GithubProviderError(null);
+  }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
     if (res.status === 401) {
       throw new GithubConnectionRequiredError(
         "Your GitHub authorization is no longer valid. Connect GitHub again.",
       );
     }
-    throw new Error(`GitHub user API ${res.status}: ${text.slice(0, 300)}`);
+    const rateLimited =
+      res.status === 429 ||
+      (res.status === 403 &&
+        (res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after")));
+    throw new GithubProviderError(res.status, { rateLimited });
   }
-  return res.json() as Promise<T>;
+  return res;
+}
+
+async function githubUserJson<T>(token: string, path: string): Promise<T> {
+  const res = await githubUserResponse(token, path);
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new GithubProviderError(null);
+  }
+}
+
+async function githubUserText(token: string, path: string, maxBytes: number): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("A positive GitHub response limit is required.");
+  }
+  const res = await githubUserResponse(token, path, "application/vnd.github.raw+json");
+  const declaredLength = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength >= 0 && declaredLength > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new GithubResponseTooLargeError();
+  }
+  if (!res.body) return "";
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new GithubResponseTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof GithubResponseTooLargeError) throw error;
+    throw new GithubProviderError(null);
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 async function performGithubConnection(args: {
@@ -533,12 +627,18 @@ export function invalidateAllGithubUsers(finalize: () => void): Promise<void> {
 }
 
 function canWriteRepository(repo: GithubRepositoryResponse): boolean {
-  return repo.permissions?.push === true || repo.permissions?.admin === true;
+  return (
+    repo.permissions?.push === true ||
+    repo.permissions?.maintain === true ||
+    repo.permissions?.admin === true
+  );
 }
 
 function validGithubId(value: string): boolean {
   return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value));
 }
+
+const MAX_GITHUB_PAGES = 50;
 
 async function listRepositoriesForInstallation(
   token: string,
@@ -546,48 +646,57 @@ async function listRepositoriesForInstallation(
 ): Promise<GithubRepositoryResponse[]> {
   if (!validGithubId(installationId)) throw new GithubRepositoryAccessError();
   const repositories: GithubRepositoryResponse[] = [];
-  for (let page = 1; page <= 50; page++) {
+  for (let page = 1; ; page++) {
+    if (page > MAX_GITHUB_PAGES) {
+      throw new GithubProviderError(null, {
+        message: "GitHub returned too many repository pages to inspect safely.",
+      });
+    }
     const data = await githubUserJson<{
       repositories: GithubRepositoryResponse[];
     }>(token, `/user/installations/${installationId}/repositories?per_page=100&page=${page}`);
+    if (!Array.isArray(data.repositories)) throw new GithubProviderError(null);
     repositories.push(...data.repositories);
     if (data.repositories.length < 100) break;
   }
   return repositories;
 }
 
+type GithubInstallationResponse = {
+  id: number;
+  permissions?: { contents?: "read" | "write" };
+};
+
+async function listInstallationsForUser(token: string): Promise<GithubInstallationResponse[]> {
+  const installations: GithubInstallationResponse[] = [];
+  for (let page = 1; ; page++) {
+    if (page > MAX_GITHUB_PAGES) {
+      throw new GithubProviderError(null, {
+        message: "GitHub returned too many installation pages to inspect safely.",
+      });
+    }
+    const data = await githubUserJson<{
+      installations: GithubInstallationResponse[];
+    }>(token, `/user/installations?per_page=100&page=${page}`);
+    if (!Array.isArray(data.installations)) throw new GithubProviderError(null);
+    installations.push(...data.installations);
+    if (data.installations.length < 100) break;
+  }
+  return installations;
+}
+
 export async function listGithubRepositoriesForUser(
   userId: string,
 ): Promise<GithubUserRepository[]> {
   const token = await getGithubUserAccessToken(userId);
-  const installations: Array<{
-    id: number;
-    permissions?: { contents?: "read" | "write" };
-  }> = [];
-  for (let page = 1; page <= 50; page++) {
-    const data = await githubUserJson<{
-      installations: Array<{
-        id: number;
-        permissions?: { contents?: "read" | "write" };
-      }>;
-    }>(token, `/user/installations?per_page=100&page=${page}`);
-    installations.push(...data.installations);
-    if (data.installations.length < 100) break;
-  }
+  const installations = await listInstallationsForUser(token);
 
   const byRepositoryId = new Map<string, GithubUserRepository>();
   for (const installation of installations) {
     if (!Number.isSafeInteger(installation.id) || installation.id <= 0) continue;
     if (installation.permissions?.contents !== "write") continue;
     const installationId = String(installation.id);
-    let repos: GithubRepositoryResponse[];
-    try {
-      repos = await listRepositoriesForInstallation(token, installationId);
-    } catch (error) {
-      if (error instanceof GithubConnectionRequiredError) throw error;
-      console.warn(`[github-user] skipping inaccessible GitHub App installation ${installationId}`);
-      continue;
-    }
+    const repos = await listRepositoriesForInstallation(token, installationId);
     for (const repo of repos) {
       if (!Number.isSafeInteger(repo.id) || repo.id <= 0 || !canWriteRepository(repo)) continue;
       byRepositoryId.set(String(repo.id), {
@@ -612,28 +721,13 @@ export async function getGithubRepositoryForUser(
     throw new GithubRepositoryAccessError();
   }
   const token = await getGithubUserAccessToken(userId);
-  try {
-    const installation = await githubUserJson<{
-      id: number;
-      permissions?: { contents?: "read" | "write" };
-    }>(token, `/user/installations/${installationId}`);
-    if (
-      String(installation.id) !== installationId ||
-      installation.permissions?.contents !== "write"
-    ) {
-      throw new GithubRepositoryAccessError();
-    }
-  } catch (error) {
-    if (error instanceof GithubConnectionRequiredError) throw error;
+  const installation = (await listInstallationsForUser(token)).find(
+    (candidate) => String(candidate.id) === installationId,
+  );
+  if (!installation || installation.permissions?.contents !== "write") {
     throw new GithubRepositoryAccessError();
   }
-  let repos: GithubRepositoryResponse[];
-  try {
-    repos = await listRepositoriesForInstallation(token, installationId);
-  } catch (error) {
-    if (error instanceof GithubConnectionRequiredError) throw error;
-    throw new GithubRepositoryAccessError();
-  }
+  const repos = await listRepositoriesForInstallation(token, installationId);
   const repo = repos.find((candidate) => String(candidate.id) === repositoryId);
   if (!repo || !canWriteRepository(repo)) throw new GithubRepositoryAccessError();
   return {
@@ -673,4 +767,21 @@ export async function githubJsonForUserRepository<T>(
     throw new GithubRepositoryAccessError();
   }
   return githubUserJson<T>(await getGithubUserAccessToken(userId), path);
+}
+
+export async function githubTextForUserRepository(
+  userId: string,
+  repository: GithubUserRepository,
+  path: string,
+  maxBytes: number,
+): Promise<string> {
+  const verified = await getGithubRepositoryForUser(
+    userId,
+    repository.installationId,
+    repository.repositoryId,
+  );
+  if (verified.fullName !== repository.fullName) {
+    throw new GithubRepositoryAccessError();
+  }
+  return githubUserText(await getGithubUserAccessToken(userId), path, maxBytes);
 }

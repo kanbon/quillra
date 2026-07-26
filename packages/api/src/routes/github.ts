@@ -3,14 +3,16 @@ import type { SessionUser } from "../lib/auth.js";
 import { detectFromManifest, publicFrameworkList } from "../services/framework-registry.js";
 import { getGithubAppCredentials } from "../services/github-app.js";
 import {
+  GithubRepositoryInspectionError,
   fetchRepoManifest,
-  getRepoMeta,
   listAccessibleRepos,
   listBranches,
   resolveAccessibleRepo,
 } from "../services/github-rest.js";
 import {
   GithubConnectionRequiredError,
+  GithubProviderError,
+  GithubRepositoryAccessError,
   completeGithubConnection,
   consumeGithubOauthState,
   disconnectGithubUser,
@@ -52,6 +54,28 @@ function connectionRequired(c: Context<{ Variables: Variables }>, error: unknown
     },
     409,
   );
+}
+
+function repositoryRequestError(c: Context<{ Variables: Variables }>, error: unknown) {
+  const missing = connectionRequired(c, error);
+  if (missing) return missing;
+  if (error instanceof GithubRepositoryAccessError) {
+    return c.json({ error: error.message, code: error.code }, 403);
+  }
+  if (error instanceof GithubProviderError) {
+    const status =
+      error.rateLimited ||
+      error.upstreamStatus === null ||
+      error.upstreamStatus === 429 ||
+      error.upstreamStatus >= 500
+        ? 503
+        : 502;
+    return c.json({ error: error.message, code: error.code }, status);
+  }
+  if (error instanceof GithubRepositoryInspectionError) {
+    return c.json({ error: error.message, code: error.code }, 422);
+  }
+  return null;
 }
 
 function oauthCallbackConfiguration(c: Context<{ Variables: Variables }>) {
@@ -177,10 +201,10 @@ export const githubRouter = new Hono<{ Variables: Variables }>()
       const repos = await listAccessibleRepos(r.user.id);
       return c.json({ repos });
     } catch (e) {
-      const missing = connectionRequired(c, e);
-      if (missing) return missing;
-      const msg = e instanceof Error ? e.message : "Failed to list repositories";
-      return c.json({ error: msg }, msg.includes("GitHub App") ? 503 : 400);
+      const mapped = repositoryRequestError(c, e);
+      if (mapped) return mapped;
+      console.error("[github] failed to list repositories", e);
+      return c.json({ error: "Failed to list repositories." }, 500);
     }
   })
   .get("/repos/:owner/:repo/branches", async (c) => {
@@ -191,18 +215,17 @@ export const githubRouter = new Hono<{ Variables: Variables }>()
     try {
       const repository = await resolveAccessibleRepo(r.user.id, owner, repo);
       const branches = await listBranches(r.user.id, repository);
-      let defaultBranch: string | undefined;
-      try {
-        const meta = await getRepoMeta(r.user.id, repository);
-        defaultBranch = meta.defaultBranch;
-      } catch {
-        defaultBranch = branches.includes("main") ? "main" : branches[0];
-      }
+      const defaultBranch = branches.includes(repository.defaultBranch)
+        ? repository.defaultBranch
+        : branches.includes("main")
+          ? "main"
+          : (branches[0] ?? "");
       return c.json({ branches, defaultBranch });
     } catch (e) {
-      const missing = connectionRequired(c, e);
-      if (missing) return missing;
-      return c.json({ error: e instanceof Error ? e.message : "Failed to list branches" }, 400);
+      const mapped = repositoryRequestError(c, e);
+      if (mapped) return mapped;
+      console.error("[github] failed to list branches", e);
+      return c.json({ error: "Failed to list branches." }, 500);
     }
   })
   /**
@@ -240,12 +263,10 @@ export const githubRouter = new Hono<{ Variables: Variables }>()
         },
       });
     } catch (e) {
-      const missing = connectionRequired(c, e);
-      if (missing) return missing;
-      return c.json(
-        { error: e instanceof Error ? e.message : "Failed to inspect repository" },
-        400,
-      );
+      const mapped = repositoryRequestError(c, e);
+      if (mapped) return mapped;
+      console.error("[github] failed to inspect repository", e);
+      return c.json({ error: "Failed to inspect repository." }, 500);
     }
   })
   /** Public list of every framework Quillra supports, used by the connect modal and the badge */

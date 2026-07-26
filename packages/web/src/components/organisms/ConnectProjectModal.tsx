@@ -91,23 +91,19 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     retry: false,
   });
 
-  // When repo is picked, default branch + display name
   useEffect(() => {
-    if (!pickedRepo) return;
-    setBranch(pickedRepo.defaultBranch);
-    if (!nameTouched) {
-      const repoSlug = pickedRepo.fullName.split("/")[1] ?? pickedRepo.fullName;
-      setName(repoSlug);
-    }
-  }, [pickedRepo, nameTouched]);
-
-  useEffect(() => {
-    if (!branchesQ.data) return;
+    if (!branchesQ.isSuccess || branchesQ.isFetching) return;
+    const branches = branchesQ.data.branches;
+    if (branches.includes(branch)) return;
     const apiDefault = branchesQ.data.defaultBranch;
-    if (apiDefault && branchesQ.data.branches.includes(apiDefault)) {
-      setBranch(apiDefault);
-    }
-  }, [branchesQ.data]);
+    const nextBranch =
+      (apiDefault && branches.includes(apiDefault) ? apiDefault : branches[0]) ?? "";
+    setBranch(nextBranch);
+    setShowAdvanced(false);
+    setPreviewCmd("");
+    setConvertToAstro(false);
+    setError(null);
+  }, [branchesQ.data, branchesQ.isFetching, branchesQ.isSuccess, branch]);
 
   const filteredRepos = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -118,10 +114,13 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
 
   const effectiveRepoFull = pickedRepo?.fullName ?? "";
   const branchConnectionRequired = isGitHubConnectionRequired(branchesQ.error);
+  const branchBusy = branchesQ.isPending || branchesQ.isFetching;
+  const selectedBranchAvailable =
+    branchesQ.isSuccess && !branchesQ.isFetching && branchesQ.data.branches.includes(branch);
   const canContinueRepo =
     !!pickedRepo?.repositoryId &&
     !!pickedRepo.installationId &&
-    branch.trim().length > 0 &&
+    selectedBranchAvailable &&
     !branchConnectionRequired;
 
   // Framework check (only runs once we're on the framework step)
@@ -143,6 +142,37 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     retry: false,
   });
   const frameworkConnectionRequired = isGitHubConnectionRequired(fwQ.error);
+  const frameworkBusy = fwQ.isPending || fwQ.isFetching;
+  const frameworkResult = fwQ.isSuccess && !fwQ.isFetching ? fwQ.data : null;
+
+  function resetProjectOptions() {
+    setShowAdvanced(false);
+    setPreviewCmd("");
+    setConvertToAstro(false);
+    setError(null);
+  }
+
+  function handleRepositoryChange(repo: GithubRepoRow) {
+    if (
+      pickedRepo?.repositoryId === repo.repositoryId &&
+      pickedRepo.installationId === repo.installationId
+    ) {
+      return;
+    }
+    setPickedRepo(repo);
+    setBranch(repo.defaultBranch);
+    if (!nameTouched) {
+      const repoSlug = repo.fullName.split("/")[1] ?? repo.fullName;
+      setName(repoSlug);
+    }
+    resetProjectOptions();
+  }
+
+  function handleBranchChange(nextBranch: string) {
+    if (nextBranch === branch) return;
+    setBranch(nextBranch);
+    resetProjectOptions();
+  }
 
   async function handleSubmit() {
     setSubmitting(true);
@@ -280,6 +310,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                       onSuccess: () => {
                         setPickedRepo(null);
                         setBranch("");
+                        resetProjectOptions();
                       },
                     });
                   }}
@@ -391,7 +422,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                           <li key={r.repositoryId}>
                             <button
                               type="button"
-                              onClick={() => setPickedRepo(r)}
+                              onClick={() => handleRepositoryChange(r)}
                               aria-pressed={active}
                               className={cn(
                                 "flex w-full items-center gap-2.5 border-b border-neutral-100 px-3 py-2.5 text-left text-[13px] transition-colors last:border-b-0",
@@ -463,25 +494,38 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                     {t("github.connect")}
                   </button>
                 </div>
-              ) : branchesQ.isError ? (
-                <Input
-                  id={branchId}
-                  value={branch}
-                  onChange={(e) => setBranch(e.target.value.trim())}
-                  placeholder={t("github.branchPlaceholder")}
-                  disabled={submitting}
-                />
-              ) : branchesQ.isLoading ? (
+              ) : branchBusy ? (
                 <div className="flex items-center gap-2.5 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700" />
                   <span className="text-sm text-neutral-500">Loading branches…</span>
+                </div>
+              ) : branchesQ.isError ? (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-sm text-red-700"
+                >
+                  <p className="font-medium">Couldn't load branches.</p>
+                  <p className="mt-1 text-xs text-red-600/80">
+                    {(branchesQ.error as Error)?.message ?? "GitHub did not return a branch list."}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void branchesQ.refetch()}
+                    className="mt-3 inline-flex items-center rounded-md border border-red-300 bg-white px-2.5 py-1 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-50"
+                  >
+                    {t("common.retry")}
+                  </button>
+                </div>
+              ) : branchesQ.data.branches.length === 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-sm text-amber-800">
+                  This repository has no branches to connect.
                 </div>
               ) : (
                 <select
                   id={branchId}
                   className="block h-[42px] w-full rounded-md border border-neutral-300 bg-white px-3 text-sm focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900"
                   value={branch}
-                  onChange={(e) => setBranch(e.target.value)}
+                  onChange={(e) => handleBranchChange(e.target.value)}
                   disabled={submitting}
                 >
                   {branchesQ.data?.branches.map((b) => (
@@ -500,7 +544,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
       {/* STEP 2, framework check */}
       {step === "framework" && (
         <div className="min-h-[220px]">
-          {fwQ.isLoading && (
+          {frameworkBusy && (
             <div className="flex flex-col items-center justify-center gap-4 py-10">
               <div className="relative h-14 w-14">
                 <div className="absolute inset-0 rounded-full border-2 border-neutral-200" />
@@ -515,7 +559,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               </p>
             </div>
           )}
-          {fwQ.isError && frameworkConnectionRequired && (
+          {!frameworkBusy && fwQ.isError && frameworkConnectionRequired && (
             <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-5">
               <p className="font-medium text-neutral-900">{t("github.connectTitle")}</p>
               <p className="mt-1 text-sm text-neutral-500">{t("github.connectDescription")}</p>
@@ -528,7 +572,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               </button>
             </div>
           )}
-          {fwQ.isError && !frameworkConnectionRequired && (
+          {!frameworkBusy && fwQ.isError && !frameworkConnectionRequired && (
             <div className="rounded-2xl border border-red-200 bg-red-50/60 p-5 text-sm text-red-700">
               <p className="font-medium">Couldn't inspect this repository.</p>
               <p className="mt-1 text-red-600/80">
@@ -556,18 +600,18 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               </button>
             </div>
           )}
-          {fwQ.data && !fwQ.isLoading && (
+          {frameworkResult && (
             <>
-              {fwQ.data.supported ? (
+              {frameworkResult.supported ? (
                 <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-neutral-50 to-white p-6">
                   <div className="flex items-start gap-4">
                     <div
                       className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl shadow-sm ring-1 ring-black/5"
-                      style={{ backgroundColor: fwQ.data.framework.color }}
+                      style={{ backgroundColor: frameworkResult.framework.color }}
                     >
                       <img
-                        src={`https://cdn.simpleicons.org/${fwQ.data.framework.iconSlug}/ffffff`}
-                        alt={fwQ.data.framework.label}
+                        src={`https://cdn.simpleicons.org/${frameworkResult.framework.iconSlug}/ffffff`}
+                        alt={frameworkResult.framework.label}
                         width={28}
                         height={28}
                       />
@@ -575,14 +619,14 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <h3 className="text-[18px] font-semibold tracking-tight text-neutral-900">
-                          {fwQ.data.framework.label}
+                          {frameworkResult.framework.label}
                         </h3>
                         <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
                           Supported
                         </span>
                       </div>
                       <p className="mt-1 text-[13px] leading-relaxed text-neutral-600">
-                        {fwQ.data.framework.blurb}
+                        {frameworkResult.framework.blurb}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
@@ -591,7 +635,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                         <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
                           Image upload
                         </span>
-                        {fwQ.data.framework.optimizes && (
+                        {frameworkResult.framework.optimizes && (
                           <span className="rounded-md bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 ring-1 ring-neutral-200">
                             Auto image optimization
                           </span>
@@ -623,13 +667,13 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                         Framework not supported
                       </h3>
                       <p className="mt-1 text-[13px] leading-relaxed text-amber-800/80">
-                        {fwQ.data.reason}
+                        {frameworkResult.reason}
                       </p>
                       <p className="mt-2 text-[11px] text-amber-700/80">
                         Quillra currently supports Astro, Next.js, Nuxt, Gatsby, SvelteKit, Remix,
-                        Eleventy, Vite, React (CRA), Docusaurus, VitePress, Qwik, SolidStart, Hugo,
-                        and Jekyll. You can still connect the project by passing a custom dev
-                        command under Advanced on the next step.
+                        Eleventy, Vite, React (CRA), Docusaurus, VitePress, Qwik, and SolidStart.
+                        You can still connect the project by passing a custom dev command under
+                        Advanced on the next step.
                       </p>
                     </div>
                   </div>
@@ -861,10 +905,10 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
           <button
             type="button"
             onClick={() => setStep("name")}
-            disabled={!fwQ.data}
+            disabled={!frameworkResult}
             className={cn(
               "inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand px-5 text-[13px] font-semibold text-white shadow-sm transition-all",
-              fwQ.data ? "hover:bg-brand/90 hover:shadow" : "cursor-not-allowed opacity-50",
+              frameworkResult ? "hover:bg-brand/90 hover:shadow" : "cursor-not-allowed opacity-50",
             )}
           >
             Continue
