@@ -358,6 +358,10 @@ describe.sequential("E2B preview relay", () => {
     expect(E2B_PREVIEW_RELAY_SOURCE).toContain(`process.setgid("${E2B_RELAY_USER}")`);
     expect(E2B_PREVIEW_RELAY_SOURCE).toContain(`process.setuid("${E2B_RELAY_USER}")`);
     expect(E2B_PREVIEW_RELAY_SOURCE).toContain('field("NoNewPrivs") !== "1"');
+    expect(E2B_PREVIEW_RELAY_SOURCE).toContain('new RegExp("^" + name + ":\\\\s*(\\\\S+)", "m")');
+    expect(E2B_PREVIEW_RELAY_SOURCE).not.toContain(
+      'new RegExp("^" + name + ":\\\\\\\\s*(\\\\\\\\S+)", "m")',
+    );
 
     const listen = E2B_PREVIEW_RELAY_SOURCE.indexOf("server.listen(");
     const drop = E2B_PREVIEW_RELAY_SOURCE.indexOf("dropRelayPrivileges();", listen);

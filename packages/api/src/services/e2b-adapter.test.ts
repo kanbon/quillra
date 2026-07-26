@@ -26,11 +26,20 @@ vi.mock("e2b", () => {
   };
 });
 
-import { E2BSdkAdapter, SECURE_DIRECTORY_SETUP_SCRIPT } from "./e2b-adapter.js";
+import {
+  E2BSdkAdapter,
+  SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT,
+  SEAL_RELAY_NODE_SCRIPT,
+  SECURE_DIRECTORY_SETUP_SCRIPT,
+} from "./e2b-adapter.js";
 import {
   type E2BTrustedEnvironmentError,
   E2B_PROJECT_HOME,
   E2B_PROJECT_USER,
+  E2B_RELAY_INSTALL_PATH,
+  E2B_RELAY_NODE_PATH,
+  E2B_RELAY_RUNTIME_ROOT,
+  E2B_RELAY_STAGING_ROOT,
   E2B_RELAY_USER,
 } from "./e2b-preview-relay.js";
 
@@ -84,6 +93,7 @@ describe("E2B SDK adapter", () => {
     const sandbox = fakeSdkSandbox();
     sdk.create.mockResolvedValue(sandbox);
     const adapter = new E2BSdkAdapter();
+    const onSandboxCreated = vi.fn();
 
     await adapter.create({
       apiKey: "e2b_control_plane_secret",
@@ -91,9 +101,11 @@ describe("E2B SDK adapter", () => {
       projectId: "project-a",
       timeoutMs: 900_000,
       requestTimeoutMs: 60_000,
+      onSandboxCreated,
     });
 
     expect(sdk.create).toHaveBeenCalledOnce();
+    expect(onSandboxCreated).toHaveBeenCalledWith("sandbox-1");
     const options = sdk.create.mock.calls[0]?.[0];
     expect(options).toMatchObject({
       apiKey: "e2b_control_plane_secret",
@@ -102,6 +114,7 @@ describe("E2B SDK adapter", () => {
       network: { allowPublicTraffic: false },
       metadata: { "quillra.project_id": "project-a" },
     });
+    expect(options?.network).not.toHaveProperty("denyOut");
     expect(options).not.toHaveProperty("envs");
     const bootstrapCalls = sandbox.commands.run.mock.calls;
     expect(bootstrapCalls.every(([, commandOptions]) => commandOptions?.user === "root")).toBe(
@@ -115,7 +128,7 @@ describe("E2B SDK adapter", () => {
     );
     expect(
       bootstrapCalls
-        .filter(([command]) => command.includes("--reuid="))
+        .filter(([command]) => command.includes("--reuid=quillra-"))
         .every(
           ([command]) =>
             command.includes("--no-new-privs") &&
@@ -140,6 +153,46 @@ describe("E2B SDK adapter", () => {
       `/usr/bin/install -d -o ${E2B_PROJECT_USER} -g ${E2B_PROJECT_USER}`,
     );
     expect(bootstrap).not.toContain(`${E2B_PROJECT_HOME}/.quillra-processes`);
+    expect(bootstrap).toContain(`${E2B_RELAY_RUNTIME_ROOT}`);
+    expect(bootstrap).toContain(`${E2B_RELAY_STAGING_ROOT}`);
+    expect(bootstrap).not.toContain("/usr/local/libexec");
+    const nodeSeal =
+      bootstrapCalls.find(([command]) => command.includes(".node-install-"))?.[0] ?? "";
+    expect(nodeSeal).toContain("/usr/local/bin/node");
+    expect(nodeSeal).toContain(E2B_RELAY_NODE_PATH);
+    expect(nodeSeal).toContain("os.O_EXCL");
+    expect(nodeSeal).toContain("os.O_NOFOLLOW");
+    expect(nodeSeal).toContain("os.replace");
+    expect(nodeSeal).toContain("os.fchown");
+    expect(nodeSeal).toContain("0o550");
+    expect(SEAL_RELAY_NODE_SCRIPT).not.toContain("source_info.st_mode&0o022");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("/usr/bin/readelf");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("RPATH|RUNPATH");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("/proc/");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("mapped={node}");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("info.st_mode&0o022");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("'--reuid='+relay_user");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("pass_fds=(ready_write,)");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT).toContain("require('node:http')");
+    expect(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT.indexOf("ready!=b'ready'")).toBeLessThan(
+      SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT.indexOf("'/proc/'+str(process.pid)+'/maps'"),
+    );
+    const runtimeClosureChecks = bootstrapCalls.filter(([command]) =>
+      command.includes("MAX_MAPS_BYTES=4194304"),
+    );
+    expect(runtimeClosureChecks).toHaveLength(1);
+    expect(runtimeClosureChecks[0]?.[0]).toContain("/usr/bin/setpriv");
+    expect(runtimeClosureChecks[0]?.[1]?.envs).toMatchObject({
+      LANG: "C",
+      LC_ALL: "C",
+    });
+    expect(bootstrap).toContain("/usr/bin/readelf");
+    const relayProbe =
+      bootstrapCalls.find(
+        ([command]) => command.includes("--reuid=quillra-relay") && command.includes(" --check "),
+      )?.[0] ?? "";
+    expect(relayProbe).toContain(E2B_RELAY_NODE_PATH);
+    expect(relayProbe).not.toContain("/usr/local/bin/node");
     const envdProbe =
       bootstrapCalls.find(([command]) => command.includes("/process.Process/List"))?.[0] ?? "";
     expect(envdProbe).toContain("except ConnectionRefusedError:");
@@ -152,6 +205,30 @@ describe("E2B SDK adapter", () => {
     expect(
       sandbox.files.remove.mock.calls.some(([, fileOptions]) => fileOptions?.user === "root"),
     ).toBe(true);
+  });
+
+  it("requires the sealed relay runtime on reconnect without copying mutable template Node", async () => {
+    const sandbox = fakeSdkSandbox();
+    sdk.connect.mockResolvedValue(sandbox);
+
+    await new E2BSdkAdapter().connect("sandbox-1", {
+      apiKey: "e2b_control_plane_secret",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+
+    const commands = sandbox.commands.run.mock.calls.map(([command]) => command);
+    expect(commands.some((command) => command.includes(".node-install-"))).toBe(false);
+    expect(
+      commands.some(
+        (command) =>
+          command.includes(E2B_RELAY_NODE_PATH) &&
+          command.includes("st_nlink!=1") &&
+          command.includes("st_size<1"),
+      ),
+    ).toBe(true);
+    expect(commands.some((command) => command.includes("/usr/local/libexec"))).toBe(false);
+    expect(commands.some((command) => command.includes("/usr/local/bin/node"))).toBe(false);
   });
 
   it("refuses a managed-directory symlink without mutating its target metadata", async () => {
@@ -211,10 +288,21 @@ describe("E2B SDK adapter", () => {
       allowInternetAccess: false,
     });
 
-    expect(sdk.create.mock.calls[0]?.[0]).toMatchObject({
+    const options = sdk.create.mock.calls[0]?.[0];
+    expect(options).toMatchObject({
       lifecycle: { onTimeout: "kill" },
       allowInternetAccess: false,
+      network: { allowPublicTraffic: false },
     });
+    expect(options?.network?.denyOut).toBeTypeOf("function");
+    expect(
+      typeof options?.network?.denyOut === "function"
+        ? options.network.denyOut({
+            allTraffic: "0.0.0.0/0",
+            rules: new Map(),
+          })
+        : undefined,
+    ).toEqual(["0.0.0.0/0"]);
   });
 
   it("kills a sandbox when trusted bootstrap fails", async () => {
@@ -282,6 +370,7 @@ describe("E2B SDK adapter", () => {
       code: "trusted-environment-failed",
       stage: "bootstrap",
       cleanupStatus: "failed",
+      sandboxId: "sandbox-1",
       message:
         "The E2B trusted execution environment failed and its cleanup could not be confirmed.",
     });
@@ -302,6 +391,11 @@ describe("E2B SDK adapter", () => {
     await handle.startPreviewRelay(4_321);
 
     const calls = sandbox.commands.run.mock.calls;
+    const trustedPortProbeIndex = calls.findIndex(
+      ([command]) =>
+        command.includes("socket.SO_REUSEADDR,1") &&
+        command.includes('sock.bind(("127.0.0.1",733))'),
+    );
     const privilegedPortProbeIndex = calls.findIndex(
       ([command]) =>
         command.includes("--reuid=quillra-project") &&
@@ -310,9 +404,10 @@ describe("E2B SDK adapter", () => {
     );
     const relayStartIndex = calls.findIndex(
       ([command]) =>
-        command.includes("/usr/bin/setsid --fork") &&
-        command.includes("/usr/local/libexec/quillra-preview-relay.mjs"),
+        command.includes("/usr/bin/setsid --fork") && command.includes(E2B_RELAY_INSTALL_PATH),
     );
+    expect(trustedPortProbeIndex).toBeGreaterThan(-1);
+    expect(privilegedPortProbeIndex).toBeGreaterThan(trustedPortProbeIndex);
     expect(privilegedPortProbeIndex).toBeGreaterThan(-1);
     expect(relayStartIndex).toBeGreaterThan(privilegedPortProbeIndex);
     const relayStart = calls[relayStartIndex]?.[0] ?? "";
@@ -322,7 +417,7 @@ describe("E2B SDK adapter", () => {
       user: "root",
       envs: expect.objectContaining({
         BASH_ENV: "/dev/null",
-        HOME: "/run/quillra-preview/control-home",
+        HOME: `${E2B_RELAY_RUNTIME_ROOT}/control-home`,
       }),
     });
   });
@@ -459,7 +554,7 @@ describe("E2B SDK adapter", () => {
       envs: {
         BASH_ENV: "/dev/null",
         ENV: "/dev/null",
-        HOME: "/run/quillra-preview/control-home",
+        HOME: `${E2B_RELAY_RUNTIME_ROOT}/control-home`,
         USER: "root",
       },
     });
@@ -495,8 +590,7 @@ describe("E2B SDK adapter", () => {
       controlOptions.every(
         (options) =>
           (options as { envs?: Record<string, string>; user?: string }).envs?.PATH ===
-            "/usr/local/bin:/usr/sbin:/usr/bin:/bin" &&
-          (options as { user?: string }).user === "root",
+            "/usr/sbin:/usr/bin:/bin" && (options as { user?: string }).user === "root",
       ),
     ).toBe(true);
   });
@@ -553,8 +647,8 @@ describe("E2B SDK adapter", () => {
         user: "root",
         timeoutMs: 10_000,
         envs: expect.objectContaining({
-          HOME: "/run/quillra-preview/control-home",
-          PATH: "/usr/local/bin:/usr/sbin:/usr/bin:/bin",
+          HOME: `${E2B_RELAY_RUNTIME_ROOT}/control-home`,
+          PATH: "/usr/sbin:/usr/bin:/bin",
         }),
       }),
     );
@@ -609,8 +703,8 @@ describe("E2B SDK adapter", () => {
         user: "root",
         timeoutMs: 10_000,
         envs: expect.objectContaining({
-          HOME: "/run/quillra-preview/control-home",
-          PATH: "/usr/local/bin:/usr/sbin:/usr/bin:/bin",
+          HOME: `${E2B_RELAY_RUNTIME_ROOT}/control-home`,
+          PATH: "/usr/sbin:/usr/bin:/bin",
         }),
       }),
     );

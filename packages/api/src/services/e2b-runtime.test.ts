@@ -274,6 +274,109 @@ describe("E2B runtime", () => {
     });
   });
 
+  it("preserves caller cancellation after confirmed reconnect cleanup", async () => {
+    const sandbox = fakeSandbox();
+    const { runtime, adapter, store } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.ensureProject(fence);
+    const controller = new AbortController();
+    const reason = new Error("expected-cancellation");
+    vi.mocked(adapter.connect).mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw new E2BTrustedEnvironmentError("bootstrap", "confirmed");
+    });
+
+    await expect(
+      runtime.runCommand(fence, {
+        localRoot,
+        command: "sleep 60",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(store.get(fence.projectId)).toBeNull();
+  });
+
+  it("preserves caller cancellation after confirmed create cleanup", async () => {
+    const { runtime, adapter, store } = runtimeFixture();
+    const controller = new AbortController();
+    const reason = new Error("expected-create-cancellation");
+    vi.mocked(adapter.create).mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw new E2BTrustedEnvironmentError("bootstrap", "confirmed");
+    });
+
+    await expect(
+      runtime.ensureProject(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        { signal: controller.signal },
+      ),
+    ).rejects.toBe(reason);
+
+    expect(store.get("project-a")).toBeNull();
+  });
+
+  it("persists a provisional sandbox id until failed bootstrap cleanup can be retried", async () => {
+    const { runtime, adapter, store } = runtimeFixture();
+    vi.mocked(adapter.create).mockImplementationOnce(async (options) => {
+      await options.onSandboxCreated?.("sandbox-orphan");
+      throw new E2BTrustedEnvironmentError("bootstrap", "failed", "sandbox-orphan");
+    });
+
+    await expect(
+      runtime.ensureProject({ projectId: "project-a", githubBindingGeneration: 1 }),
+    ).rejects.toMatchObject({
+      name: "E2BTrustedEnvironmentError",
+      cleanupStatus: "failed",
+      sandboxId: "sandbox-orphan",
+    });
+
+    expect(store.get("project-a")).toMatchObject({
+      sandboxId: "sandbox-orphan",
+      previewPid: null,
+      previewPort: null,
+    });
+
+    await runtime.destroyAllWithApiKey({ apiKey: "e2b_control_plane_key" });
+    expect(adapter.destroy).toHaveBeenCalledWith(
+      "sandbox-orphan",
+      expect.objectContaining({ apiKey: "e2b_control_plane_key" }),
+    );
+    expect(store.get("project-a")).toBeNull();
+  });
+
+  it("retains the returned sandbox id when a mismatched create callback cannot be cleaned up", async () => {
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.kill).mockRejectedValueOnce(new Error("provider cleanup failed"));
+    const { runtime, adapter, store } = runtimeFixture(sandbox);
+    vi.mocked(adapter.create).mockImplementationOnce(async (options) => {
+      await options.onSandboxCreated?.("stale-callback-id");
+      return sandbox;
+    });
+
+    await expect(
+      runtime.ensureProject({ projectId: "project-a", githubBindingGeneration: 1 }),
+    ).rejects.toMatchObject({
+      name: "E2BTrustedEnvironmentError",
+      stage: "bootstrap",
+      cleanupStatus: "failed",
+      sandboxId: "sandbox-a",
+    });
+
+    expect(store.get("project-a")).toMatchObject({
+      sandboxId: "sandbox-a",
+      previewPid: null,
+      previewPort: null,
+    });
+
+    await runtime.destroyAllWithApiKey({ apiKey: "e2b_control_plane_key" });
+    expect(adapter.destroy).toHaveBeenCalledWith(
+      "sandbox-a",
+      expect.objectContaining({ apiKey: "e2b_control_plane_key" }),
+    );
+    expect(store.get("project-a")).toBeNull();
+  });
+
   it("stabilizes a direct workspace sync and clears stale preview state first", async () => {
     const sandbox = fakeSandbox();
     const { runtime, store } = runtimeFixture(sandbox);
@@ -397,5 +500,71 @@ describe("E2B runtime", () => {
     expect(sandbox.startCommand).not.toHaveBeenCalled();
     expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
     expect(store.get("project-a")?.previewPid).toBeNull();
+  });
+
+  it("discards the sandbox when trusted relay startup fails and cleanup is confirmed", async () => {
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.startPreviewRelay).mockRejectedValueOnce(
+      new E2BTrustedEnvironmentError("relay-start"),
+    );
+    const { runtime, store } = runtimeFixture(sandbox);
+
+    await expect(
+      runtime.startPreview(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        {
+          localRoot,
+          command: "npm run dev",
+          port: 4_321,
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "E2BTrustedEnvironmentError",
+      stage: "relay-start",
+      cleanupStatus: "confirmed",
+      message: "The E2B trusted execution environment could not be prepared.",
+    });
+
+    expect(sandbox.startCommand).not.toHaveBeenCalled();
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+    expect(sandbox.stopPreviewRelay).not.toHaveBeenCalled();
+    expect(store.get("project-a")).toBeNull();
+  });
+
+  it("retains a cleanup-retry record when trusted relay startup cleanup fails", async () => {
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.startPreviewRelay).mockRejectedValueOnce(
+      new E2BTrustedEnvironmentError("relay-ready"),
+    );
+    vi.mocked(sandbox.kill).mockRejectedValueOnce(
+      new Error("provider response containing sensitive details"),
+    );
+    const { runtime, store } = runtimeFixture(sandbox);
+
+    await expect(
+      runtime.startPreview(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        {
+          localRoot,
+          command: "npm run dev",
+          port: 4_321,
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "E2BTrustedEnvironmentError",
+      stage: "relay-ready",
+      cleanupStatus: "failed",
+      message:
+        "The E2B trusted execution environment failed and its cleanup could not be confirmed.",
+    });
+
+    expect(sandbox.startCommand).not.toHaveBeenCalled();
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+    expect(sandbox.stopPreviewRelay).not.toHaveBeenCalled();
+    expect(store.get("project-a")).toMatchObject({
+      sandboxId: "sandbox-a",
+      previewPid: null,
+      previewPort: null,
+    });
   });
 });

@@ -9,8 +9,11 @@ import {
   E2B_PREVIEW_RELAY_SOURCE,
   E2B_PROJECT_HOME,
   E2B_PROJECT_USER,
+  E2B_RELAY_BIN_ROOT,
   E2B_RELAY_INSTALL_PATH,
+  E2B_RELAY_NODE_PATH,
   E2B_RELAY_RUNTIME_ROOT,
+  E2B_RELAY_STAGING_ROOT,
   E2B_RELAY_USER,
   assertE2BPreviewTargetPort,
 } from "./e2b-preview-relay.js";
@@ -21,7 +24,8 @@ const PROCESS_LOG_ROOT = `${E2B_PROJECT_HOME}/.quillra-processes`;
 const MAX_FILE_CHUNK_BYTES = 256 * 1024;
 const ABSOLUTE_MAX_DIRECTORY_ENTRIES = 20_000;
 const ABSOLUTE_MAX_DIRECTORY_OUTPUT_BYTES = 4 * 1024 * 1024;
-const TRUSTED_CONTROL_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/bin";
+const TRUSTED_CONTROL_PATH = "/usr/sbin:/usr/bin:/bin";
+const PROJECT_EXECUTION_PATH = "/usr/local/bin:/usr/bin:/bin";
 const TRUSTED_BASH = "/bin/bash";
 const TRUSTED_RM = "/bin/rm";
 const TRUSTED_BASE64 = "/usr/bin/base64";
@@ -118,6 +122,7 @@ export type E2BCreateOptions = {
   requestTimeoutMs: number;
   lifecycle?: SandboxOpts["lifecycle"];
   allowInternetAccess?: boolean;
+  onSandboxCreated?: (sandboxId: string) => void | Promise<void>;
   signal?: AbortSignal;
 };
 
@@ -213,7 +218,7 @@ function isolatedUserShell(
     ...envs,
     HOME: home,
     LOGNAME: user,
-    PATH: TRUSTED_CONTROL_PATH,
+    PATH: user === E2B_PROJECT_USER ? PROJECT_EXECUTION_PATH : TRUSTED_CONTROL_PATH,
     USER: user,
   };
   const environmentArgs = Object.entries(environment)
@@ -271,6 +276,8 @@ const TRUSTED_LAUNCH_ENV = {
   BASH_ENV: "/dev/null",
   ENV: "/dev/null",
   HOME: TRUSTED_LAUNCH_HOME,
+  LANG: "C",
+  LC_ALL: "C",
   LOGNAME: "root",
   PATH: TRUSTED_CONTROL_PATH,
   USER: "root",
@@ -423,16 +430,6 @@ export function boundedCommandWrapper(input: {
   return `${isolatedUserShell(E2B_PROJECT_USER, script, input.envs, true)} >/dev/null 2>/dev/null`;
 }
 
-const TRUSTED_NODE_COMMAND = [
-  "if [ -x /usr/bin/node ]; then",
-  "  quillra_node=/usr/bin/node",
-  "elif [ -x /usr/local/bin/node ]; then",
-  "  quillra_node=/usr/local/bin/node",
-  "else",
-  "  exit 1",
-  "fi",
-].join("\n");
-
 /**
  * Creates/chowns only directory entries anchored beneath a root-owned,
  * non-writable parent. O_NOFOLLOW prevents an existing leaf symlink from
@@ -484,10 +481,209 @@ export const SECURE_DIRECTORY_SETUP_SCRIPT = [
   "  os.close(parent_fd)",
 ].join("\n");
 
+/**
+ * Used only for a freshly created sandbox, before project code can execute.
+ * E2B's base Node is root-owned but intentionally mode 0777 under its
+ * developer-writable /usr/local. Copy it once into the sealed trust root via
+ * an atomic, dirfd-anchored destination; reconnects never run this script.
+ */
+export const SEAL_RELAY_NODE_SCRIPT = [
+  "import errno,os,stat,sys",
+  "destination=sys.argv[1]",
+  "relay_gid=int(sys.argv[2])",
+  'candidates=("/usr/bin/node","/usr/local/bin/node")',
+  "parent,leaf=os.path.split(destination)",
+  'if not parent or leaf in ("",".","..") or relay_gid<0:',
+  " sys.exit(1)",
+  "source_fd=None",
+  "for candidate in candidates:",
+  " try:",
+  "  source_fd=os.open(candidate,os.O_RDONLY|os.O_CLOEXEC)",
+  " except OSError as error:",
+  "  if error.errno in (errno.ENOENT,errno.ENOTDIR):",
+  "   continue",
+  "  raise",
+  " source_info=os.fstat(source_fd)",
+  " if not stat.S_ISREG(source_info.st_mode) or source_info.st_uid!=0 or source_info.st_size<1 or source_info.st_size>536870912 or not source_info.st_mode&0o111:",
+  "  os.close(source_fd)",
+  "  sys.exit(1)",
+  " break",
+  "if source_fd is None:",
+  " sys.exit(1)",
+  "flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW",
+  "parent_fd=os.open(parent,flags)",
+  'temporary=".node-install-"+os.urandom(16).hex()',
+  "temporary_created=False",
+  "try:",
+  " parent_info=os.fstat(parent_fd)",
+  " if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid!=0 or parent_info.st_mode&0o022:",
+  "  sys.exit(1)",
+  " destination_fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|os.O_NOFOLLOW,0o500,dir_fd=parent_fd)",
+  " temporary_created=True",
+  " try:",
+  "  copied=0",
+  "  while True:",
+  "   chunk=os.read(source_fd,1048576)",
+  "   if not chunk:",
+  "    break",
+  "   copied+=len(chunk)",
+  "   if copied>source_info.st_size:",
+  "    sys.exit(1)",
+  "   view=memoryview(chunk)",
+  "   while view:",
+  "    written=os.write(destination_fd,view)",
+  "    if written<1:",
+  "     sys.exit(1)",
+  "    view=view[written:]",
+  "  if copied!=source_info.st_size:",
+  "   sys.exit(1)",
+  "  os.fchown(destination_fd,0,relay_gid)",
+  "  os.fchmod(destination_fd,0o550)",
+  "  os.fsync(destination_fd)",
+  " finally:",
+  "  os.close(destination_fd)",
+  " os.replace(temporary,leaf,src_dir_fd=parent_fd,dst_dir_fd=parent_fd)",
+  " temporary_created=False",
+  " sealed_fd=os.open(leaf,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=parent_fd)",
+  " try:",
+  "  sealed_info=os.fstat(sealed_fd)",
+  "  if not stat.S_ISREG(sealed_info.st_mode) or sealed_info.st_uid!=0 or sealed_info.st_gid!=relay_gid or stat.S_IMODE(sealed_info.st_mode)!=0o550 or sealed_info.st_nlink!=1 or sealed_info.st_size!=source_info.st_size:",
+  "   sys.exit(1)",
+  " finally:",
+  "  os.close(sealed_fd)",
+  "finally:",
+  " os.close(source_fd)",
+  " if temporary_created:",
+  "  try:",
+  "   os.unlink(temporary,dir_fd=parent_fd)",
+  "  except OSError:",
+  "   pass",
+  " os.close(parent_fd)",
+].join("\n");
+
+const SEALED_RELAY_NODE_VALIDATION_SCRIPT = [
+  "import os,stat,sys",
+  "path=sys.argv[1]",
+  "relay_gid=int(sys.argv[2])",
+  "parent,leaf=os.path.split(path)",
+  "parent_fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+  "try:",
+  " parent_info=os.fstat(parent_fd)",
+  " if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid!=0 or parent_info.st_mode&0o022:",
+  "  sys.exit(1)",
+  " node_fd=os.open(leaf,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=parent_fd)",
+  " try:",
+  "  info=os.fstat(node_fd)",
+  "  if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_gid!=relay_gid or stat.S_IMODE(info.st_mode)!=0o550 or info.st_nlink!=1 or info.st_size<1:",
+  "   sys.exit(1)",
+  " finally:",
+  "  os.close(node_fd)",
+  "finally:",
+  " os.close(parent_fd)",
+].join("\n");
+
+/**
+ * Node binds the protected low port before the relay source drops privileges,
+ * so the ELF loader itself is part of the root trust boundary. Validate that
+ * boundary as the locked relay user, then inspect the kernel's resolved maps
+ * from the root control process. Custom templates with mutable search paths or
+ * dependencies fail closed before Node is ever launched as root.
+ */
+export const SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT = [
+  "import os,re,select,stat,subprocess,sys,time",
+  "node=os.path.realpath(sys.argv[1])",
+  "relay_user=sys.argv[2]",
+  "MAX_TOOL_OUTPUT=131072",
+  "MAX_MAPS_BYTES=4194304",
+  "def trusted(candidate,regular=False):",
+  " if not candidate.startswith('/') or '\\x00' in candidate:",
+  "  raise RuntimeError('invalid trusted path')",
+  " real=os.path.realpath(candidate)",
+  " info=os.stat(real)",
+  " if info.st_uid!=0 or info.st_mode&0o022:",
+  "  raise RuntimeError('mutable trusted path')",
+  " if regular and not stat.S_ISREG(info.st_mode):",
+  "  raise RuntimeError('trusted dependency is not a regular file')",
+  " current=os.path.dirname(real) if regular else real",
+  " while current!='/':",
+  "  component=os.stat(current)",
+  "  if not stat.S_ISDIR(component.st_mode) or component.st_uid!=0 or component.st_mode&0o022:",
+  "   raise RuntimeError('mutable trusted path component')",
+  "  current=os.path.dirname(current)",
+  " return real",
+  "def tool_output(arguments):",
+  " result=subprocess.run(arguments,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=5,check=False)",
+  " if result.returncode!=0 or len(result.stdout)>MAX_TOOL_OUTPUT:",
+  "  raise RuntimeError('ELF inspection failed')",
+  " return result.stdout.decode('utf-8','strict')",
+  "node=trusted(node,True)",
+  "readelf=trusted('/usr/bin/readelf',True)",
+  "dynamic=tool_output([readelf,'-d',node])",
+  "if re.search(r'\\((?:RPATH|RUNPATH)\\)',dynamic):",
+  " raise RuntimeError('mutable ELF search paths are not allowed')",
+  "program=tool_output([readelf,'-l',node])",
+  "interpreters=re.findall(r'Requesting program interpreter:\\s*([^\\]]+)',program)",
+  "if len(interpreters)!=1:",
+  " raise RuntimeError('ambiguous ELF interpreter')",
+  "trusted(interpreters[0],True)",
+  "ready_read,ready_write=os.pipe()",
+  "probe=\"require('node:http');const fs=require('node:fs');const fd=Number(process.env.QUILLRA_READY_FD);fs.writeSync(fd,'ready');fs.closeSync(fd);setInterval(()=>{},1000)\"",
+  "command=['/usr/bin/setpriv','--reuid='+relay_user,'--regid='+relay_user,'--clear-groups','--no-new-privs','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--','/usr/bin/env','-i','HOME=/nonexistent','LANG=C','LC_ALL=C','LOGNAME='+relay_user,'PATH=/usr/sbin:/usr/bin:/bin','QUILLRA_READY_FD='+str(ready_write),'USER='+relay_user,node,'-e',probe]",
+  "try:",
+  " process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=(ready_write,))",
+  "finally:",
+  " os.close(ready_write)",
+  "try:",
+  " deadline=time.monotonic()+3",
+  " ready=b''",
+  " while process.poll() is None and time.monotonic()<deadline and len(ready)<5:",
+  "  remaining=max(0,deadline-time.monotonic())",
+  "  readable,_,_=select.select([ready_read],[],[],min(0.1,remaining))",
+  "  if readable:",
+  "   chunk=os.read(ready_read,5-len(ready))",
+  "   if not chunk:",
+  "    break",
+  "   ready+=chunk",
+  " if process.poll() is not None or ready!=b'ready':",
+  "  raise RuntimeError('sealed Node readiness probe failed')",
+  " executable=os.path.realpath('/proc/'+str(process.pid)+'/exe')",
+  " if executable!=node:",
+  "  raise RuntimeError('sealed Node executable changed')",
+  " with open('/proc/'+str(process.pid)+'/maps','rb',buffering=0) as handle:",
+  "  raw=handle.read(MAX_MAPS_BYTES+1)",
+  " if not raw or len(raw)>MAX_MAPS_BYTES:",
+  "  raise RuntimeError('sealed Node load probe failed')",
+  " mapped={node}",
+  " for line in raw.decode('utf-8','strict').splitlines():",
+  "  fields=line.split(None,5)",
+  "  if len(fields)==6 and fields[5].startswith('/'):",
+  "   if fields[5].endswith(' (deleted)'):",
+  "    raise RuntimeError('deleted runtime dependency')",
+  "   mapped.add(fields[5])",
+  " if len(mapped)<2:",
+  "  raise RuntimeError('runtime dependency closure is empty')",
+  " for candidate in mapped:",
+  "  trusted(candidate,True)",
+  "finally:",
+  " os.close(ready_read)",
+  " if process.poll() is None:",
+  "  process.terminate()",
+  " try:",
+  "  process.wait(timeout=3)",
+  " except subprocess.TimeoutExpired:",
+  "  process.kill()",
+  "  process.wait(timeout=3)",
+].join("\n");
+
+const TRUSTED_NODE_COMMAND = [
+  `quillra_node=${shellQuote(E2B_RELAY_NODE_PATH)}`,
+  '[ -x "$quillra_node" ]',
+].join("\n");
+
 const SANDBOX_BOOTSTRAP_SCRIPT = [
   "set -eu",
   `export PATH=${shellQuote(TRUSTED_CONTROL_PATH)}`,
-  "for quillra_tool in /bin/bash /bin/rm /usr/bin/awk /usr/bin/base64 /usr/bin/cat /usr/bin/cut /usr/bin/dd /usr/bin/env /usr/bin/getent /usr/bin/head /usr/bin/id /usr/bin/install /usr/bin/kill /usr/bin/mkfifo /usr/bin/python3 /usr/bin/setpriv /usr/bin/setsid /usr/bin/sha256sum /usr/bin/stat /usr/bin/true /usr/sbin/groupadd /usr/sbin/nologin /usr/sbin/useradd /usr/sbin/usermod; do",
+  "for quillra_tool in /bin/bash /bin/rm /usr/bin/awk /usr/bin/base64 /usr/bin/cat /usr/bin/cut /usr/bin/dd /usr/bin/env /usr/bin/getent /usr/bin/head /usr/bin/id /usr/bin/install /usr/bin/kill /usr/bin/mkfifo /usr/bin/python3 /usr/bin/readelf /usr/bin/setpriv /usr/bin/setsid /usr/bin/sha256sum /usr/bin/stat /usr/bin/true /usr/sbin/groupadd /usr/sbin/nologin /usr/sbin/useradd /usr/sbin/usermod; do",
   '  [ -x "$quillra_tool" ]',
   "done",
   `if ! /usr/bin/getent group ${E2B_PROJECT_USER} >/dev/null; then`,
@@ -519,7 +715,7 @@ const SANDBOX_BOOTSTRAP_SCRIPT = [
   `set -- $(/usr/bin/id -G ${E2B_RELAY_USER})`,
   '[ "$#" -eq 1 ]',
   '[ "$1" = "$quillra_relay_gid" ]',
-  `${TRUSTED_PYTHON} -I -S -c ${shellQuote(SECURE_DIRECTORY_SETUP_SCRIPT)} ${shellQuote(E2B_PROJECT_HOME)} "$quillra_project_uid" "$quillra_project_gid" 0700 ${shellQuote(E2B_RELAY_RUNTIME_ROOT)} 0 0 0700 ${shellQuote(TRUSTED_LAUNCH_HOME)} 0 0 0700 /usr/local/libexec 0 0 0755`,
+  `${TRUSTED_PYTHON} -I -S -c ${shellQuote(SECURE_DIRECTORY_SETUP_SCRIPT)} ${shellQuote(E2B_PROJECT_HOME)} "$quillra_project_uid" "$quillra_project_gid" 0700 ${shellQuote(E2B_RELAY_RUNTIME_ROOT)} 0 0 0711 ${shellQuote(E2B_RELAY_BIN_ROOT)} 0 0 0711 ${shellQuote(E2B_RELAY_STAGING_ROOT)} 0 0 0700 ${shellQuote(TRUSTED_LAUNCH_HOME)} 0 0 0700`,
   "quillra_unprivileged_port_start=$(/usr/bin/cat /proc/sys/net/ipv4/ip_unprivileged_port_start)",
   'case "$quillra_unprivileged_port_start" in ""|*[!0-9]*) exit 1 ;; esac',
   'if [ "$quillra_unprivileged_port_start" -lt 1024 ]; then',
@@ -529,7 +725,7 @@ const SANDBOX_BOOTSTRAP_SCRIPT = [
   `${TRUSTED_PYTHON} -I -S -c ${shellQuote(
     [
       "import os,stat,sys",
-      'trusted=("/bin/bash","/bin/rm","/usr/bin/awk","/usr/bin/base64","/usr/bin/cat","/usr/bin/cut","/usr/bin/dd","/usr/bin/env","/usr/bin/getent","/usr/bin/head","/usr/bin/id","/usr/bin/install","/usr/bin/kill","/usr/bin/mkfifo","/usr/bin/python3","/usr/bin/setpriv","/usr/bin/setsid","/usr/bin/sha256sum","/usr/bin/stat","/usr/bin/true","/usr/sbin/groupadd","/usr/sbin/nologin","/usr/sbin/useradd","/usr/sbin/usermod")',
+      'trusted=("/bin/bash","/bin/rm","/usr/bin/awk","/usr/bin/base64","/usr/bin/cat","/usr/bin/cut","/usr/bin/dd","/usr/bin/env","/usr/bin/getent","/usr/bin/head","/usr/bin/id","/usr/bin/install","/usr/bin/kill","/usr/bin/mkfifo","/usr/bin/python3","/usr/bin/readelf","/usr/bin/setpriv","/usr/bin/setsid","/usr/bin/sha256sum","/usr/bin/stat","/usr/bin/true","/usr/sbin/groupadd","/usr/sbin/nologin","/usr/sbin/useradd","/usr/sbin/usermod")',
       "def valid(candidate):",
       " try:",
       "  info=os.stat(candidate)",
@@ -537,8 +733,6 @@ const SANDBOX_BOOTSTRAP_SCRIPT = [
       "  return False",
       " return stat.S_ISREG(info.st_mode) and info.st_uid==0 and not info.st_mode & 0o022 and os.access(candidate,os.X_OK)",
       "if not all(valid(candidate) for candidate in trusted):",
-      " sys.exit(1)",
-      'if not any(valid(candidate) for candidate in ("/usr/bin/node","/usr/local/bin/node")):',
       " sys.exit(1)",
     ].join("\n"),
   )}`,
@@ -599,7 +793,11 @@ const PROJECT_ISOLATION_PROBE = [
   'case "$quillra_unprivileged_port_start" in ""|*[!0-9]*) exit 1 ;; esac',
   '[ "$quillra_unprivileged_port_start" -ge 1024 ]',
   `[ ! -r ${shellQuote(E2B_RELAY_RUNTIME_ROOT)} ]`,
+  `[ ! -w ${shellQuote(E2B_RELAY_RUNTIME_ROOT)} ]`,
   `[ ! -r ${shellQuote(TRUSTED_LAUNCH_HOME)} ]`,
+  `[ ! -r ${shellQuote(E2B_RELAY_NODE_PATH)} ]`,
+  `[ ! -w ${shellQuote(E2B_RELAY_NODE_PATH)} ]`,
+  `[ ! -r ${shellQuote(E2B_RELAY_INSTALL_PATH)} ]`,
   `[ ! -w ${shellQuote(E2B_RELAY_INSTALL_PATH)} ]`,
   "if [ -x /usr/bin/sudo ] && /usr/bin/sudo -n /usr/bin/true >/dev/null 2>&1; then",
   "  exit 1",
@@ -668,7 +866,9 @@ const ASSERT_RELAY_PORT_FREE_SCRIPT = [
   "import socket,sys",
   "sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)",
   "try:",
-  " sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,0)",
+  // A stopped HTTP relay can leave harmless TIME_WAIT entries. Reuse permits
+  // a trusted restart while an active listener still makes bind() fail.
+  " sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)",
   ` sock.bind(("127.0.0.1",${E2B_PREVIEW_RELAY_PORT}))`,
   "except OSError:",
   " sys.exit(1)",
@@ -702,7 +902,10 @@ const WAIT_FOR_RELAY_SCRIPT = [
 class SdkSandboxHandle implements E2BSandboxHandle {
   private preparation: Promise<void> | undefined;
 
-  constructor(private readonly sandbox: Sandbox) {}
+  constructor(
+    private readonly sandbox: Sandbox,
+    private readonly allowRuntimeInstall: boolean,
+  ) {}
 
   get sandboxId(): string {
     return this.sandbox.sandboxId;
@@ -754,6 +957,7 @@ class SdkSandboxHandle implements E2BSandboxHandle {
       "relay-start",
       signal,
     );
+    await this.assertSealedRelayRuntime("relay-start", signal);
 
     const startScript = [
       "set -eu",
@@ -780,6 +984,19 @@ class SdkSandboxHandle implements E2BSandboxHandle {
     }
   }
 
+  private assertSealedRelayRuntime(
+    stage: "bootstrap" | "relay-start",
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.runTrustedCommand(
+      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT)} ${shellQuote(E2B_RELAY_NODE_PATH)} ${shellQuote(E2B_RELAY_USER)}`,
+      "root",
+      stage,
+      signal,
+      20_000,
+    );
+  }
+
   private async prepareExecutionEnvironmentNow(signal?: AbortSignal): Promise<void> {
     await this.runTrustedCommand(
       `${TRUSTED_BASH} -c ${shellQuote(SANDBOX_BOOTSTRAP_SCRIPT)}`,
@@ -789,7 +1006,26 @@ class SdkSandboxHandle implements E2BSandboxHandle {
       20_000,
     );
 
-    const uploadPath = `${E2B_RELAY_RUNTIME_ROOT}/relay-${randomUUID()}.mjs`;
+    const nodePreparationScript = [
+      "set -eu",
+      `quillra_relay_gid=$(/usr/bin/id -g ${E2B_RELAY_USER})`,
+      ...(this.allowRuntimeInstall
+        ? [
+            `${TRUSTED_PYTHON} -I -S -c ${shellQuote(SEAL_RELAY_NODE_SCRIPT)} ${shellQuote(E2B_RELAY_NODE_PATH)} "$quillra_relay_gid"`,
+          ]
+        : []),
+      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(SEALED_RELAY_NODE_VALIDATION_SCRIPT)} ${shellQuote(E2B_RELAY_NODE_PATH)} "$quillra_relay_gid"`,
+    ].join("\n");
+    await this.runTrustedCommand(
+      `${TRUSTED_BASH} -c ${shellQuote(nodePreparationScript)}`,
+      "root",
+      "bootstrap",
+      signal,
+      20_000,
+    );
+    await this.assertSealedRelayRuntime("bootstrap", signal);
+
+    const uploadPath = `${E2B_RELAY_STAGING_ROOT}/relay-${randomUUID()}.mjs`;
     try {
       await this.sandbox.files.write([{ path: uploadPath, data: E2B_PREVIEW_RELAY_SOURCE }], {
         user: "root",
@@ -1198,6 +1434,11 @@ export class E2BSdkAdapter implements E2BAdapter {
         } as const),
       network: {
         allowPublicTraffic: false,
+        ...(options.allowInternetAccess === false
+          ? {
+              denyOut: ({ allTraffic }: { allTraffic: string }) => [allTraffic],
+            }
+          : {}),
       },
       metadata: {
         "quillra.project_id": options.projectId,
@@ -1210,8 +1451,9 @@ export class E2BSdkAdapter implements E2BAdapter {
       options.templateId === "base"
         ? await Sandbox.create(sandboxOptions)
         : await Sandbox.create(options.templateId, sandboxOptions);
-    const handle = new SdkSandboxHandle(sandbox);
+    const handle = new SdkSandboxHandle(sandbox, true);
     try {
+      await options.onSandboxCreated?.(sandbox.sandboxId);
       await handle.prepareExecutionEnvironment(options.signal);
       return handle;
     } catch (error) {
@@ -1219,6 +1461,7 @@ export class E2BSdkAdapter implements E2BAdapter {
       throw new E2BTrustedEnvironmentError(
         error instanceof E2BTrustedEnvironmentError ? error.stage : "bootstrap",
         cleanupStatus,
+        sandbox.sandboxId,
       );
     }
   }
@@ -1230,7 +1473,7 @@ export class E2BSdkAdapter implements E2BAdapter {
       requestTimeoutMs: options.requestTimeoutMs,
       signal: options.signal,
     });
-    const handle = new SdkSandboxHandle(sandbox);
+    const handle = new SdkSandboxHandle(sandbox, false);
     try {
       await handle.prepareExecutionEnvironment(options.signal);
       return handle;
@@ -1239,6 +1482,7 @@ export class E2BSdkAdapter implements E2BAdapter {
       throw new E2BTrustedEnvironmentError(
         error instanceof E2BTrustedEnvironmentError ? error.stage : "bootstrap",
         cleanupStatus,
+        sandbox.sandboxId,
       );
     }
   }
