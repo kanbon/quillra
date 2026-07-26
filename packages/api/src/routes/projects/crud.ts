@@ -2,9 +2,13 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { db } from "../../db/index.js";
+import { db, rawSqlite } from "../../db/index.js";
 import { projectMembers, projects } from "../../db/schema.js";
 import { getProjectBrandContext } from "../../services/branding.js";
+import {
+  LegacyProjectGitValidationError,
+  verifyAndSanitizeLegacyProjectGitConfig,
+} from "../../services/git-config-sanitizer.js";
 import { listBranches } from "../../services/github-rest.js";
 import {
   GithubConnectionRequiredError,
@@ -16,6 +20,7 @@ import {
   cancelProjectDeletion,
   clearProjectRepoClone,
   destroyProjectExecution,
+  runLegacyGithubBackfill,
   scheduleDeletedProjectWorkspaceCleanup,
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
@@ -39,6 +44,14 @@ const branchSchema = z
   .refine((value) => !value.startsWith("-") && !hasControlCharacters(value), {
     message: "Invalid Git branch name",
   });
+
+const githubBindingSchema = z
+  .object({
+    githubInstallationId: githubIdSchema,
+    githubRepositoryId: githubIdSchema,
+    defaultBranch: branchSchema.optional(),
+  })
+  .strict();
 
 async function verifyRepositorySelection(args: {
   userId: string;
@@ -81,6 +94,55 @@ function githubSelectionError(error: unknown): {
     return { status: 403, body: { error: error.message, code: error.code } };
   }
   return null;
+}
+
+class LegacyGithubBackfillConflict extends Error {
+  readonly code = "legacy_github_backfill_conflict";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "LegacyGithubBackfillConflict";
+  }
+}
+
+class LegacyGithubBackfillAuthorizationError extends Error {
+  constructor() {
+    super("Project administrator access changed while the legacy backfill was running.");
+    this.name = "LegacyGithubBackfillAuthorizationError";
+  }
+}
+
+type LegacyGithubProjectRow = {
+  github_repo_full_name: string;
+  github_installation_id: string | null;
+  github_repository_id: string | null;
+  default_branch: string;
+  github_binding_generation: number;
+};
+
+function sameGithubRepository(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function assertLegacyGithubSelection(
+  project: LegacyGithubProjectRow,
+  selection: Awaited<ReturnType<typeof verifyRepositorySelection>>,
+): void {
+  if (project.github_installation_id !== null || project.github_repository_id !== null) {
+    throw new LegacyGithubBackfillConflict(
+      "This project already has an immutable GitHub binding. Use the normal repository rebind.",
+    );
+  }
+  if (!sameGithubRepository(project.github_repo_full_name, selection.repository.fullName)) {
+    throw new LegacyGithubBackfillConflict(
+      "The selected repository does not match this legacy project.",
+    );
+  }
+  if (project.default_branch !== selection.branch) {
+    throw new LegacyGithubBackfillConflict(
+      "The selected branch does not match this legacy project's default branch.",
+    );
+  }
 }
 
 export const crudRouter = new Hono<{ Variables: Variables }>()
@@ -180,6 +242,143 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
 
     return c.json({ id }, 201);
   })
+  .post("/:id/github/backfill", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    if (r.clientSession) return c.json({ error: "Forbidden" }, 403);
+    const projectId = c.req.param("id");
+    const membership = await memberForProject(r.user.id, projectId);
+    if (!membership || membership.role !== "admin") {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = githubBindingSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+    let selection: Awaited<ReturnType<typeof verifyRepositorySelection>>;
+    try {
+      selection = await verifyRepositorySelection({
+        userId: r.user.id,
+        installationId: parsed.data.githubInstallationId,
+        repositoryId: parsed.data.githubRepositoryId,
+        branch: parsed.data.defaultBranch,
+      });
+    } catch (error) {
+      const mapped = githubSelectionError(error);
+      if (mapped) return c.json(mapped.body, mapped.status);
+      throw error;
+    }
+
+    const initial = rawSqlite
+      .prepare(
+        `SELECT github_repo_full_name, github_installation_id, github_repository_id,
+                default_branch, github_binding_generation
+           FROM projects WHERE id = ?`,
+      )
+      .get(projectId) as LegacyGithubProjectRow | undefined;
+    if (!initial) return c.json({ error: "Not found" }, 404);
+
+    let preservedWorkspace = false;
+    try {
+      assertLegacyGithubSelection(initial, selection);
+      const assertBackfillStillCurrent = () => {
+        const currentMembership = rawSqlite
+          .prepare("SELECT role FROM project_members WHERE project_id = ? AND user_id = ?")
+          .get(projectId, r.user.id) as { role: string } | undefined;
+        if (currentMembership?.role !== "admin") {
+          throw new LegacyGithubBackfillAuthorizationError();
+        }
+        const current = rawSqlite
+          .prepare(
+            `SELECT github_repo_full_name, github_installation_id, github_repository_id,
+                    default_branch, github_binding_generation
+               FROM projects WHERE id = ?`,
+          )
+          .get(projectId) as LegacyGithubProjectRow | undefined;
+        if (!current || current.github_binding_generation !== initial.github_binding_generation) {
+          throw new LegacyGithubBackfillConflict(
+            "The project GitHub binding changed while the legacy backfill was running.",
+          );
+        }
+        assertLegacyGithubSelection(current, selection);
+      };
+      const commitBackfill = rawSqlite.transaction(() => {
+        assertBackfillStillCurrent();
+        const update = rawSqlite
+          .prepare(
+            `UPDATE projects
+                SET github_repo_full_name = ?,
+                    github_installation_id = ?,
+                    github_repository_id = ?,
+                    github_binding_generation = github_binding_generation + 1,
+                    default_branch = ?,
+                    updated_at = ?
+              WHERE id = ?
+                AND github_installation_id IS NULL
+                AND github_repository_id IS NULL
+                AND github_binding_generation = ?`,
+          )
+          .run(
+            selection.repository.fullName,
+            selection.repository.installationId,
+            selection.repository.repositoryId,
+            selection.branch,
+            Date.now(),
+            projectId,
+            initial.github_binding_generation,
+          );
+        if (update.changes !== 1) {
+          throw new LegacyGithubBackfillConflict(
+            "The project GitHub binding changed while the legacy backfill was running.",
+          );
+        }
+      });
+
+      await runLegacyGithubBackfill(
+        projectId,
+        initial.github_binding_generation,
+        async (repoPath) => {
+          assertBackfillStillCurrent();
+          if (repoPath) {
+            preservedWorkspace = true;
+            await verifyAndSanitizeLegacyProjectGitConfig(
+              repoPath,
+              selection.repository.fullName,
+              selection.branch,
+            );
+          }
+          commitBackfill();
+        },
+      );
+    } catch (error) {
+      if (
+        error instanceof LegacyGithubBackfillConflict ||
+        error instanceof LegacyProjectGitValidationError
+      ) {
+        return c.json(
+          {
+            error: error.message,
+            code: "legacy_github_backfill_conflict",
+          },
+          409,
+        );
+      }
+      if (error instanceof LegacyGithubBackfillAuthorizationError) {
+        return c.json({ error: error.message }, 403);
+      }
+      throw error;
+    }
+
+    return c.json({
+      ok: true,
+      preservedWorkspace,
+      githubRepoFullName: selection.repository.fullName,
+      githubInstallationId: selection.repository.installationId,
+      githubRepositoryId: selection.repository.repositoryId,
+      defaultBranch: selection.branch,
+    });
+  })
   .post("/:id/github/rebind", async (c) => {
     const r = await requireUser(c);
     if ("error" in r) return r.error;
@@ -191,16 +390,19 @@ export const crudRouter = new Hono<{ Variables: Variables }>()
     }
     const [existing] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!existing) return c.json({ error: "Not found" }, 404);
+    if (!existing.githubInstallationId || !existing.githubRepositoryId) {
+      return c.json(
+        {
+          error:
+            "This legacy project must use the verified GitHub backfill before it can be rebound.",
+          code: "legacy_github_backfill_required",
+        },
+        409,
+      );
+    }
 
     const body = await c.req.json().catch(() => null);
-    const parsed = z
-      .object({
-        githubInstallationId: githubIdSchema,
-        githubRepositoryId: githubIdSchema,
-        defaultBranch: branchSchema.optional(),
-      })
-      .strict()
-      .safeParse(body);
+    const parsed = githubBindingSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
     let selection: Awaited<ReturnType<typeof verifyRepositorySelection>>;

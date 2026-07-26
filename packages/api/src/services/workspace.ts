@@ -9,6 +9,7 @@ import { type E2BProjectFence, getDefaultE2BRuntime } from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
   type GitCommitIdentity,
+  LegacyProjectGitValidationError,
   gitIdentityConfig,
   sanitizeProjectGitConfig,
 } from "./git-config-sanitizer.js";
@@ -562,6 +563,62 @@ export async function clearProjectRepoClone(
     await withRepoLock(projectId, async () => {
       await removeManagedProjectPath(projectRepoPath(projectId));
       await afterClear?.();
+    });
+  } finally {
+    const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
+    if (remaining > 0) resettingProjects.set(projectId, remaining);
+    else resettingProjects.delete(projectId);
+    endProjectWriterReset(projectId);
+  }
+}
+
+function managedPathEntryExists(target: string): boolean {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * Fence every writer and remote execution surface while an imported legacy
+ * GitHub binding is upgraded in place. Unlike a normal rebind this deliberately
+ * preserves the repository, including dirty and untracked files. The caller
+ * must validate the working copy before committing the database update.
+ *
+ * A completely absent repository is valid: the next normal project operation
+ * can clone it after the immutable binding exists. Any existing filesystem
+ * entry is passed to the caller so an incomplete or symbolic checkout fails
+ * closed instead of later being mistaken for a disposable partial clone.
+ */
+export async function runLegacyGithubBackfill<T>(
+  projectId: string,
+  expectedBindingGeneration: number,
+  operation: (repoPath: string | null) => Promise<T>,
+  writerTimeoutMs?: number,
+): Promise<T> {
+  resettingProjects.set(projectId, (resettingProjects.get(projectId) ?? 0) + 1);
+  beginProjectWriterReset(projectId);
+  try {
+    if (!(await cancelAndWaitForProjectWriters(projectId, writerTimeoutMs))) {
+      throw new Error(`Project writers are still active for ${projectId}`);
+    }
+    await stopPreviewAndWait(projectId, expectedBindingGeneration);
+    await (previewStartQueues.get(projectId) ?? Promise.resolve());
+    await destroyProjectExecution(projectId, expectedBindingGeneration);
+    return await withRepoLock(projectId, async () => {
+      const projectPath = projectWorkspacePath(projectId);
+      if (!managedPathEntryExists(projectPath)) return operation(null);
+      const projectPathInfo = fs.lstatSync(projectPath);
+      if (!projectPathInfo.isDirectory() || projectPathInfo.isSymbolicLink()) {
+        throw new LegacyProjectGitValidationError(
+          "The legacy project workspace uses an unsafe filesystem entry.",
+        );
+      }
+      const repoPath = path.join(projectPath, "repo");
+      return operation(managedPathEntryExists(repoPath) ? repoPath : null);
     });
   } finally {
     const remaining = (resettingProjects.get(projectId) ?? 1) - 1;

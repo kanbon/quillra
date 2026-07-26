@@ -144,6 +144,10 @@ describe("project Git security", () => {
     expect(config).toContain("https://github.com/example/site.git");
     expect(config).not.toContain("github-installation-secret");
     expect(config).not.toContain("x-access-token");
+
+    await simpleGitForProject(repo).status();
+    const configAfterAnotherCommand = fs.readFileSync(path.join(repo, ".git", "config"), "utf8");
+    expect(configAfterAnotherCommand).toContain("https://github.com/example/site.git");
   });
 
   it("does not execute repository-installed Git hooks", async () => {

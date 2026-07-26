@@ -84,7 +84,11 @@ export function GeneralSection({
         if (!body.githubRepositoryId || !body.githubInstallationId) {
           throw new Error(t("github.selectRepoRequired"));
         }
-        await apiJson(`/api/projects/${projectId}/github/rebind`, {
+        const bindingAction =
+          initialGithubRepositoryId === null && initialGithubInstallationId === null
+            ? "backfill"
+            : "rebind";
+        await apiJson(`/api/projects/${projectId}/github/${bindingAction}`, {
           method: "POST",
           body: JSON.stringify({
             githubRepositoryId: body.githubRepositoryId,
