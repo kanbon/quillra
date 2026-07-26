@@ -1,13 +1,13 @@
 import { Input } from "@/components/atoms/Input";
 import { Modal } from "@/components/atoms/Modal";
 import { Textarea } from "@/components/atoms/Textarea";
+import { useGitHubRepositories } from "@/hooks/useGitHubRepositories";
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { type GithubRepoRow, githubConnectUrl, isGitHubConnectionRequired } from "@/lib/github";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useState } from "react";
-
-type GitHubRepo = { fullName: string; defaultBranch: string };
 
 type FrameworkSummary = {
   id: string;
@@ -49,17 +49,15 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
   const advancedPanelId = `${fieldId}-advanced`;
   const [step, setStep] = useState<Step>("repo");
   const [search, setSearch] = useState("");
-  const [pickedRepo, setPickedRepo] = useState<GitHubRepo | null>(null);
+  const [pickedRepo, setPickedRepo] = useState<GithubRepoRow | null>(null);
   const [branch, setBranch] = useState("");
-  const [manualMode, setManualMode] = useState(false);
-  const [manualRepo, setManualRepo] = useState("");
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [previewCmd, setPreviewCmd] = useState("");
   const [convertToAstro, setConvertToAstro] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
 
   // Reset on open
   useEffect(() => {
@@ -68,8 +66,6 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     setSearch("");
     setPickedRepo(null);
     setBranch("");
-    setManualMode(false);
-    setManualRepo("");
     setName("");
     setNameTouched(false);
     setShowAdvanced(false);
@@ -79,15 +75,11 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     setError(null);
   }, [open]);
 
-  const reposQ = useQuery({
-    queryKey: ["github-repos"],
-    queryFn: () => apiJson<{ repos: GitHubRepo[] }>("/api/github/repos"),
-    enabled: open,
-    retry: false,
-  });
+  const { userId, connectionQ, reposQ, disconnect, connectionRequired, connectUrl } =
+    useGitHubRepositories(open);
 
   const branchesQ = useQuery({
-    queryKey: ["github-branches", pickedRepo?.fullName],
+    queryKey: ["github-branches", userId, pickedRepo?.installationId, pickedRepo?.repositoryId],
     queryFn: async () => {
       if (!pickedRepo) throw new Error("no repo");
       const [owner, repo] = pickedRepo.fullName.split("/");
@@ -95,7 +87,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
         `/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
       );
     },
-    enabled: open && !!pickedRepo && !manualMode,
+    enabled: open && !!pickedRepo,
     retry: false,
   });
 
@@ -124,19 +116,23 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     return list.filter((r) => r.fullName.toLowerCase().includes(q));
   }, [reposQ.data, search]);
 
-  const repoApiUnavailable =
-    reposQ.isError || (reposQ.isSuccess && (reposQ.data?.repos?.length ?? 0) === 0);
-  useEffect(() => {
-    if (repoApiUnavailable) setManualMode(true);
-  }, [repoApiUnavailable]);
-
-  const effectiveRepoFull = manualMode ? manualRepo.trim() : (pickedRepo?.fullName ?? "");
-  const repoValid = /^[\w.-]+\/[\w.-]+$/.test(effectiveRepoFull);
-  const canContinueRepo = repoValid && branch.trim().length > 0;
+  const effectiveRepoFull = pickedRepo?.fullName ?? "";
+  const branchConnectionRequired = isGitHubConnectionRequired(branchesQ.error);
+  const canContinueRepo =
+    !!pickedRepo?.repositoryId &&
+    !!pickedRepo.installationId &&
+    branch.trim().length > 0 &&
+    !branchConnectionRequired;
 
   // Framework check (only runs once we're on the framework step)
   const fwQ = useQuery({
-    queryKey: ["framework-check", effectiveRepoFull, branch],
+    queryKey: [
+      "framework-check",
+      userId,
+      pickedRepo?.installationId,
+      pickedRepo?.repositoryId,
+      branch,
+    ],
     queryFn: async () => {
       const [owner, repo] = effectiveRepoFull.split("/");
       return apiJson<FrameworkCheckResult>(
@@ -146,16 +142,20 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
     enabled: open && step === "framework" && canContinueRepo,
     retry: false,
   });
+  const frameworkConnectionRequired = isGitHubConnectionRequired(fwQ.error);
 
   async function handleSubmit() {
     setSubmitting(true);
     setError(null);
     try {
+      if (!pickedRepo) throw new Error(t("github.selectRepoRequired"));
       await apiJson("/api/projects", {
         method: "POST",
         body: JSON.stringify({
           name: name.trim(),
           githubRepoFullName: effectiveRepoFull,
+          githubRepositoryId: pickedRepo.repositoryId,
+          githubInstallationId: pickedRepo.installationId,
           defaultBranch: branch.trim(),
           previewDevCommand: previewCmd.trim() || null,
           migrationTarget: convertToAstro ? "astro" : null,
@@ -164,7 +164,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
       onCreated();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed");
+      setError(e instanceof Error ? e : new Error("Failed"));
       setSubmitting(false);
     }
   }
@@ -263,28 +263,69 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               {t("github.repository")}
             </label>
 
-            {manualMode ? (
-              <>
-                <Input
-                  id={repositoryId}
-                  placeholder={t("github.repoPlaceholder")}
-                  value={manualRepo}
-                  onChange={(e) => setManualRepo(e.target.value.trim())}
-                  disabled={submitting}
-                />
-                {!repoApiUnavailable && (
-                  <button
-                    type="button"
-                    className="mt-1.5 text-xs text-neutral-500 underline-offset-2 hover:text-neutral-800 hover:underline"
-                    onClick={() => setManualMode(false)}
+            {connectionQ.data?.connected && !connectionRequired && !branchConnectionRequired && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-600">
+                <span>
+                  {connectionQ.data.githubLogin
+                    ? t("github.connectedAs", { login: connectionQ.data.githubLogin })
+                    : t("github.connected")}
+                </span>
+                <button
+                  type="button"
+                  className="shrink-0 text-neutral-500 underline-offset-2 hover:text-neutral-800 hover:underline disabled:opacity-50"
+                  disabled={disconnect.isPending}
+                  onClick={() => {
+                    if (!window.confirm(t("github.disconnectConfirm"))) return;
+                    disconnect.mutate(undefined, {
+                      onSuccess: () => {
+                        setPickedRepo(null);
+                        setBranch("");
+                      },
+                    });
+                  }}
+                >
+                  {disconnect.isPending ? t("github.disconnecting") : t("github.disconnect")}
+                </button>
+              </div>
+            )}
+
+            {connectionRequired ? (
+              <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-5 py-6 text-center">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-neutral-900 text-white">
+                  <svg
+                    className="h-5 w-5"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
                   >
-                    {t("github.useListPicker")}
-                  </button>
-                )}
-                {repoApiUnavailable && reposQ.isError && (
-                  <p className="mt-1.5 text-xs text-amber-600">{t("github.apiUnavailable")}</p>
-                )}
-              </>
+                    <path d="M12 .7a11.5 11.5 0 00-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.29-1.69-1.29-1.69-1.05-.72.08-.7.08-.7 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.3-5.27-1.29-5.27-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.47.11-3.06 0 0 .97-.31 3.16 1.18a10.96 10.96 0 015.76 0c2.19-1.49 3.15-1.18 3.15-1.18.63 1.59.24 2.77.12 3.06.74.81 1.18 1.84 1.18 3.1 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.18c0 .31.21.67.8.56A11.5 11.5 0 0012 .7z" />
+                  </svg>
+                </div>
+                <h3 className="mt-3 text-sm font-semibold text-neutral-900">
+                  {t("github.connectTitle")}
+                </h3>
+                <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-neutral-500">
+                  {t("github.connectDescription")}
+                </p>
+                <button
+                  type="button"
+                  className="mt-4 inline-flex h-9 items-center rounded-lg bg-neutral-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-neutral-800"
+                  onClick={() => window.location.assign(connectUrl)}
+                >
+                  {t("github.connect")}
+                </button>
+              </div>
+            ) : reposQ.isError ? (
+              <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 text-sm text-red-700">
+                <p>{(reposQ.error as Error).message}</p>
+                <button
+                  type="button"
+                  onClick={() => void reposQ.refetch()}
+                  className="mt-2 text-xs font-medium underline underline-offset-2"
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
             ) : (
               <div className="rounded-xl border border-neutral-200 bg-neutral-50/50">
                 <div className="relative">
@@ -304,7 +345,7 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                   <input
                     id={repositoryId}
                     type="text"
-                    placeholder="Search your repositories…"
+                    placeholder={t("github.searchRepos")}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="block w-full border-0 bg-transparent py-2.5 pl-9 pr-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
@@ -328,15 +369,26 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                       ))}
                     </ul>
                   ) : filteredRepos.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-xs text-neutral-400">
-                      {search ? "No matches" : t("github.noRepos")}
+                    <div className="px-4 py-6 text-center text-xs text-neutral-500">
+                      <p>{search ? t("github.noMatches") : t("github.noRepos")}</p>
+                      {!search && connectionQ.data?.installUrl && (
+                        <button
+                          type="button"
+                          className="mt-2 font-medium text-brand underline-offset-2 hover:underline"
+                          onClick={() => window.location.assign(connectionQ.data.installUrl!)}
+                        >
+                          {t("github.reviewAccess")}
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <ul>
                       {filteredRepos.map((r) => {
-                        const active = pickedRepo?.fullName === r.fullName;
+                        const active =
+                          pickedRepo?.repositoryId === r.repositoryId &&
+                          pickedRepo?.installationId === r.installationId;
                         return (
-                          <li key={r.fullName}>
+                          <li key={r.repositoryId}>
                             <button
                               type="button"
                               onClick={() => setPickedRepo(r)}
@@ -384,20 +436,14 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
                     </ul>
                   )}
                 </div>
-                <div className="border-t border-neutral-200 px-3 py-2 text-right">
-                  <button
-                    type="button"
-                    className="text-[11px] text-neutral-500 underline-offset-2 hover:text-neutral-800 hover:underline"
-                    onClick={() => setManualMode(true)}
-                  >
-                    {t("github.enterManually")}
-                  </button>
-                </div>
               </div>
+            )}
+            {disconnect.isError && (
+              <p className="mt-2 text-xs text-red-600">{disconnect.error.message}</p>
             )}
           </section>
 
-          {(repoValid || (manualMode && manualRepo)) && (
+          {pickedRepo && (
             <section>
               <label
                 htmlFor={branchId}
@@ -405,7 +451,19 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               >
                 {t("github.branch")}
               </label>
-              {manualMode || branchesQ.isError ? (
+              {branchConnectionRequired ? (
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                  <p className="text-sm font-medium text-neutral-900">{t("github.connectTitle")}</p>
+                  <p className="mt-1 text-xs text-neutral-500">{t("github.connectDescription")}</p>
+                  <button
+                    type="button"
+                    className="mt-3 inline-flex h-9 items-center rounded-lg bg-neutral-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-neutral-800"
+                    onClick={() => window.location.assign(githubConnectUrl(branchesQ.error))}
+                  >
+                    {t("github.connect")}
+                  </button>
+                </div>
+              ) : branchesQ.isError ? (
                 <Input
                   id={branchId}
                   value={branch}
@@ -457,7 +515,20 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               </p>
             </div>
           )}
-          {fwQ.isError && (
+          {fwQ.isError && frameworkConnectionRequired && (
+            <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-5">
+              <p className="font-medium text-neutral-900">{t("github.connectTitle")}</p>
+              <p className="mt-1 text-sm text-neutral-500">{t("github.connectDescription")}</p>
+              <button
+                type="button"
+                className="mt-3 inline-flex h-9 items-center rounded-lg bg-neutral-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-neutral-800"
+                onClick={() => window.location.assign(githubConnectUrl(fwQ.error))}
+              >
+                {t("github.connect")}
+              </button>
+            </div>
+          )}
+          {fwQ.isError && !frameworkConnectionRequired && (
             <div className="rounded-2xl border border-red-200 bg-red-50/60 p-5 text-sm text-red-700">
               <p className="font-medium">Couldn't inspect this repository.</p>
               <p className="mt-1 text-red-600/80">
@@ -730,7 +801,22 @@ export function ConnectProjectModal({ open, onClose, onCreated }: Props) {
               </div>
             )}
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error &&
+            (isGitHubConnectionRequired(error) ? (
+              <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                <p className="text-sm font-medium text-neutral-900">{t("github.connectTitle")}</p>
+                <p className="mt-1 text-xs text-neutral-500">{t("github.connectDescription")}</p>
+                <button
+                  type="button"
+                  className="mt-3 inline-flex h-9 items-center rounded-lg bg-neutral-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-neutral-800"
+                  onClick={() => window.location.assign(githubConnectUrl(error))}
+                >
+                  {t("github.connect")}
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-red-600">{error.message}</p>
+            ))}
         </div>
       )}
 

@@ -63,7 +63,10 @@ export function getPreviewOriginConfig(
     previewUrl.search ||
     previewUrl.hash ||
     isIP(hostname) !== 0 ||
-    (isLoopbackHostname(hostname) && hostname !== "localhost")
+    (isLoopbackHostname(hostname) && hostname !== "localhost") ||
+    // Preview handoffs and sessions are bearer credentials. Permit plaintext
+    // HTTP only for the browser's special localhost development context.
+    (previewUrl.protocol === "http:" && hostname !== "localhost")
   ) {
     return null;
   }
@@ -108,14 +111,31 @@ export function previewHostnameForProject(
   return `${previewHostLabel(projectId, environment)}.${config.hostname}`;
 }
 
-function hostnameFromHostHeader(hostHeader: string): string | null {
+export function normalizePreviewHostAuthority(hostHeader: string): string | null {
   const value = hostHeader.trim().toLowerCase();
   if (!value || value.includes("/") || value.includes("@")) return null;
   try {
-    return new URL(`http://${value}`).hostname.toLowerCase().replace(/\.$/, "");
+    const parsed = new URL(`http://${value}`);
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    return `${hostname}${parsed.port ? `:${parsed.port}` : ""}`;
   } catch {
     return null;
   }
+}
+
+function hostnameFromHostHeader(hostHeader: string): string | null {
+  const authority = normalizePreviewHostAuthority(hostHeader);
+  if (!authority) return null;
+  return new URL(`http://${authority}`).hostname.toLowerCase().replace(/\.$/, "");
+}
+
+export function previewHostAuthorityForProject(
+  projectId: string,
+  config: PreviewOriginConfig,
+  environment: PreviewEnvironment = process.env,
+): string {
+  const hostname = previewHostnameForProject(projectId, config, environment);
+  return `${hostname}${config.port ? `:${config.port}` : ""}`;
 }
 
 /** Return the opaque project label only for an exact preview-domain child. */
@@ -149,9 +169,8 @@ export function buildHostPreviewUrl(
   config: PreviewOriginConfig,
   environment: PreviewEnvironment = process.env,
 ): string {
-  const hostname = previewHostnameForProject(projectId, config, environment);
-  const port = config.port ? `:${config.port}` : "";
-  const url = new URL(`${config.protocol}//${hostname}${port}/`);
+  const authority = previewHostAuthorityForProject(projectId, config, environment);
+  const url = new URL(`${config.protocol}//${authority}/`);
   url.searchParams.set(PREVIEW_ACCESS_QUERY, capability);
   return url.toString();
 }

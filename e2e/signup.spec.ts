@@ -157,6 +157,12 @@ test("a fresh production install supports owner, collaborator, and client signup
   await page.getByPlaceholder(/sk-ant-api03/).fill("sk-ant-e2e-placeholder-not-a-real-key");
   await page.getByRole("button", { name: "Continue" }).click();
 
+  const secureExecutionHeading = page.getByRole("heading", { name: "Secure code execution" });
+  await expect(secureExecutionHeading).toBeVisible();
+  await expect(page.getByText(/A key is configured and never returned/i)).toBeVisible();
+  await expect(page.getByLabel("E2B API key")).toHaveValue("");
+  await page.getByRole("button", { name: "Continue" }).click();
+
   await expect(page.getByRole("heading", { name: "GitHub App" })).toBeVisible();
   const seededSmtp = await page.request.post("/api/setup/save", {
     data: {
@@ -179,6 +185,11 @@ test("a fresh production install supports owner, collaborator, and client signup
   await expect(page.getByText(/key is already configured/i)).toBeVisible();
   await expect(page.getByLabel("API key")).toHaveValue("");
   await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  await expect(secureExecutionHeading).toBeVisible();
+  await expect(page.getByText(/A key is configured and never returned/i)).toBeVisible();
+  await expect(page.getByLabel("E2B API key")).toHaveValue("");
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByRole("heading", { name: "GitHub App" })).toBeVisible();
@@ -273,6 +284,8 @@ test("a fresh production install supports owner, collaborator, and client signup
     missing: [],
     values: {
       ANTHROPIC_API_KEY: { set: true, source: "db" },
+      E2B_API_KEY: { set: true, source: "env" },
+      E2B_ENABLED: { set: true, source: "db", value: "true" },
       GITHUB_APP_ID: { set: true, source: "env" },
       GITHUB_APP_PRIVATE_KEY: { set: true, source: "env" },
     },
@@ -314,21 +327,95 @@ test("a fresh production install supports owner, collaborator, and client signup
   });
   expect(smtpSettings.ok()).toBe(true);
 
+  const disconnectedGithub = await page.request.get("/api/github/connection");
+  expect(disconnectedGithub.ok()).toBe(true);
+  expect(await disconnectedGithub.json()).toMatchObject({
+    connected: false,
+    oauthCallbackConfigured: true,
+    oauthCallbackUrl: `${new URL(page.url()).origin}/api/github/connect/callback`,
+  });
+
+  // Exercise Quillra's real OAuth state, PKCE, callback, encrypted connection,
+  // and per-user repository discovery. The production process replaces only
+  // GitHub's external HTTP responses with a strict deterministic fixture.
+  const githubConnectStart = await page.request.get(
+    "/api/github/connect/start?returnTo=/dashboard",
+    { maxRedirects: 0 },
+  );
+  expect(githubConnectStart.status()).toBe(302);
+  const githubAuthorizeUrl = new URL(githubConnectStart.headers().location);
+  expect(`${githubAuthorizeUrl.origin}${githubAuthorizeUrl.pathname}`).toBe(
+    "https://github.com/login/oauth/authorize",
+  );
+  expect(githubAuthorizeUrl.searchParams.get("client_id")).toBe("Iv1.quillra-e2e");
+  expect(githubAuthorizeUrl.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(githubAuthorizeUrl.searchParams.get("code_challenge")).toMatch(/^[\w-]{43}$/);
+  const githubOauthState = githubAuthorizeUrl.searchParams.get("state");
+  expect(githubOauthState).toMatch(/^[\w-]{43}$/);
+
+  const githubCallback = await page.request.get(
+    `/api/github/connect/callback?code=quillra-e2e-oauth-code&state=${encodeURIComponent(
+      githubOauthState ?? "",
+    )}`,
+    { maxRedirects: 0 },
+  );
+  expect(githubCallback.status()).toBe(302);
+  expect(new URL(githubCallback.headers().location).pathname).toBe("/dashboard");
+
+  const connectedGithub = await page.request.get("/api/github/connection");
+  expect(connectedGithub.ok()).toBe(true);
+  expect(await connectedGithub.json()).toMatchObject({
+    connected: true,
+    githubLogin: "quillra-e2e-owner",
+  });
+  const githubRepositoriesResponse = await page.request.get("/api/github/repos");
+  expect(githubRepositoriesResponse.ok()).toBe(true);
+  const githubRepositories = (
+    (await githubRepositoriesResponse.json()) as {
+      repos: Array<{
+        repositoryId: string;
+        installationId: string;
+        fullName: string;
+        defaultBranch: string;
+      }>;
+    }
+  ).repos;
+  expect(githubRepositories).toEqual([
+    {
+      repositoryId: "101",
+      installationId: "11",
+      fullName: "example/site-one",
+      defaultBranch: "main",
+    },
+    {
+      repositoryId: "102",
+      installationId: "11",
+      fullName: "example/site-two",
+      defaultBranch: "main",
+    },
+  ]);
+
+  const firstGithubRepository = githubRepositories[0];
   const firstProjectResponse = await page.request.post("/api/projects", {
     data: {
       name: "Quillra Site One",
-      githubRepoFullName: "example/site-one",
-      defaultBranch: "main",
+      githubRepoFullName: firstGithubRepository.fullName,
+      githubInstallationId: firstGithubRepository.installationId,
+      githubRepositoryId: firstGithubRepository.repositoryId,
+      defaultBranch: firstGithubRepository.defaultBranch,
     },
   });
   expect(firstProjectResponse.status()).toBe(201);
   const firstProjectId = ((await firstProjectResponse.json()) as { id: string }).id;
 
+  const secondGithubRepository = githubRepositories[1];
   const secondProjectResponse = await page.request.post("/api/projects", {
     data: {
       name: "Quillra Site Two",
-      githubRepoFullName: "example/site-two",
-      defaultBranch: "main",
+      githubRepoFullName: secondGithubRepository.fullName,
+      githubInstallationId: secondGithubRepository.installationId,
+      githubRepositoryId: secondGithubRepository.repositoryId,
+      defaultBranch: secondGithubRepository.defaultBranch,
     },
   });
   expect(secondProjectResponse.status()).toBe(201);

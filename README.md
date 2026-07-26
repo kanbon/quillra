@@ -83,7 +83,8 @@ The end result: you hand the customer a clean, fast site and a chat-based editor
 
 - **Smart file handling**: paste, drag, or click to upload. Images are routed to the framework's asset folder and optimised only when the framework doesn't already
 - **Full i18n**: English and German UI today; the agent replies in the user's chosen language
-- **Self-hosted**: one Docker container, your VPS, your data
+- **Self-hosted control plane**: one Docker container on Railway, a VPS, or any
+  container host, with project code executed in isolated E2B sandboxes
 
 ## Frameworks we know
 
@@ -95,10 +96,14 @@ Your dev server command is auto-detected, or you can override it per project.
 
 ## How it works (in practice)
 
-1. Connect a **GitHub repository** and branch, Quillra clones it on your server
+1. Connect a **GitHub repository** and branch, Quillra keeps a credential-free
+   working copy in its persistent control-plane volume
 2. Invite people by email; they use a **passwordless email code** and only see projects they belong to
-3. They **chat** with the assistant, it reads and edits files in the workspace under role-aware rules
-4. **Publish** runs `git push` so your existing pipeline deploys, exactly as if a developer pushed
+3. They **chat** with the assistant, it reads and edits files under role-aware
+   rules, while every repository-defined command runs in that project's E2B
+   sandbox
+4. **Publish** pushes through the Quillra GitHub App bot, so your existing
+   pipeline deploys exactly as if a developer pushed
 
 Dev previews are detected from `package.json`, or you can set a custom command per project.
 
@@ -106,7 +111,10 @@ Dev previews are detected from `package.json`, or you can set a custom command p
 
 ## Run your own (self-hosted)
 
-You deploy **one Quillra instance** (VPS, internal server, Docker). There are no org tiers, only **projects** (one repo each) and **per-project** members.
+You deploy **one Quillra control-plane container** on Railway, a VPS, an
+internal server, or another container host. There are no org tiers, only
+**projects** (one repo each) and **per-project** members. You do not need a root
+server: E2B supplies one isolated execution sandbox per project.
 
 | Variable | Purpose |
 |----------|---------|
@@ -116,10 +124,31 @@ You deploy **one Quillra instance** (VPS, internal server, Docker). There are no
 | `QUILLRA_SETUP_TOKEN` | Optional operator-chosen token that protects first-run setup and no-email recovery |
 | `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
 | `PREVIEW_DOMAIN` | Dedicated wildcard parent domain for router-correct live previews |
-| `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK on the server |
-| `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`, powers invites, warnings, and monthly reports |
+| `E2B_API_KEY` | Required credential for isolated project execution; normally entered in first-run setup |
+| `E2B_TEMPLATE_ID` | Optional custom E2B template with the runtimes your projects need |
+| `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK in the control plane; normally entered in first-run setup |
+| `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`; configured in first-run setup |
 
-All other settings, GitHub App credentials (for cloning and pushing repos), Resend / SMTP keys, usage limits, alert email, `INSTANCE_*` Impressum fields, are configured at runtime from the Organization Settings page in the browser. The very first boot launches a setup wizard that walks the owner through them and creates the owner account with a passwordless email code.
+On Railway, only the public domain, one persistent volume, and three generated
+control-plane secrets are needed before boot. The first browser visit collects
+the E2B and Anthropic keys, creates and installs the GitHub App, configures
+optional email, and creates the owner account. Quillra creates a temporary E2B
+sandbox, runs a fixed command, and verifies that private-host traffic requires
+E2B's token while the sandbox process itself cannot read that token. Execution
+is enabled only after the sandbox is removed successfully.
+
+GitHub App credentials, Resend / SMTP keys, usage limits, alert email, and
+`INSTANCE_*` Impressum fields remain configurable from Organization Settings.
+`E2B_ENABLED` is internal verification state. Do not set it manually.
+
+An owner, admin, or editor connects their own GitHub identity before choosing a
+repository. Quillra only shows repositories where that person and the installed
+GitHub App both have access, then stores the immutable repository binding on
+the project. Clients do not need GitHub. Project members with publish
+permission push through the Quillra App bot identity without seeing the
+connecting user's other repositories. Older GitHub Apps need the callback
+migration documented in
+[SECURITY.md](./SECURITY.md#upgrading-an-existing-github-app).
 
 Copy `packages/api/.env.example` to `packages/api/.env`, set the public URL,
 origins, and production secrets, then start the container. Keep
@@ -134,33 +163,47 @@ is required before a one-time owner or recovery code can be shown in the browser
 Live previews use opaque, capability-authenticated child hosts of
 `PREVIEW_DOMAIN`. Browser and dev server therefore see the same path, so SPA
 routers, root-relative assets, fetch calls, and hot-reload WebSockets work
-without repository-specific base-path changes. Wildcard DNS and TLS terminate
-at Quillra's validating gateway; the workspace ports themselves remain bound to
-loopback and must never be exposed publicly. A dedicated same-site subdomain
+without repository-specific base-path changes. The initial URL carries a
+short-lived, one-use handoff that the gateway atomically exchanges for a
+different host-bound HttpOnly preview session before removing the query
+parameter. Wildcard DNS and TLS terminate at Quillra's validating gateway. The
+gateway connects to the project's private E2B preview endpoint and adds the E2B
+traffic token server-side, so neither the provider URL nor its credential
+reaches the browser. A dedicated same-site subdomain
 (for example, `cms.example.com` with `preview.example.com`) has the broadest
 browser-cookie compatibility. A separate registrable domain adds isolation but
 depends on browser support for partitioned third-party cookies. Local
 development uses `*.localhost` automatically. Without `PREVIEW_DOMAIN`,
 non-local installations fall back to the older path proxy, which cannot be
-fully transparent to every client-side router.
+fully transparent to every client-side router. That compatibility mode also
+keeps a longer-lived bearer in the preview URL so assets and WebSockets can
+authenticate without a dedicated host cookie. Use a wildcard `PREVIEW_DOMAIN`
+whenever untrusted users can view or share previews, and treat compatibility
+preview URLs as secrets.
 
-Quillra installs dependencies and runs development commands from connected
-repositories inside the application container. The browser preview is
-sandboxed, but repository code is not a host-security boundary. Connect only
-repositories and dependency trees you trust; use separate Quillra instances
-when mutually untrusted teams need isolation.
+The Quillra container never runs repository-defined shell commands, dependency
+installers, lifecycle scripts, or preview servers. Those processes run only in
+the E2B sandbox assigned to that project. There is no local execution fallback:
+if E2B is missing, unverified, or unavailable, Quillra fails the operation
+closed. Anthropic, GitHub, auth, email, encryption, and E2B credentials remain
+in the control plane and are never supplied as sandbox environment variables.
 
 **Server prerequisites:** Docker Engine with Compose, Git, OpenSSL, a text
 editor, and curl for the health check. Caddy or another TLS reverse proxy is
 optional but recommended for an internet-facing install. A source installation
-additionally needs Node.js 22 and Corepack on `PATH`. The image includes Node.js,
-Corepack, npm, pnpm, Yarn Classic, and Git for the supported JavaScript
-frameworks above. Non-Node generators such as Hugo and Jekyll are outside the
-stock registry and image.
+additionally needs Node.js 22.13 or newer and Corepack on `PATH`. The
+control-plane image includes the runtime needed for Quillra itself. Project
+runtimes belong in the E2B template, not in the application container. Use
+`E2B_TEMPLATE_ID` when the default E2B environment does not include a framework
+or generator your projects require.
 
-The Docker image builds Quillra with its pinned pnpm 10 release. For cloned
-projects, Corepack honors an explicit `packageManager`; older pnpm projects
+The Docker image builds Quillra with its pinned pnpm 10 release. Inside E2B,
+Corepack honors a project's explicit `packageManager`; older pnpm projects
 without that field use pnpm 9 so dependency lifecycle scripts keep working.
+
+For the repository-side Railway configuration and the small external checklist
+needed to publish a Railway Marketplace Template, see
+[docs/railway.md](./docs/railway.md).
 
 ### Docker quickstart
 
@@ -175,7 +218,8 @@ openssl rand -base64 32  # BETTER_AUTH_SECRET
 openssl rand -hex 32     # QUILLRA_ENCRYPTION_KEY
 openssl rand -base64 24  # QUILLRA_SETUP_TOKEN
 
-# Also set BETTER_AUTH_URL, TRUSTED_ORIGINS, PREVIEW_DOMAIN, and ANTHROPIC_API_KEY.
+# Also set BETTER_AUTH_URL, TRUSTED_ORIGINS, and optionally PREVIEW_DOMAIN.
+# E2B, Anthropic, GitHub App, and email setup happens in the browser.
 ${EDITOR:-vi} packages/api/.env
 docker compose up -d --build
 docker compose ps
@@ -300,7 +344,8 @@ pnpm --filter @quillra/api start
 
 Docker: see `Dockerfile` and `docker-compose.yml`; the Compose service publishes
 port 3000 on host loopback for the included Caddy pattern and persists
-`packages/api/data` for SQLite and workspaces.
+`packages/api/data` for SQLite, uploads, and credential-free project working
+copies. Repository-defined processes do not run in this container.
 
 Automated checks:
 
@@ -309,7 +354,9 @@ pnpm test       # Vitest unit and API integration tests
 pnpm test:e2e   # production build + owner, collaborator, and client signup in Playwright
 ```
 
-**Stack:** Hono, Better Auth, Drizzle + SQLite, Claude Agent SDK, sharp (API); React, Vite, React Router, TanStack Query, Tailwind (web). pnpm workspaces and Turborepo.
+**Stack:** Hono, Better Auth, Drizzle + SQLite, Claude Agent SDK, E2B, sharp
+(API); React, Vite, React Router, TanStack Query, Tailwind (web). pnpm
+workspaces and Turborepo.
 
 **UI:** Light, minimal chrome; accent `#C1121F` used sparingly.
 

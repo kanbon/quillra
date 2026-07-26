@@ -1,23 +1,32 @@
 import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { serve } from "@hono/node-server";
-import { createNodeWebSocket } from "@hono/node-ws";
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer } from "ws";
 import {
   issuePreviewCapability,
+  issuePreviewHandoff,
   revokePreviewCapability,
 } from "../dist/services/preview-capability.js";
 import {
   PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
   createPreviewGateway,
 } from "../dist/services/preview-gateway.js";
-import { buildHostPreviewUrl, getPreviewOriginConfig } from "../dist/services/preview-origin.js";
+import {
+  buildHostPreviewUrl,
+  getPreviewOriginConfig,
+  previewHostAuthorityForProject,
+} from "../dist/services/preview-origin.js";
 import {
   markPreviewPortActive,
   registerPreviewPort,
   unregisterPreviewPort,
 } from "../dist/services/preview-status.js";
+import {
+  E2B_TRAFFIC_ACCESS_HEADER,
+  registerLoopbackPreviewUpstreamForTests,
+  unregisterPreviewUpstream,
+} from "../dist/services/preview-upstream.js";
 
 const gatewayPort = Number(process.argv[2]);
 const upstreamPort = Number(process.argv[3]);
@@ -101,8 +110,14 @@ const upstream = createServer((request, response) => {
       body,
       cookie: request.headers.cookie ?? "",
       acceptEncoding: request.headers["accept-encoding"] ?? "",
+      trafficToken: request.headers[E2B_TRAFFIC_ACCESS_HEADER] ?? "",
       serviceWorker: request.headers["service-worker"] ?? "",
     });
+    if (request.headers[E2B_TRAFFIC_ACCESS_HEADER] !== fixtureTrafficToken) {
+      response.writeHead(403);
+      response.end("missing E2B traffic token");
+      return;
+    }
 
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${upstreamPort}`);
     if (url.pathname === "/asset.js") {
@@ -163,8 +178,13 @@ upstream.on("upgrade", (request, socket, head) => {
     body: "",
     cookie: request.headers.cookie ?? "",
     acceptEncoding: request.headers["accept-encoding"] ?? "",
+    trafficToken: request.headers[E2B_TRAFFIC_ACCESS_HEADER] ?? "",
     serviceWorker: "",
   });
+  if (request.headers[E2B_TRAFFIC_ACCESS_HEADER] !== fixtureTrafficToken) {
+    socket.destroy();
+    return;
+  }
   websocketServer.handleUpgrade(request, socket, head, (websocket) => {
     websocketServer.emit("connection", websocket, request);
   });
@@ -182,31 +202,46 @@ await new Promise((resolve, reject) => {
 });
 
 registerPreviewPort(upstreamPort, projectId);
+const fixtureTrafficToken = "preview-fixture-traffic-token";
+registerLoopbackPreviewUpstreamForTests(projectId, upstreamPort, {
+  origin: `http://127.0.0.1:${upstreamPort}`,
+  headers: { [E2B_TRAFFIC_ACCESS_HEADER]: fixtureTrafficToken },
+});
 markPreviewPortActive(projectId, upstreamPort);
-const capability = issuePreviewCapability(projectId, upstreamPort);
+issuePreviewCapability(projectId, upstreamPort);
 const config = getPreviewOriginConfig(environment);
 if (!config) throw new Error("Expected localhost preview origin configuration");
-const previewUrl = buildHostPreviewUrl(projectId, capability.token, config, environment);
+const previewHost = previewHostAuthorityForProject(projectId, config, environment);
+const handoff = issuePreviewHandoff(projectId, upstreamPort, previewHost);
+const previewUrl = buildHostPreviewUrl(projectId, handoff.token, config, environment);
 
 const app = new Hono();
-const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
-wss.options.maxPayload = PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES;
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
+});
 const gateway = createPreviewGateway(upgradeWebSocket, environment);
 app.use("*", gateway.middleware);
 app.get("/api/caddy-check", gateway.caddyCheck);
 app.get("/fixture-state", (context) =>
   context.json({
     previewOrigin: new URL(previewUrl).origin,
+    handoffUrl: previewUrl,
     requests,
   }),
 );
 app.post("/fixture-revoke", (context) => {
   revokePreviewCapability(projectId);
+  unregisterPreviewUpstream(projectId, upstreamPort);
   return context.json({ ok: true });
 });
 
-const gatewayServer = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: gatewayPort });
-injectWebSocket(gatewayServer);
+const gatewayServer = serve({
+  fetch: app.fetch,
+  hostname: "127.0.0.1",
+  port: gatewayPort,
+  websocket: { server: wss },
+});
 if (!gatewayServer.listening) {
   await new Promise((resolve, reject) => {
     gatewayServer.once("listening", resolve);
@@ -238,6 +273,7 @@ function stop() {
   if (stopping) return;
   stopping = true;
   revokePreviewCapability(projectId);
+  unregisterPreviewUpstream(projectId, upstreamPort);
   unregisterPreviewPort(projectId, upstreamPort);
   websocketServer.close();
   parentServer.close(() => {

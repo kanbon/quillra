@@ -5,7 +5,12 @@ import { GitHubRepoBranchFields } from "@/components/organisms/GitHubRepoBranchF
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { repoSlugDisplay, selectLikeInputClassName } from "@/lib/github";
+import {
+  githubConnectUrl,
+  isGitHubConnectionRequired,
+  repoSlugDisplay,
+  selectLikeInputClassName,
+} from "@/lib/github";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type {
@@ -21,13 +26,17 @@ type Props = {
   projectId: string;
   displayNameMode: "repo" | "full" | "custom";
   setDisplayNameMode: (mode: "repo" | "full" | "custom") => void;
-  preferManualGit: boolean;
-  setPreferManualGit: (value: boolean) => void;
   registerProject: UseFormRegister<ProjectForm>;
   handleProjectSubmit: UseFormHandleSubmit<ProjectForm>;
   setValue: UseFormSetValue<ProjectForm>;
   projectSubmitting: boolean;
   projectErrors: FieldErrors<ProjectForm>;
+  githubRepositoryId: string | null;
+  githubInstallationId: string | null;
+  initialGithubRepositoryId: string | null;
+  initialGithubInstallationId: string | null;
+  initialRepoFull: string;
+  initialBranch: string;
   repoFull: string;
   branch: string;
   nameVal: string;
@@ -37,13 +46,17 @@ export function GeneralSection({
   projectId,
   displayNameMode,
   setDisplayNameMode,
-  preferManualGit,
-  setPreferManualGit,
   registerProject,
   handleProjectSubmit,
   setValue,
   projectSubmitting,
   projectErrors,
+  githubRepositoryId,
+  githubInstallationId,
+  initialGithubRepositoryId,
+  initialGithubInstallationId,
+  initialRepoFull,
+  initialBranch,
   repoFull,
   branch,
   nameVal,
@@ -52,17 +65,43 @@ export function GeneralSection({
   const qc = useQueryClient();
   const [detectStatus, setDetectStatus] = useState<DetectStatus>("idle");
 
-  const patchProject = useMutation({
-    mutationFn: (body: {
+  const saveProject = useMutation({
+    mutationFn: async (body: {
       name: string;
+      githubRepositoryId: string | null;
+      githubInstallationId: string | null;
       githubRepoFullName: string;
       defaultBranch: string;
       previewDevCommand: string | null;
-    }) =>
-      apiJson(`/api/projects/${projectId}`, {
+    }) => {
+      const githubBindingChanged =
+        body.githubRepositoryId !== initialGithubRepositoryId ||
+        body.githubInstallationId !== initialGithubInstallationId ||
+        body.githubRepoFullName !== initialRepoFull ||
+        body.defaultBranch !== initialBranch;
+
+      if (githubBindingChanged) {
+        if (!body.githubRepositoryId || !body.githubInstallationId) {
+          throw new Error(t("github.selectRepoRequired"));
+        }
+        await apiJson(`/api/projects/${projectId}/github/rebind`, {
+          method: "POST",
+          body: JSON.stringify({
+            githubRepositoryId: body.githubRepositoryId,
+            githubInstallationId: body.githubInstallationId,
+            defaultBranch: body.defaultBranch,
+          }),
+        });
+      }
+
+      return apiJson(`/api/projects/${projectId}`, {
         method: "PATCH",
-        body: JSON.stringify(body),
-      }),
+        body: JSON.stringify({
+          name: body.name,
+          previewDevCommand: body.previewDevCommand,
+        }),
+      });
+    },
     onSuccess: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["project", projectId] }),
@@ -73,7 +112,7 @@ export function GeneralSection({
 
   const slug = repoFull ? repoSlugDisplay(repoFull) : "…";
   const fullPretty = repoFull ? repoFull.replace("/", " / ") : "…";
-  const busy = projectSubmitting || patchProject.isPending;
+  const busy = projectSubmitting || saveProject.isPending;
 
   return (
     <SectionCard
@@ -83,8 +122,10 @@ export function GeneralSection({
       <form
         className="space-y-6"
         onSubmit={handleProjectSubmit(async (value) => {
-          await patchProject.mutateAsync({
+          await saveProject.mutateAsync({
             name: value.name.trim(),
+            githubRepositoryId: value.githubRepositoryId,
+            githubInstallationId: value.githubInstallationId,
             githubRepoFullName: value.githubRepoFullName.trim(),
             defaultBranch: value.defaultBranch.trim(),
             previewDevCommand: value.previewDevCommand?.trim() || null,
@@ -137,14 +178,16 @@ export function GeneralSection({
 
         <div className="border-t border-neutral-200 pt-6">
           <GitHubRepoBranchFields
+            repositoryId={githubRepositoryId}
+            installationId={githubInstallationId}
             repoFullName={repoFull}
             branch={branch}
             disabled={busy}
-            preferManual={preferManualGit}
-            setPreferManual={setPreferManualGit}
-            onRepoChange={(full, defaultBranch) => {
-              setValue("githubRepoFullName", full, { shouldValidate: true });
-              setValue("defaultBranch", defaultBranch, { shouldValidate: true });
+            onRepoChange={(repo) => {
+              setValue("githubRepositoryId", repo.repositoryId, { shouldValidate: true });
+              setValue("githubInstallationId", repo.installationId, { shouldValidate: true });
+              setValue("githubRepoFullName", repo.fullName, { shouldValidate: true });
+              setValue("defaultBranch", repo.defaultBranch, { shouldValidate: true });
             }}
             onBranchChange={(value) => setValue("defaultBranch", value, { shouldValidate: true })}
           />
@@ -223,17 +266,27 @@ export function GeneralSection({
           )}
         </div>
 
-        {patchProject.isError && (
+        {saveProject.isError && isGitHubConnectionRequired(saveProject.error) ? (
+          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+            <p className="text-sm font-medium text-neutral-900">{t("github.connectTitle")}</p>
+            <p className="mt-1 text-xs text-neutral-500">{t("github.connectDescription")}</p>
+            <button
+              type="button"
+              className="mt-3 inline-flex h-9 items-center rounded-lg bg-neutral-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-neutral-800"
+              onClick={() => window.location.assign(githubConnectUrl(saveProject.error))}
+            >
+              {t("github.connect")}
+            </button>
+          </div>
+        ) : saveProject.isError ? (
           <p role="alert" className="text-sm text-red-600">
-            {(patchProject.error as Error).message}
+            {(saveProject.error as Error).message}
           </p>
-        )}
+        ) : null}
 
         <div className="flex justify-end">
           <Button type="submit" disabled={busy}>
-            {patchProject.isPending
-              ? t("projectSettings.saving")
-              : t("projectSettings.saveChanges")}
+            {saveProject.isPending ? t("projectSettings.saving") : t("projectSettings.saveChanges")}
           </Button>
         </div>
       </form>

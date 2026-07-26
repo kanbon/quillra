@@ -17,6 +17,8 @@ export type DetectStatus =
 
 export const projectSchema = z.object({
   name: z.string().min(1).max(200),
+  githubRepositoryId: z.string().min(1).nullable(),
+  githubInstallationId: z.string().min(1).nullable(),
   githubRepoFullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   defaultBranch: z.string().min(1).max(255),
   previewDevCommand: z.string().max(2000).optional(),

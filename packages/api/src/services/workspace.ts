@@ -1,17 +1,29 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { simpleGit } from "simple-git";
+import { rawSqlite } from "../db/index.js";
+import { ensureProjectDirectory, ensureProjectGitExclude } from "../lib/project-files.js";
 import { createSafeChildEnv } from "./child-process-env.js";
+import { type E2BProjectFence, getDefaultE2BRuntime } from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
-  getGithubAppBotIdentity,
-  getInstallationTokenForRepo,
-  isGithubAppConfigured,
-} from "./github-app.js";
-import { issuePreviewCapability, revokePreviewCapability } from "./preview-capability.js";
-import { buildHostPreviewUrl, getPreviewOriginConfig } from "./preview-origin.js";
+  type GitCommitIdentity,
+  gitIdentityConfig,
+  sanitizeProjectGitConfig,
+} from "./git-config-sanitizer.js";
+import type { GithubContentsPermission } from "./github-app.js";
+import { requireGithubAppBotIdentity } from "./github-app.js";
+import {
+  issuePreviewCapability,
+  issuePreviewHandoff,
+  revokePreviewCapability,
+} from "./preview-capability.js";
+import {
+  buildHostPreviewUrl,
+  getPreviewOriginConfig,
+  previewHostAuthorityForProject,
+} from "./preview-origin.js";
 import {
   getPortByProject,
   markPreviewPortActive,
@@ -20,6 +32,16 @@ import {
   unregisterPreviewPort,
 } from "./preview-status.js";
 import {
+  previewUpstreamUrl,
+  registerPreviewUpstream,
+  unregisterPreviewUpstream,
+} from "./preview-upstream.js";
+import {
+  type ProjectGithubBindingSnapshot,
+  assertProjectGithubBinding,
+  resolveProjectGitToken,
+} from "./project-github-token.js";
+import {
   beginProjectWriterReset,
   blockProjectWritersForDeletion,
   cancelAndWaitForProjectWriters,
@@ -27,26 +49,10 @@ import {
   unblockProjectWritersAfterFailedDeletion,
 } from "./project-workspace-lifecycle.js";
 
-/**
- * Resolve a short-lived GitHub App installation token for a specific
- * repo. Returns null if the App isn't configured OR isn't installed on
- * the repo, the caller should surface "install the Quillra GitHub App
- * on this repository" in both cases. No PAT fallback: the App is the
- * only supported auth path for git operations.
- */
-async function resolveRepoGitToken(githubRepoFullName: string): Promise<string | null> {
-  if (!isGithubAppConfigured()) return null;
-  const [owner, repo] = githubRepoFullName.split("/");
-  if (!owner || !repo) return null;
-  try {
-    return (await getInstallationTokenForRepo(owner, repo)) ?? null;
-  } catch (e) {
-    console.warn(`[workspace] installation token fetch failed for ${githubRepoFullName}:`, e);
-    return null;
-  }
-}
-
-const previewChildren = new Map<string, ChildProcess>();
+const previewProcesses = new Map<
+  string,
+  { pid: number; port: number; githubBindingGeneration: number }
+>();
 const previewStartQueues = new Map<string, Promise<void>>();
 const previewReservationQueues = new Map<string, Promise<void>>();
 const previewTerminationQueues = new Map<string, Promise<void>>();
@@ -70,7 +76,8 @@ export type DeletedWorkspaceCleanupOptions = {
 
 /**
  * Bounded ring buffer of the last ~200 log lines per running dev server
- * so the debug modal can show what the framework is printing in real time.
+ * so the debug modal can show the bounded output captured when the remote
+ * preview process exits.
  * Wiped whenever the dev server restarts.
  */
 const MAX_LOG_LINES = 200;
@@ -102,7 +109,7 @@ export function clearPreviewLogs(projectId: string) {
 export function workspaceRoot(): string {
   const dir = process.env.WORKSPACE_DIR ?? path.join(process.cwd(), "data", "workspaces");
   fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return fs.realpathSync.native(path.resolve(dir));
 }
 
 function projectWorkspacePath(projectId: string): string {
@@ -116,6 +123,17 @@ function projectWorkspacePath(projectId: string): string {
 
 export function projectRepoPath(projectId: string): string {
   return path.join(projectWorkspacePath(projectId), "repo");
+}
+
+function projectFence(projectId: string, expectedBindingGeneration?: number): E2BProjectFence {
+  if (expectedBindingGeneration !== undefined) {
+    return { projectId, githubBindingGeneration: expectedBindingGeneration };
+  }
+  const row = rawSqlite
+    .prepare("SELECT github_binding_generation FROM projects WHERE id = ?")
+    .get(projectId) as { github_binding_generation: number } | undefined;
+  if (!row) throw new Error("Project not found");
+  return { projectId, githubBindingGeneration: row.github_binding_generation };
 }
 
 function projectWorkspaceBlocked(projectId: string): boolean {
@@ -151,27 +169,10 @@ export const QUILLRA_TEMP_DIR = ".quillra-temp";
  */
 export function ensureQuillraTempIgnored(repoPath: string): void {
   try {
-    const excludePath = path.join(repoPath, ".git", "info", "exclude");
-    fs.mkdirSync(path.dirname(excludePath), { recursive: true });
-    const line = `${QUILLRA_TEMP_DIR}/`;
-    let content = "";
-    if (fs.existsSync(excludePath)) {
-      content = fs.readFileSync(excludePath, "utf-8");
-    }
-    const already = content
-      .split("\n")
-      .map((l) => l.trim())
-      .some((l) => l === line || l === QUILLRA_TEMP_DIR);
-    if (!already) {
-      const suffix = content === "" || content.endsWith("\n") ? "" : "\n";
-      fs.appendFileSync(
-        excludePath,
-        `${suffix}# Quillra scratch space for chat attachments, never committed\n${line}\n`,
-      );
-    }
+    ensureProjectGitExclude(repoPath, QUILLRA_TEMP_DIR);
     // Belt-and-suspenders: also make sure the directory exists so the
     // upload handler can write to it without mkdir races.
-    fs.mkdirSync(path.join(repoPath, QUILLRA_TEMP_DIR), { recursive: true });
+    ensureProjectDirectory(repoPath, QUILLRA_TEMP_DIR);
   } catch (e) {
     console.warn("[workspace] failed to register .quillra-temp/ with git exclude:", e);
   }
@@ -192,46 +193,31 @@ function previewPortOffset(projectId: string): number {
   return h % PREVIEW_PORT_SLOTS;
 }
 
-function isLoopbackPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", () => resolve(false));
-    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
 /**
- * Reserve a unique slot that is also free at the OS level. The map claim is
- * made before the asynchronous probe, so concurrent preview starts cannot
- * race each other onto the same port.
+ * Reserve a stable virtual port. The port lives inside the project's E2B
+ * microVM, not in Quillra's container, so only the in-process ownership map
+ * needs to be unique.
  */
 async function reserveAvailablePreviewPortNow(
   projectId: string,
-  verifyExisting = false,
+  _verifyExisting = false,
 ): Promise<number> {
   const existing = getPortByProject(projectId);
-  if (existing !== undefined && (!verifyExisting || (await isLoopbackPortAvailable(existing)))) {
+  if (existing !== undefined) {
     assertProjectWorkspaceAvailable(projectId);
     return existing;
   }
-  if (existing !== undefined) unregisterPreviewPort(projectId, existing);
 
   const base = previewPortBase();
   const offset = previewPortOffset(projectId);
   for (let attempt = 0; attempt < PREVIEW_PORT_SLOTS; attempt++) {
     const port = base + ((offset + attempt) % PREVIEW_PORT_SLOTS);
     if (!registerPreviewPort(port, projectId)) continue;
-    if ((await isLoopbackPortAvailable(port)) && getPortByProject(projectId) === port) {
-      if (projectWorkspaceBlocked(projectId)) {
-        unregisterPreviewPort(projectId, port);
-        assertProjectWorkspaceAvailable(projectId);
-      }
-      return port;
+    if (projectWorkspaceBlocked(projectId)) {
+      unregisterPreviewPort(projectId, port);
+      assertProjectWorkspaceAvailable(projectId);
     }
-    unregisterPreviewPort(projectId, port);
+    return port;
   }
   throw new Error("No preview ports are available");
 }
@@ -266,31 +252,6 @@ export function reserveAvailablePreviewPort(
   return next;
 }
 
-function runCommand(
-  cmd: string,
-  args: string[],
-  cwd: string,
-  envOverride?: Record<string, string>,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, {
-      cwd,
-      stdio: "pipe",
-      shell: process.platform === "win32",
-      env: createSafeChildEnv(envOverride),
-    });
-    let stderr = "";
-    child.stderr?.on("data", (d: Buffer) => {
-      stderr += d.toString();
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} ${args.join(" ")} exited ${code}: ${stderr.slice(-400)}`));
-    });
-  });
-}
-
 export function getPackageManager(repoPath: string): "yarn" | "pnpm" | "npm" {
   const declared = readPkgJson(repoPath)
     ?.packageManager?.match(/^(yarn|pnpm|npm)@/i)?.[1]
@@ -301,30 +262,39 @@ export function getPackageManager(repoPath: string): "yarn" | "pnpm" | "npm" {
   return "npm";
 }
 
+function packageInstallCommand(repoPath: string): string | null {
+  if (!fs.existsSync(path.join(repoPath, "package.json"))) return null;
+  const environment = "NODE_ENV=development NPM_CONFIG_PRODUCTION=false";
+  switch (getPackageManager(repoPath)) {
+    case "yarn":
+      return `${environment} sh -c 'command -v yarn >/dev/null 2>&1 || corepack enable; yarn install'`;
+    case "pnpm":
+      return `${environment} sh -c 'command -v pnpm >/dev/null 2>&1 || corepack enable; pnpm install --prod=false'`;
+    default:
+      return `${environment} npm install --include=dev`;
+  }
+}
+
 export async function installDependenciesIfNeeded(
   repoPath: string,
-  projectId?: string,
+  projectId: string,
+  expectedBindingGeneration?: number,
 ): Promise<void> {
-  const pkg = path.join(repoPath, "package.json");
-  if (!fs.existsSync(pkg)) return;
-  if (fs.existsSync(path.join(repoPath, "node_modules"))) return;
-
+  const command = packageInstallCommand(repoPath);
+  if (!command) return;
   const pm = getPackageManager(repoPath);
-  if (projectId) setPreviewStatus(projectId, "installing", `Running ${pm} install`);
-
-  // CRITICAL: Quillra's own container runs with NODE_ENV=production, and
-  // npm respects that by default (skips devDependencies). User projects
-  // NEED their devDeps to run dev servers (autoprefixer, postcss, vite
-  // plugins, etc.), so we force NODE_ENV=development for the install and
-  // also pass the explicit "include dev" flags per package manager.
-  const installEnv = { NODE_ENV: "development", NPM_CONFIG_PRODUCTION: "false" };
-
-  if (pm === "yarn") {
-    await runCommand("yarn", ["install", "--non-interactive"], repoPath, installEnv);
-  } else if (pm === "pnpm") {
-    await runCommand("pnpm", ["install", "--prod=false"], repoPath, installEnv);
-  } else {
-    await runCommand("npm", ["install", "--include=dev"], repoPath, installEnv);
+  setPreviewStatus(projectId, "installing", `Running ${pm} install in E2B`);
+  const result = await getDefaultE2BRuntime().runCommand(
+    projectFence(projectId, expectedBindingGeneration),
+    {
+      localRoot: repoPath,
+      command,
+      timeoutMs: 30 * 60_000,
+    },
+  );
+  if (result.exitCode !== 0) {
+    const detail = (result.stderr || result.stdout).slice(-800);
+    throw new Error(`${pm} install failed in the secure sandbox: ${detail}`);
   }
 }
 
@@ -353,7 +323,8 @@ export function resolveDevCommand(
   // 1) Project-level override always wins
   const interpolated = (override?.trim() ?? "")
     .replace(/\{port\}/g, String(port))
-    .replace(/\$PORT/g, String(port));
+    .replace(/\$PORT/g, String(port))
+    .replace(/127\.0\.0\.1/g, "0.0.0.0");
   if (interpolated) {
     if (process.platform === "win32") {
       return {
@@ -371,7 +342,9 @@ export function resolveDevCommand(
   if (def) {
     return {
       command: def.devCommand.binary,
-      args: def.devCommand.args.map((a) => a.replace(/\{port\}/g, String(port))),
+      args: def.devCommand.args.map((a) =>
+        a.replace(/\{port\}/g, String(port)).replace(/127\.0\.0\.1/g, "0.0.0.0"),
+      ),
       label: def.label,
     };
   }
@@ -387,28 +360,36 @@ export function resolveDevCommand(
   // 4) Last-resort default
   return {
     command: "npx",
-    args: ["vite", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+    args: ["vite", "--host", "0.0.0.0", "--port", String(port), "--strictPort"],
     label: "Static site",
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function shellCommand(command: string, args: string[]): string {
+  return [command, ...args].map(shellQuote).join(" ");
 }
 
 // Re-exported so other modules can resolve a framework by id without importing the registry directly
 export { getFrameworkById };
 
-/** Returns metadata about the running (or not) preview child for a project */
+/** Returns non-sensitive metadata about the remote preview process. */
 export function getPreviewProcessInfo(projectId: string): {
   running: boolean;
   pid: number | null;
   exitCode: number | null;
   signalCode: string | null;
 } {
-  const child = previewChildren.get(projectId);
-  if (!child) return { running: false, pid: null, exitCode: null, signalCode: null };
+  const process = previewProcesses.get(projectId);
+  if (!process) return { running: false, pid: null, exitCode: null, signalCode: null };
   return {
-    running: child.exitCode === null && !child.killed,
-    pid: child.pid ?? null,
-    exitCode: child.exitCode,
-    signalCode: child.signalCode ?? null,
+    running: true,
+    pid: process.pid,
+    exitCode: null,
+    signalCode: null,
   };
 }
 
@@ -437,6 +418,17 @@ export function beginProjectDeletion(projectId: string): void {
 export function cancelProjectDeletion(projectId: string): void {
   deletingProjects.delete(projectId);
   unblockProjectWritersAfterFailedDeletion(projectId);
+}
+
+/** Destroy all project-controlled remote state before rebind or DB deletion. */
+export async function destroyProjectExecution(
+  projectId: string,
+  expectedBindingGeneration: number,
+): Promise<void> {
+  await stopPreviewAndWait(projectId, expectedBindingGeneration);
+  await getDefaultE2BRuntime().destroyProject(projectFence(projectId, expectedBindingGeneration));
+  previewProcesses.delete(projectId);
+  unregisterPreviewUpstream(projectId);
 }
 
 /**
@@ -555,6 +547,7 @@ export function sweepOrphanedProjectWorkspaces(
 export async function clearProjectRepoClone(
   projectId: string,
   writerTimeoutMs?: number,
+  afterClear?: () => Promise<void>,
 ): Promise<void> {
   resettingProjects.set(projectId, (resettingProjects.get(projectId) ?? 0) + 1);
   beginProjectWriterReset(projectId);
@@ -565,8 +558,10 @@ export async function clearProjectRepoClone(
     await stopPreviewAndWait(projectId);
     await (previewStartQueues.get(projectId) ?? Promise.resolve());
     await stopPreviewAndWait(projectId);
+    await getDefaultE2BRuntime().destroyProject(projectFence(projectId));
     await withRepoLock(projectId, async () => {
       await removeManagedProjectPath(projectRepoPath(projectId));
+      await afterClear?.();
     });
   } finally {
     const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
@@ -596,8 +591,9 @@ export async function reinstallProjectDependencies(
     await withRepoLock(projectId, async () => {
       const dir = projectRepoPath(projectId);
       if (!fs.existsSync(dir)) throw new Error("Workspace not cloned");
-      await removeManagedProjectPath(path.join(dir, "node_modules"));
-      await installDependenciesIfNeeded(dir, projectId);
+      const fence = projectFence(projectId);
+      await getDefaultE2BRuntime().destroyProject(fence);
+      await installDependenciesIfNeeded(dir, projectId, fence.githubBindingGeneration);
     });
   } finally {
     const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
@@ -641,6 +637,19 @@ function sweepStaleGitLocks(repoPath: string): void {
  * as soon as the next op attaches.
  */
 const repoOpQueue = new Map<string, Promise<unknown>>();
+type RepoLockContext = {
+  projectId: string;
+  active: boolean;
+  parent?: RepoLockContext;
+};
+const heldRepoLocks = new AsyncLocalStorage<RepoLockContext>();
+
+function contextHoldsRepoLock(context: RepoLockContext | undefined, projectId: string): boolean {
+  for (let current = context; current; current = current.parent) {
+    if (current.active && current.projectId === projectId) return true;
+  }
+  return false;
+}
 
 /**
  * Run an async operation while holding the per-project git lock. Exposed
@@ -648,17 +657,40 @@ const repoOpQueue = new Map<string, Promise<unknown>>();
  * serialisation as the chat turn, avoiding `.git/index.lock` races when
  * a remote-sync fetch collides with an in-flight chat.
  */
-export function runInProjectLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+export function runInProjectLock<T>(
+  projectId: string,
+  op: () => Promise<T>,
+  expectedBinding?: ProjectGithubBindingSnapshot,
+): Promise<T> {
   assertProjectWorkspaceAvailable(projectId);
   return withRepoLock(projectId, async () => {
     assertProjectWorkspaceAvailable(projectId);
+    if (expectedBinding) await assertProjectGithubBinding(projectId, expectedBinding);
     return op();
   });
 }
 
 function withRepoLock<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+  const held = heldRepoLocks.getStore();
+  if (contextHoldsRepoLock(held, projectId)) {
+    return op();
+  }
+
   const prev = repoOpQueue.get(projectId) ?? Promise.resolve();
-  const next = prev.then(op, op); // run op whether prev resolved or rejected
+  const start = () => {
+    const context: RepoLockContext = { projectId, active: true, parent: held };
+    return heldRepoLocks.run(context, async () => {
+      try {
+        return await op();
+      } finally {
+        // Async resources created by op retain this context. Marking the
+        // lease inactive prevents fire-and-forget work from bypassing the
+        // queue after the actual critical section has finished.
+        context.active = false;
+      }
+    });
+  };
+  const next = prev.then(start, start); // run op whether prev resolved or rejected
   // Store the "drained" version so errors don't poison the chain for
   // subsequent ops on this project.
   repoOpQueue.set(
@@ -697,36 +729,88 @@ function gitEnvironment(token?: string | null): NodeJS.ProcessEnv {
   return createSafeChildEnv(overrides);
 }
 
+// simple-git 3.36 blocks security-sensitive Git config by default. These four
+// exceptions apply only to the fixed environment assembled above: no caller or
+// repository can add config keys through this object. Protocol overrides,
+// custom binaries, pack helpers, templates, and all other unsafe categories
+// remain blocked.
+const CONTROLLED_GIT_UNSAFE_OPTIONS = {
+  allowUnsafeConfigEnvCount: true,
+  allowUnsafeConfigPaths: true,
+  allowUnsafeCredentialHelper: true,
+  allowUnsafeHooksPath: true,
+} as const;
+
 function simpleGitForClone(token?: string | null) {
-  return simpleGit().env(gitEnvironment(token));
+  return simpleGit({ unsafe: CONTROLLED_GIT_UNSAFE_OPTIONS }).env(gitEnvironment(token));
+}
+
+function sanitizedProjectGit(
+  repoPath: string,
+  token?: string | null,
+  identity?: GitCommitIdentity,
+) {
+  const git = simpleGit({
+    baseDir: repoPath,
+    config: gitIdentityConfig(identity),
+    maxConcurrentProcesses: 1,
+    unsafe: CONTROLLED_GIT_UNSAFE_OPTIONS,
+  }).env(gitEnvironment(token));
+
+  const guarded = new Proxy(git, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        sanitizeProjectGitConfig(repoPath);
+        const result: unknown = Reflect.apply(value, target, args);
+        if (
+          result !== null &&
+          (typeof result === "object" || typeof result === "function") &&
+          "then" in result &&
+          typeof result.then === "function"
+        ) {
+          return Promise.resolve(result).finally(() => sanitizeProjectGitConfig(repoPath));
+        }
+        return result === target ? receiver : result;
+      };
+    },
+  });
+  return guarded;
 }
 
 /**
  * Every project Git command gets a small environment and a disabled hooks
- * path. This keeps repository-installed hooks from executing with Quillra's
- * control-plane environment.
+ * path. Before and after each invocation, repository-local config is rebuilt
+ * from inert data so a legacy project cannot persist an executable fsmonitor,
+ * filter, diff/merge driver, include, alias, helper, proxy, or SSH command.
  */
-export function simpleGitForProject(repoPath: string, token?: string | null) {
-  return simpleGit(repoPath).env(gitEnvironment(token));
+export function simpleGitForProject(repoPath: string, identity?: GitCommitIdentity) {
+  return sanitizedProjectGit(repoPath, null, identity);
+}
+
+function simpleGitForNetwork(repoPath: string, token: string) {
+  return sanitizedProjectGit(repoPath, token);
 }
 
 export async function scrubGitRemoteCredentials(
   repoPath: string,
   githubRepoFullName: string,
 ): Promise<void> {
-  await simpleGitForProject(repoPath).remote([
-    "set-url",
-    "origin",
-    credentialFreeGithubUrl(githubRepoFullName),
-  ]);
+  sanitizeProjectGitConfig(repoPath, { githubRepoFullName });
 }
 
-export async function authenticatedGitForProject(repoPath: string, githubRepoFullName: string) {
-  const token = await resolveRepoGitToken(githubRepoFullName);
+export async function authenticatedGitForProject(
+  projectId: string,
+  repoPath: string,
+  _githubRepoFullName: string,
+  contents: GithubContentsPermission = "read",
+) {
+  const access = await resolveProjectGitToken(projectId, contents);
   // Also scrubs credentials persisted by releases that embedded the token in
   // origin. Authentication for network commands is injected only in env.
-  await scrubGitRemoteCredentials(repoPath, githubRepoFullName);
-  return simpleGitForProject(repoPath, token);
+  await scrubGitRemoteCredentials(repoPath, access.fullName);
+  return simpleGitForNetwork(repoPath, access.token);
 }
 
 export async function ensureRepoCloned(
@@ -734,6 +818,8 @@ export async function ensureRepoCloned(
   githubRepoFullName: string,
   branch: string,
   opts: {
+    /** Monotonic binding epoch captured with the caller's project row. */
+    expectedBindingGeneration: number;
     /** Skip running npm/yarn/pnpm install on the cloned repo. Set
      *  when the caller is about to rewrite package.json (migration)
      *  so we don't waste minutes installing a dep tree the agent
@@ -746,18 +832,16 @@ export async function ensureRepoCloned(
      *  File ops don't require node_modules. When this callback is not
      *  supplied, install failures still throw, the old behaviour. */
     onInstallFailed?: (error: string) => void;
-  } = {},
+  },
 ): Promise<string> {
   assertProjectWorkspaceAvailable(projectId);
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
-  const token = await resolveRepoGitToken(githubRepoFullName);
-  const url = credentialFreeGithubUrl(githubRepoFullName);
 
   const runInstall = async () => {
     if (opts.skipInstall) return;
     try {
-      await installDependenciesIfNeeded(dir, projectId);
+      await installDependenciesIfNeeded(dir, projectId, opts.expectedBindingGeneration);
     } catch (e) {
       if (opts.onInstallFailed) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -777,6 +861,13 @@ export async function ensureRepoCloned(
   // one of them would die with a cryptic `File exists` message.
   await withRepoLock(projectId, async () => {
     assertProjectWorkspaceAvailable(projectId);
+    await assertProjectGithubBinding(projectId, {
+      githubRepoFullName,
+      defaultBranch: branch,
+      githubBindingGeneration: opts.expectedBindingGeneration,
+    });
+    const access = await resolveProjectGitToken(projectId, "read");
+    const url = credentialFreeGithubUrl(access.fullName);
     if (!fs.existsSync(gitDir)) {
       // A killed clone or an interrupted workspace reset can leave regular
       // files behind after `.git/` is already gone. Git refuses to clone into
@@ -787,9 +878,9 @@ export async function ensureRepoCloned(
         console.warn(`[workspace] removing incomplete clone for ${projectId}`);
         await removeManagedProjectPath(dir);
       }
-      setPreviewStatus(projectId, "cloning", `Cloning ${githubRepoFullName}`);
+      setPreviewStatus(projectId, "cloning", `Cloning ${access.fullName}`);
       fs.mkdirSync(path.dirname(dir), { recursive: true });
-      await simpleGitForClone(token).clone(url, dir, [
+      await simpleGitForClone(access.token).clone(url, dir, [
         "--branch",
         branch,
         "--single-branch",
@@ -799,11 +890,12 @@ export async function ensureRepoCloned(
       await runInstall();
     } else {
       sweepStaleGitLocks(dir);
-      await scrubGitRemoteCredentials(dir, githubRepoFullName);
-      const g = simpleGitForProject(dir, token);
-      await g.fetch("origin", branch);
-      await g.checkout(branch);
-      await g.pull("origin", branch).catch(() => undefined);
+      await scrubGitRemoteCredentials(dir, access.fullName);
+      const networkGit = simpleGitForNetwork(dir, access.token);
+      await networkGit.fetch("origin", branch);
+      const localGit = simpleGitForProject(dir);
+      await localGit.checkout(branch);
+      await localGit.raw(["merge", "--ff-only", `origin/${branch}`]).catch(() => undefined);
       await runInstall();
     }
     // Register .quillra-temp/ with git's local exclude so chat
@@ -813,51 +905,13 @@ export async function ensureRepoCloned(
   return dir;
 }
 
-function previewChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function waitForPreviewChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (previewChildExited(child)) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (exited: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.off("exit", onExit);
-      child.off("error", onExit);
-      resolve(exited);
-    };
-    const onExit = () => finish(true);
-    const timer = setTimeout(() => finish(previewChildExited(child)), timeoutMs);
-    child.once("exit", onExit);
-    child.once("error", onExit);
-  });
-}
-
-function signalPreviewProcess(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      // Preview commands run in their own process group. Signalling the group
-      // also stops shell/npm wrappers and compiler helpers such as esbuild.
-      process.kill(-child.pid, signal);
-      return;
-    } catch (error) {
-      const code = error instanceof Error && "code" in error ? error.code : null;
-      if (code === "ESRCH") return;
-    }
-  }
-  try {
-    child.kill(signal);
-  } catch {
-    // The process may have exited between the state check and the signal.
-  }
-}
-
-async function stopPreviewAndWait(projectId: string): Promise<void> {
+async function stopPreviewAndWait(
+  projectId: string,
+  expectedBindingGeneration?: number,
+): Promise<void> {
   revokePreviewCapability(projectId);
   unregisterPreviewPort(projectId);
+  unregisterPreviewUpstream(projectId);
 
   const existingTermination = previewTerminationQueues.get(projectId);
   if (existingTermination) {
@@ -865,20 +919,23 @@ async function stopPreviewAndWait(projectId: string): Promise<void> {
     return;
   }
 
-  const child = previewChildren.get(projectId);
-  if (!child) return;
-  previewChildren.delete(projectId);
-
   const termination = (async () => {
-    if (previewChildExited(child)) return;
-    signalPreviewProcess(child, "SIGTERM");
-    if (await waitForPreviewChildExit(child, 1_500)) return;
-
-    console.warn(`[workspace] preview ${projectId} did not exit after SIGTERM; sending SIGKILL`);
-    signalPreviewProcess(child, "SIGKILL");
-    if (!(await waitForPreviewChildExit(child, 1_000))) {
-      console.warn(`[workspace] preview ${projectId} still appears to be running after SIGKILL`);
+    const process = previewProcesses.get(projectId);
+    let fence: E2BProjectFence | null = null;
+    try {
+      fence = projectFence(
+        projectId,
+        expectedBindingGeneration ?? process?.githubBindingGeneration,
+      );
+    } catch {
+      // A successful project deletion destroys the sandbox before deleting
+      // its row. Post-delete filesystem cleanup therefore has nothing remote
+      // left to stop.
     }
+    if (fence) {
+      await getDefaultE2BRuntime().stopPreview(fence);
+    }
+    previewProcesses.delete(projectId);
   })();
   previewTerminationQueues.set(projectId, termination);
   try {
@@ -900,74 +957,90 @@ async function startDevPreviewNow(
   projectId: string,
   repoPath: string,
   previewCommandOverride: string | null | undefined,
+  expectedBindingGeneration?: number,
 ): Promise<{ port: number; label: string }> {
   assertProjectWorkspaceAvailable(projectId);
-  const previous = previewChildren.get(projectId);
+  const previous = previewProcesses.get(projectId);
   if (previous) {
-    await stopPreviewAndWait(projectId);
+    await stopPreviewAndWait(projectId, previous.githubBindingGeneration);
   }
   assertProjectWorkspaceAvailable(projectId);
   const port = await reserveAvailablePreviewPort(projectId, true);
   assertProjectWorkspaceAvailable(projectId);
   setPreviewStatus(projectId, "starting", "Launching dev server");
-  const { command, args, label } = resolveDevCommand(repoPath, port, previewCommandOverride);
-  let child: ChildProcess;
+  const fence = projectFence(projectId, expectedBindingGeneration);
+  const dev = resolveDevCommand(repoPath, port, previewCommandOverride);
+  const install = packageInstallCommand(repoPath);
+  const command = [
+    "export HOST=0.0.0.0",
+    `export PORT=${port}`,
+    "export NODE_ENV=development",
+    "export FORCE_COLOR=0",
+    "export BROWSER=none",
+    install,
+    `exec ${shellCommand(dev.command, dev.args)}`,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("; ");
+
+  clearPreviewLogs(projectId);
+  let exited = false;
+  let startedPid: number | null = null;
   try {
-    child = spawn(command, args, {
-      cwd: repoPath,
-      stdio: "pipe",
-      env: createSafeChildEnv({
-        PORT: String(port),
-        HOST: "127.0.0.1",
-        NODE_ENV: "development",
-        FORCE_COLOR: "0",
-      }),
-      shell: false,
-      detached: process.platform !== "win32",
+    const remote = await getDefaultE2BRuntime().startPreview(fence, {
+      localRoot: repoPath,
+      command,
+      port,
+      timeoutMs: 30 * 60_000,
+      onStdout: (chunk) => appendLog(projectId, "stdout", chunk),
+      onStderr: (chunk) => appendLog(projectId, "stderr", chunk),
+      onExit: (result) => {
+        exited = true;
+        const current = previewProcesses.get(projectId);
+        if (!current || current.pid !== startedPid) return;
+        previewProcesses.delete(projectId);
+        unregisterPreviewUpstream(projectId, port);
+        revokePreviewCapability(projectId);
+        unregisterPreviewPort(projectId, port);
+        if (result.exitCode !== 0) {
+          setPreviewStatus(projectId, "error", `Dev server exited with code ${result.exitCode}`);
+        }
+      },
+    });
+    startedPid = remote.pid;
+    if (exited) throw new Error("The E2B dev server exited during startup.");
+    const upstream = await getDefaultE2BRuntime().getPreviewAccess(fence, port);
+    registerPreviewUpstream(projectId, port, upstream);
+    previewProcesses.set(projectId, {
+      pid: remote.pid,
+      port,
+      githubBindingGeneration: fence.githubBindingGeneration,
     });
   } catch (error) {
     revokePreviewCapability(projectId);
     unregisterPreviewPort(projectId);
+    unregisterPreviewUpstream(projectId, port);
+    await getDefaultE2BRuntime()
+      .stopPreview(fence)
+      .catch(() => undefined);
     throw error;
   }
-  // Reset logs whenever the dev server (re)starts
-  clearPreviewLogs(projectId);
-  previewChildren.set(projectId, child);
+
   const markReady = () => {
-    if (previewChildren.get(projectId) !== child) return;
+    if (previewProcesses.get(projectId)?.pid !== startedPid) return;
     if (markPreviewPortActive(projectId, port)) setPreviewStatus(projectId, "ready");
   };
-  // Watch dev server output for "ready" indicators so we can flip status,
-  // and buffer the lines for the debug modal.
-  child.stdout?.on("data", (buf: Buffer) => {
-    const s = buf.toString();
-    appendLog(projectId, "stdout", s);
-  });
-  child.stderr?.on("data", (buf: Buffer) => {
-    const s = buf.toString();
-    appendLog(projectId, "stderr", s);
-  });
-  child.on("error", (error) => {
-    if (previewChildren.get(projectId) !== child) return;
-    setPreviewStatus(projectId, "error", `Dev server failed to start: ${error.message}`);
-    previewChildren.delete(projectId);
-    revokePreviewCapability(projectId);
-    unregisterPreviewPort(projectId);
-  });
-  child.on("exit", (code) => {
-    if (previewChildren.get(projectId) !== child) return;
-    if (code !== 0) setPreviewStatus(projectId, "error", `Dev server exited with code ${code}`);
-    previewChildren.delete(projectId);
-    revokePreviewCapability(projectId);
-    unregisterPreviewPort(projectId);
-  });
-  // Some custom servers are silent. Probe only while this exact child owns the
-  // reservation; a successful response promotes reserved -> active.
+
+  // Probe through the same authenticated E2B route used by the gateway. No
+  // loopback request or project process ever runs inside Quillra's container.
   void (async () => {
     for (let attempt = 0; attempt < 120; attempt++) {
-      if (previewChildren.get(projectId) !== child) return;
+      if (previewProcesses.get(projectId)?.pid !== startedPid) return;
+      const upstream = previewUpstreamUrl(projectId, port, "/");
+      if (!upstream) return;
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/`, {
+        const response = await fetch(upstream.url, {
+          headers: upstream.headers,
           signal: AbortSignal.timeout(500),
           redirect: "manual",
         });
@@ -981,7 +1054,7 @@ async function startDevPreviewNow(
       await new Promise<void>((resolve) => setTimeout(resolve, 500));
     }
   })();
-  return { port, label };
+  return { port, label: dev.label };
 }
 
 /** Serialize restarts so two editor tabs cannot spawn competing servers. */
@@ -989,12 +1062,18 @@ export function startDevPreview(
   projectId: string,
   repoPath: string,
   previewCommandOverride: string | null | undefined,
+  expectedBindingGeneration?: number,
 ): Promise<{ port: number; label: string }> {
   assertProjectWorkspaceAvailable(projectId);
   const previous = previewStartQueues.get(projectId) ?? Promise.resolve();
   const next = previous.then(() => {
     assertProjectWorkspaceAvailable(projectId);
-    return startDevPreviewNow(projectId, repoPath, previewCommandOverride);
+    return startDevPreviewNow(
+      projectId,
+      repoPath,
+      previewCommandOverride,
+      expectedBindingGeneration,
+    );
   });
   const drained = next.then(
     () => undefined,
@@ -1016,8 +1095,10 @@ export function getPreviewAddress(projectId: string, port: number): PreviewAddre
   const capability = issuePreviewCapability(projectId, port);
   const hostConfig = getPreviewOriginConfig();
   if (hostConfig) {
+    const host = previewHostAuthorityForProject(projectId, hostConfig);
+    const handoff = issuePreviewHandoff(projectId, port, host);
     return {
-      url: buildHostPreviewUrl(projectId, capability.token, hostConfig),
+      url: buildHostPreviewUrl(projectId, handoff.token, hostConfig),
       mode: "host",
     };
   }
@@ -1029,9 +1110,10 @@ export function getPreviewUrl(projectId: string, port: number): string {
 }
 
 export async function pushToGitHub(
+  projectId: string,
   repoPath: string,
   branch: string,
-  githubRepoFullName: string,
+  _githubRepoFullName: string,
   author?: { name: string | null; email: string | null } | null,
   commitMessage?: string | null,
 ): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
@@ -1039,36 +1121,20 @@ export async function pushToGitHub(
   // to accept an explicit `userToken` parameter here and the publish
   // route was passing the signed-in user's OAuth access token, which
   // (a) meant pushes happened under the human's credentials instead
-  // of the App's bot identity and (b) leaked the user's PAT-level
-  // scope into repos they didn't necessarily intend to push. The App
-  // installation token is always the right credential for a push.
-  const token = await resolveRepoGitToken(githubRepoFullName);
-  if (!token) {
-    throw new Error(
-      "Quillra GitHub App is not installed on this repository. Open Organization Settings → Integrations and install it, then try again.",
-    );
-  }
+  // of the App's bot identity and (b) exposed the user's broader
+  // authorization to repos they didn't necessarily intend to push.
+  // The exact-repository installation token is the right credential.
+  const access = await resolveProjectGitToken(projectId, "write");
 
-  await scrubGitRemoteCredentials(repoPath, githubRepoFullName);
-  const g = simpleGitForProject(repoPath, token);
+  await scrubGitRemoteCredentials(repoPath, access.fullName);
+  const networkGit = simpleGitForNetwork(repoPath, access.token);
 
-  // Committer identity. When GitHub exposes the App's bot account, commits are
-  // *committed by* the App's bot (`<slug>[bot]`, shows on github.com
-  // with the robot icon). The human who drove the change is attached
-  // as the git `author` via `--author=` so attribution stays visible
-  // in `git log` and the GitHub UI ("<name> authored, <slug>[bot]
-  // committed"). If GitHub cannot resolve the bot account, fall back to the
-  // human identity rather than inventing an invalid bot email address.
-  const botIdentity = await getGithubAppBotIdentity();
-  let botCommitter = false;
-  if (botIdentity) {
-    await g.addConfig("user.name", botIdentity.name);
-    await g.addConfig("user.email", botIdentity.email);
-    botCommitter = true;
-  } else if (author?.name) {
-    await g.addConfig("user.name", author.name);
-    if (author.email) await g.addConfig("user.email", author.email);
-  }
+  // Commits are always committed by the App's bot (`<slug>[bot]`, shown on
+  // github.com with the robot icon). The human who drove the change remains the
+  // git author. Fail closed when GitHub cannot verify the bot identity instead
+  // of silently creating a human-committed publish.
+  const committer: GitCommitIdentity = await requireGithubAppBotIdentity(access.token);
+  const g = simpleGitForProject(repoPath, committer);
 
   const status = await g.status();
   if (!status.isClean()) {
@@ -1092,10 +1158,9 @@ export async function pushToGitHub(
       message = `Update ${list}`;
     }
     const commitArgs: string[] = [];
-    // When the App bot is the committer, attribute authorship to the
-    // human who triggered the publish so `git log` shows who actually
-    // drove the edit.
-    if (botCommitter && author?.name && author?.email) {
+    // Attribute authorship to the human who triggered the publish while the
+    // verified App bot remains the committer.
+    if (author?.name && author?.email) {
       commitArgs.push(`--author=${author.name} <${author.email}>`);
     }
     await g.commit(message, commitArgs);
@@ -1106,9 +1171,9 @@ export async function pushToGitHub(
 
   if (!hasRemote) {
     try {
-      await g.push(["--set-upstream", "origin", branch]);
+      await networkGit.push(["--set-upstream", "origin", branch]);
     } catch {
-      await g.push("origin", branch);
+      await networkGit.push("origin", branch);
     }
     return {
       ok: true,
@@ -1122,9 +1187,9 @@ export async function pushToGitHub(
   }
 
   try {
-    await g.push("origin", branch);
+    await networkGit.push("origin", branch);
   } catch {
-    await g.push(["--set-upstream", "origin", branch]);
+    await networkGit.push(["--set-upstream", "origin", branch]);
   }
   return {
     ok: true,

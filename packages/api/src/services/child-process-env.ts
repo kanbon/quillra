@@ -1,9 +1,8 @@
 /**
- * Build the deliberately small environment inherited by commands that run
- * inside customer workspaces. Quillra's API process contains credentials for
- * auth, email, GitHub, and encryption; forwarding the complete process.env to
- * package scripts or an agent shell would expose the control plane to project
- * code.
+ * Build the deliberately small environment inherited by Quillra-managed Git
+ * and SDK processes. Quillra's API process contains credentials for auth,
+ * email, GitHub, E2B, and encryption; forwarding the complete process.env
+ * would unnecessarily widen the control-plane credential boundary.
  */
 const SAFE_ENV_KEYS = [
   "PATH",

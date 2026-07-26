@@ -6,11 +6,19 @@
  * without creating a barrel re-export or causing a circular import.
  */
 
-export type Step = "welcome" | "anthropic" | "githubApp" | "email" | "organization" | "signin";
+export type Step =
+  | "welcome"
+  | "anthropic"
+  | "secureExecution"
+  | "githubApp"
+  | "email"
+  | "organization"
+  | "signin";
 
 export const STEPS: Step[] = [
   "welcome",
   "anthropic",
+  "secureExecution",
   "githubApp",
   "email",
   "organization",

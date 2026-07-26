@@ -3,6 +3,7 @@ export function previewBootHtml(
   port: number,
   capability: string,
   statusUrl = `/api/preview-status?port=${port}&cap=${encodeURIComponent(capability)}`,
+  credentials: "omit" | "include" = "omit",
 ): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -110,7 +111,7 @@ export function previewBootHtml(
   function tick() {
     if (errored) return;
     attempts++;
-    fetch(${JSON.stringify(statusUrl)}, { credentials: 'omit' })
+    fetch(${JSON.stringify(statusUrl)}, { credentials: ${JSON.stringify(credentials)} })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         if (errored || !data) return;

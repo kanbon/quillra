@@ -1,7 +1,9 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionUser } from "../lib/auth.js";
 
 const EXPECTED_TABLES = [
   "account",
@@ -9,12 +11,15 @@ const EXPECTED_TABLES = [
   "client_login_codes",
   "client_sessions",
   "conversations",
+  "github_oauth_states",
+  "github_user_connections",
   "instance_invites",
   "instance_settings",
   "messages",
   "project_groups",
   "project_invites",
   "project_members",
+  "project_sandboxes",
   "projects",
   "role_permission_prompts",
   "session",
@@ -101,6 +106,56 @@ afterEach(() => {
 });
 
 describe("first-install database bootstrap", () => {
+  it("does not let a project-scoped client session inherit setup-owner access", async () => {
+    const { setupRouter, rawSqlite } = await loadSetupRuntime();
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO user
+           (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, 'owner', ?, ?)`,
+      )
+      .run("owner-1", "Owner", "owner@example.com", now, now);
+
+    const app = new Hono<{
+      Variables: {
+        user: SessionUser | null;
+        clientSession: { projectId: string } | null;
+      };
+    }>();
+    app.use("*", async (c, next) => {
+      c.set("user", {
+        id: "owner-1",
+        name: "Owner",
+        email: "owner@example.com",
+      } as SessionUser);
+      c.set("clientSession", { projectId: "project-1" });
+      await next();
+    });
+    app.route("/", setupRouter);
+
+    const status = await app.request("/status");
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toEqual({
+      needsSetup: true,
+      needsOwner: false,
+      access: "owner-required",
+    });
+
+    const save = await app.request("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: { ANTHROPIC_API_KEY: "must-not-be-written" } }),
+    });
+    expect(save.status).toBe(403);
+    await expect(save.json()).resolves.toEqual({ error: "Owner only" });
+    expect(
+      rawSqlite
+        .prepare("SELECT value FROM instance_settings WHERE key = 'ANTHROPIC_API_KEY'")
+        .get(),
+    ).toBeUndefined();
+  });
+
   it("creates the complete schema and serves the setup API from an empty database", async () => {
     expect(existsSync(databasePath)).toBe(false);
 
@@ -138,7 +193,7 @@ describe("first-install database bootstrap", () => {
       needsSetup: true,
       needsOwner: true,
       access: "granted",
-      missing: ["ANTHROPIC_API_KEY", "GITHUB_APP", "__owner"],
+      missing: ["ANTHROPIC_API_KEY", "E2B", "GITHUB_APP", "__owner"],
     });
 
     const saveResponse = await setupRouter.request("/save", {
@@ -153,6 +208,58 @@ describe("first-install database bootstrap", () => {
       .get("ANTHROPIC_API_KEY") as { value: string };
     expect(stored.value).toMatch(/^v1:/);
     expect(stored.value).not.toContain("test-anthropic-key");
+  });
+
+  it("rejects generic GitHub App writes atomically while preserving normal setup saves", async () => {
+    const { setupRouter, rawSqlite } = await loadSetupRuntime();
+    const unlockResponse = await setupRouter.request("/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "quillra-setup-test-token" }),
+    });
+    const cookie = unlockResponse.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+
+    rawSqlite
+      .prepare("INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)")
+      .run("GITHUB_APP_ID", "existing-app-id", Date.now());
+
+    const rejected = await setupRouter.request("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        values: {
+          GITHUB_APP_ID: "replacement-app-id",
+          GITHUB_APP_FUTURE_CREDENTIAL: "future-secret",
+          ANTHROPIC_API_KEY: "must-not-be-partially-written",
+        },
+      }),
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({
+      error: "GitHub App settings must be managed through the dedicated GitHub App flow.",
+    });
+    expect(
+      rawSqlite.prepare("SELECT value FROM instance_settings WHERE key = ?").get("GITHUB_APP_ID"),
+    ).toEqual({ value: "existing-app-id" });
+    expect(
+      rawSqlite
+        .prepare("SELECT value FROM instance_settings WHERE key = ?")
+        .get("ANTHROPIC_API_KEY"),
+    ).toBeUndefined();
+
+    const allowed = await setupRouter.request("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ values: { ANTHROPIC_API_KEY: "allowed-anthropic-key" } }),
+    });
+
+    expect(allowed.status).toBe(200);
+    const stored = rawSqlite
+      .prepare("SELECT value FROM instance_settings WHERE key = ?")
+      .get("ANTHROPIC_API_KEY") as { value: string };
+    expect(stored.value).toMatch(/^v1:/);
+    expect(stored.value).not.toContain("allowed-anthropic-key");
   });
 
   it("is idempotent across restarts and preserves first-install data", async () => {

@@ -34,7 +34,7 @@ type DebugResponse = {
     repoPath: string;
     repoExists: boolean;
     hasPackageJson: boolean;
-    hasNodeModules: boolean;
+    hasNodeModules: boolean | null;
     packageManager: string | null;
     packageJsonScripts: Record<string, string> | null;
     rootFiles: string[];
@@ -456,8 +456,12 @@ export function PreviewDebugModal({ open, onClose, projectId }: Props) {
               </Pill>
             </Row>
             <Row label="node_modules">
-              <Pill tone={data.workspace.hasNodeModules ? "ok" : "warn"}>
-                {data.workspace.hasNodeModules ? "installed" : "missing"}
+              <Pill tone={data.workspace.hasNodeModules === false ? "warn" : "ok"}>
+                {data.workspace.hasNodeModules === null
+                  ? "managed in E2B"
+                  : data.workspace.hasNodeModules
+                    ? "installed"
+                    : "missing"}
               </Pill>
             </Row>
             {data.workspace.packageManager && (

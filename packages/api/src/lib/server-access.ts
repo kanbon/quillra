@@ -1,11 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { controlPlaneCookieName } from "./cookies.js";
 
 const TOKEN_PREFIX = "qra_";
 const TOKEN_PURPOSE = "quillra.server-access.v1";
 const SESSION_PURPOSE = "quillra.server-access-session.v1";
 const DEFAULT_SESSION_TTL_MS = 4 * 60 * 60 * 1_000;
 
-export const SERVER_ACCESS_COOKIE = "quillra_server_access";
+export const SERVER_ACCESS_COOKIE = controlPlaneCookieName("quillra_server_access");
 
 let loggedInstructions = false;
 

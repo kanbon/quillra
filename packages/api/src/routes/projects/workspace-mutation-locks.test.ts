@@ -58,7 +58,9 @@ function locked<T extends unknown[], R>(result: R) {
 }
 
 beforeEach(() => {
-  tempDirectory = mkdtempSync(path.join(tmpdir(), "quillra-workspace-route-locks-"));
+  tempDirectory = fs.realpathSync.native(
+    mkdtempSync(path.join(tmpdir(), "quillra-workspace-route-locks-")),
+  );
   repoPath = path.join(tempDirectory, "repo");
   fs.mkdirSync(path.join(repoPath, ".git"), { recursive: true });
   process.env.DATABASE_URL = `file:${path.join(tempDirectory, "cms.sqlite")}`;
@@ -112,8 +114,10 @@ async function createApp() {
   rawSqlite
     .prepare(
       `INSERT INTO projects
-         (id, name, github_repo_full_name, default_branch, migration_target, created_at, updated_at)
-       VALUES ('project-1', 'Project One', 'example/site', 'main', 'astro', ?, ?)`,
+         (id, name, github_repo_full_name, github_installation_id, github_repository_id,
+          default_branch, migration_target, created_at, updated_at)
+       VALUES ('project-1', 'Project One', 'example/site', '11', '101',
+               'main', 'astro', ?, ?)`,
     )
     .run(now, now);
   rawSqlite
@@ -150,10 +154,6 @@ describe("project workspace mutation locking", () => {
       if (String(target).startsWith(repoPath)) expect(lockActive).toBe(true);
       return originalWriteFile(target, data, options);
     });
-    workspaceMocks.ensureQuillraTempIgnored.mockImplementation(() => {
-      expect(lockActive).toBe(true);
-    });
-
     const form = new FormData();
     form.set("file", new File(["# Updated copy"], "copy.md", { type: "text/markdown" }));
     const upload = await app.request("/projects/project-1/upload", {
@@ -162,13 +162,17 @@ describe("project workspace mutation locking", () => {
     });
 
     expect(upload.status).toBe(200);
-    expect(workspaceMocks.runInProjectLock).toHaveBeenCalledWith("project-1", expect.any(Function));
-    expect(workspaceMocks.ensureQuillraTempIgnored).toHaveBeenCalledWith(repoPath);
+    expect(workspaceMocks.runInProjectLock).toHaveBeenCalledWith(
+      "project-1",
+      expect.any(Function),
+      expect.objectContaining({ githubBindingGeneration: 1 }),
+    );
     expect(writeSpy).toHaveBeenCalled();
 
     const assetPath = path.join(repoPath, "public", "old.png");
     fs.mkdirSync(path.dirname(assetPath), { recursive: true });
     originalWriteFile(assetPath, "old");
+    const canonicalAssetPath = path.join(fs.realpathSync.native(repoPath), "public", "old.png");
     const originalUnlink = fs.unlinkSync.bind(fs);
     const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
       if (String(target).startsWith(repoPath)) expect(lockActive).toBe(true);
@@ -182,7 +186,7 @@ describe("project workspace mutation locking", () => {
     });
 
     expect(deleted.status).toBe(200);
-    expect(unlinkSpy).toHaveBeenCalledWith(assetPath);
+    expect(unlinkSpy).toHaveBeenCalledWith(canonicalAssetPath);
     expect(fs.existsSync(assetPath)).toBe(false);
   });
 
@@ -200,6 +204,94 @@ describe("project workspace mutation locking", () => {
     expect(response.status).toBe(500);
     expect(workspaceMocks.ensureQuillraTempIgnored).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(repoPath, ".quillra-temp"))).toBe(false);
+  });
+
+  it("keeps publish-status and changes git reads locked but summarizes the snapshot unlocked", async () => {
+    const app = await createApp();
+    const git = {
+      status: locked<
+        [],
+        {
+          modified: string[];
+          created: string[];
+          not_added: string[];
+          deleted: string[];
+          renamed: Array<{ from: string; to: string }>;
+        }
+      >({
+        modified: ["src/page.ts"],
+        created: [],
+        not_added: [],
+        deleted: [],
+        renamed: [],
+      }),
+      branch: locked<[string[]], { all: string[] }>({ all: ["origin/main"] }),
+      log: locked<
+        [{ from: string; to: string; maxCount: number }],
+        {
+          total: number;
+          all: Array<{
+            hash: string;
+            message: string;
+            author_name: string;
+            date: string;
+          }>;
+        }
+      >({
+        total: 1,
+        all: [
+          {
+            hash: "abcdef1234567890",
+            message: "Update page",
+            author_name: "Owner",
+            date: "2026-07-23T12:00:00.000Z",
+          },
+        ],
+      }),
+      diff: locked<[string[]], string>(
+        "diff --git a/src/page.ts b/src/page.ts\n--- a/src/page.ts\n+++ b/src/page.ts\n+updated\n",
+      ),
+    };
+    workspaceMocks.simpleGitForProject.mockImplementation(() => {
+      expect(lockActive).toBe(true);
+      return git;
+    });
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => {
+      expect(lockActive).toBe(false);
+      return Response.json({ content: [{ text: "- Updated the project page" }] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const publishStatus = await app.request("/projects/project-1/publish-status?summary=1");
+    expect(publishStatus.status).toBe(200);
+    expect(await publishStatus.json()).toEqual({
+      dirty: ["src/page.ts"],
+      unpushed: 1,
+      hasChanges: true,
+      summary: "- Updated the project page",
+    });
+
+    const changes = await app.request("/projects/project-1/changes");
+    expect(changes.status).toBe(200);
+    expect(await changes.json()).toMatchObject({
+      files: [{ path: "src/page.ts", status: "modified", additions: 1, deletions: 0 }],
+      commits: [{ sha: "abcdef1234567890", shortSha: "abcdef1" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(workspaceMocks.runInProjectLock).toHaveBeenCalledTimes(2);
+    for (const call of workspaceMocks.runInProjectLock.mock.calls) {
+      expect(call).toEqual([
+        "project-1",
+        expect.any(Function),
+        expect.objectContaining({
+          githubInstallationId: "11",
+          githubRepositoryId: "101",
+          githubBindingGeneration: 1,
+        }),
+      ]);
+    }
   });
 
   it("keeps discard, migration cleanup, and publish Git operations inside the lock", async () => {
@@ -259,6 +351,7 @@ describe("project workspace mutation locking", () => {
     });
     expect(published.status).toBe(200);
     expect(workspaceMocks.pushToGitHub).toHaveBeenCalledWith(
+      "project-1",
       repoPath,
       "main",
       "example/site",

@@ -1,7 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { controlPlaneCookieName } from "./cookies.js";
 
-export const GITHUB_MANIFEST_FLOW_COOKIE = "quillra_github_manifest_flow";
-export const GITHUB_MANIFEST_FLOW_COOKIE_PATH = "/api/setup/github-app/callback";
+export const GITHUB_MANIFEST_FLOW_COOKIE = controlPlaneCookieName("quillra_github_manifest_flow");
+export const GITHUB_MANIFEST_FLOW_COOKIE_PATH = "/";
 export const GITHUB_MANIFEST_FLOW_TTL_MS = 10 * 60_000;
 
 const MAX_ACTIVE_FLOWS = 64;

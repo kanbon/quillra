@@ -42,6 +42,18 @@ export const projects = sqliteTable("projects", {
   name: text("name").notNull(),
   githubRepoFullName: text("github_repo_full_name").notNull(),
   githubInstallationId: text("github_installation_id"),
+  /**
+   * GitHub's immutable repository id. A mutable `owner/repo` string is not an
+   * authorization boundary: repositories can be renamed or transferred. All
+   * installation tokens are therefore minted for this exact id.
+   */
+  githubRepositoryId: text("github_repository_id"),
+  /**
+   * Monotonic epoch for the repository/branch binding. Every rebind increments
+   * it so in-flight requests can reject stale work even after an A -> B -> A
+   * sequence restores the same visible values.
+   */
+  githubBindingGeneration: integer("github_binding_generation").notNull().default(1),
   defaultBranch: text("default_branch").notNull().default("main"),
   /** Shell command for dev preview; use `{port}` or `$PORT`. Empty = auto-detect from package.json */
   previewDevCommand: text("preview_dev_command"),
@@ -66,6 +78,75 @@ export const projects = sqliteTable("projects", {
    * migration agent unrestricted project-workspace permissions.
    */
   migrationTarget: text("migration_target"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .$onUpdate(() => new Date())
+    .notNull(),
+});
+
+/**
+ * Durable E2B allocation for a project. The project id is the primary key so a
+ * Quillra instance can never persist two sandboxes for the same project.
+ * Binding generations prevent an old repository sandbox from surviving a
+ * repository rebind.
+ */
+export const projectSandboxes = sqliteTable("project_sandboxes", {
+  projectId: text("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  sandboxId: text("sandbox_id").notNull().unique(),
+  githubBindingGeneration: integer("github_binding_generation").notNull(),
+  templateId: text("template_id").notNull(),
+  previewPid: integer("preview_pid"),
+  previewPort: integer("preview_port"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .$onUpdate(() => new Date())
+    .notNull(),
+});
+
+/**
+ * One-time, user-bound GitHub App OAuth handshakes. Only a hash of the state
+ * value is persisted; the PKCE verifier is encrypted at rest.
+ */
+export const githubOauthStates = sqliteTable(
+  "github_oauth_states",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    codeVerifier: text("code_verifier").notNull(),
+    returnTo: text("return_to").notNull().default("/"),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [index("github_oauth_states_user_idx").on(table.userId)],
+);
+
+/**
+ * Per-Quillra-user GitHub App authorization. User tokens are used only for
+ * repository discovery and access verification. Clone/push always uses a
+ * separately minted, repository-scoped installation token.
+ */
+export const githubUserConnections = sqliteTable("github_user_connections", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  githubUserId: text("github_user_id").notNull(),
+  githubLogin: text("github_login").notNull(),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token"),
+  accessTokenExpiresAt: integer("access_token_expires_at", { mode: "timestamp_ms" }),
+  refreshTokenExpiresAt: integer("refresh_token_expires_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),

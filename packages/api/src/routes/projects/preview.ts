@@ -6,6 +6,7 @@ import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
 import { getPreviewStatus, isPreviewPortActive } from "../../services/preview-status.js";
+import { previewUpstreamUrl } from "../../services/preview-upstream.js";
 import {
   ensureRepoCloned,
   getPackageManager,
@@ -16,6 +17,7 @@ import {
   reinstallProjectDependencies,
   reserveAvailablePreviewPort,
   resolveDevCommand,
+  runInProjectLock,
   simpleGitForProject,
   startDevPreview,
   stopPreview,
@@ -32,8 +34,14 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const { port, label } = await startDevPreview(projectId, repoPath, p.previewDevCommand);
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+        expectedBindingGeneration: p.githubBindingGeneration,
+      });
+      const { port, label } = await runInProjectLock(
+        projectId,
+        () => startDevPreview(projectId, repoPath, p.previewDevCommand, p.githubBindingGeneration),
+        p,
+      );
       const preview = getPreviewAddress(projectId, port);
       return c.json({ url: preview.url, previewMode: preview.mode, port, previewLabel: label });
     } catch (e) {
@@ -76,48 +84,57 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
 
     const limit = Math.min(Number(c.req.query("limit") ?? "30"), 200);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch);
-      const g = simpleGitForProject(repoPath);
+      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+        expectedBindingGeneration: p.githubBindingGeneration,
+      });
+      const result = await runInProjectLock(
+        projectId,
+        async () => {
+          const g = simpleGitForProject(repoPath);
 
-      // Current HEAD sha for "you are here" marker
-      const headSha = (await g.revparse(["HEAD"])).trim();
+          // Current HEAD sha for "you are here" marker
+          const headSha = (await g.revparse(["HEAD"])).trim();
 
-      // Work out which remote commits are on origin so we can flag
-      // "unpushed" vs "pushed" per commit.
-      let pushedSet = new Set<string>();
-      try {
-        const branches = await g.branch(["-r"]);
-        if (branches.all.includes(`origin/${p.defaultBranch}`)) {
-          const remoteLog = await g.log({
-            from: "", // everything
-            to: `origin/${p.defaultBranch}`,
-            maxCount: Math.max(limit * 2, 100),
-          });
-          pushedSet = new Set(remoteLog.all.map((l) => l.hash));
-        }
-      } catch {
-        /* no remote yet */
-      }
+          // Work out which remote commits are on origin so we can flag
+          // "unpushed" vs "pushed" per commit.
+          let pushedSet = new Set<string>();
+          try {
+            const branches = await g.branch(["-r"]);
+            if (branches.all.includes(`origin/${p.defaultBranch}`)) {
+              const remoteLog = await g.log({
+                from: "", // everything
+                to: `origin/${p.defaultBranch}`,
+                maxCount: Math.max(limit * 2, 100),
+              });
+              pushedSet = new Set(remoteLog.all.map((l) => l.hash));
+            }
+          } catch {
+            /* no remote yet */
+          }
 
-      const log = await g.log({ maxCount: limit });
-      const commits = log.all.map((c) => ({
-        sha: c.hash,
-        shortSha: c.hash.slice(0, 7),
-        author: c.author_name,
-        email: c.author_email,
-        message: c.message,
-        subject: c.message.split("\n")[0] ?? c.message,
-        body: c.message.split("\n").slice(2).join("\n").trim(), // skip blank line after subject
-        timestamp: new Date(c.date).getTime(),
-        isHead: c.hash === headSha,
-        isPushed: pushedSet.has(c.hash) || pushedSet.size === 0, // if we couldn't read remote, assume pushed
-      }));
+          const log = await g.log({ maxCount: limit });
+          const commits = log.all.map((commit) => ({
+            sha: commit.hash,
+            shortSha: commit.hash.slice(0, 7),
+            author: commit.author_name,
+            email: commit.author_email,
+            message: commit.message,
+            subject: commit.message.split("\n")[0] ?? commit.message,
+            body: commit.message.split("\n").slice(2).join("\n").trim(),
+            timestamp: new Date(commit.date).getTime(),
+            isHead: commit.hash === headSha,
+            isPushed: pushedSet.has(commit.hash) || pushedSet.size === 0,
+          }));
+          return { commits, headSha };
+        },
+        p,
+      );
 
       return c.json({
-        commits,
+        commits: result.commits,
         branch: p.defaultBranch,
         repo: p.githubRepoFullName,
-        headSha,
+        headSha: result.headSha,
       });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Failed to read git history" }, 500);
@@ -166,9 +183,8 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const repoPath = projectRepoPath(projectId);
     const repoExists = fs.existsSync(repoPath);
     const pkgPath = path.join(repoPath, "package.json");
-    const nodeModulesPath = path.join(repoPath, "node_modules");
     const hasPackageJson = fs.existsSync(pkgPath);
-    const hasNodeModules = fs.existsSync(nodeModulesPath);
+    const hasNodeModules = null;
 
     let packageJsonScripts: Record<string, string> | null = null;
     let packageManager: string | null = null;
@@ -201,8 +217,11 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     // Probe the upstream dev server, short timeout so the modal is snappy
     type ProbeResult = { ok: boolean; status?: number; contentType?: string; error?: string };
     let probe: ProbeResult = { ok: false };
+    const upstream = previewUpstreamUrl(projectId, port, "/");
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/`, {
+      if (!upstream) throw new Error("Preview upstream is not registered.");
+      const res = await fetch(upstream.url, {
+        headers: upstream.headers,
         signal: AbortSignal.timeout(1500),
         redirect: "manual",
       });

@@ -280,7 +280,10 @@ export const clientsRouter = new Hono()
     if (teamToken) {
       await db.delete(teamSessions).where(eq(teamSessions.token, teamToken));
     }
-    deleteCookie(c, TEAM_SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, TEAM_SESSION_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
 
     setCookie(c, CLIENT_SESSION_COOKIE, token, {
       path: "/",
@@ -322,8 +325,14 @@ export const clientsRouter = new Hono()
       await db.delete(teamSessions).where(eq(teamSessions.token, teamToken));
     }
     await invalidateBetterAuthSession(c);
-    deleteCookie(c, CLIENT_SESSION_COOKIE, { path: "/" });
-    deleteCookie(c, TEAM_SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, CLIENT_SESSION_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
+    deleteCookie(c, TEAM_SESSION_COOKIE, {
+      path: "/",
+      secure: shouldUseSecureCookies(),
+    });
     return c.json({ ok: true });
   });
 

@@ -76,6 +76,16 @@ describe("preview origin", () => {
     expect(
       getPreviewOriginConfig({ ...environment, PREVIEW_DOMAIN: "https://preview.test/path" }),
     ).toBeNull();
+    expect(
+      getPreviewOriginConfig({ ...environment, PREVIEW_DOMAIN: "http://preview.example.net" }),
+    ).toBeNull();
+    expect(
+      getPreviewOriginConfig({
+        ...environment,
+        BETTER_AUTH_URL: "http://cms.example.com",
+        PREVIEW_DOMAIN: "preview.example.net",
+      }),
+    ).toBeNull();
     expect(getPreviewOriginConfig({ ...environment, PREVIEW_DOMAIN: "127.0.0.1" })).toBeNull();
   });
 

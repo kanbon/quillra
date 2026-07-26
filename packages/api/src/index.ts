@@ -1,6 +1,9 @@
-// Bootstrap BETTER_AUTH_SECRET (and downstream-derived crypto key) before
-// any module that reads it. Side-effect import; do not move below the
-// other imports.
+// Resolve and validate Railway's public origin and persistent data mount before
+// any module captures environment values or writes boot state.
+import "./lib/boot-railway.js";
+
+// Bootstrap BETTER_AUTH_SECRET (and downstream-derived crypto key) after the
+// Railway storage guard. Side-effect import; do not move below other imports.
 import "./lib/boot-secrets.js";
 
 import { existsSync, readFileSync } from "node:fs";
@@ -22,17 +25,19 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException]", err.stack ?? err.message);
 });
-import { serve } from "@hono/node-server";
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { createNodeWebSocket } from "@hono/node-ws";
 import { eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { getCookie } from "hono/cookie";
 import { cors } from "hono/cors";
+import { WebSocketServer } from "ws";
 import { user } from "./db/auth-schema.js";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { type Session, type SessionUser, auth } from "./lib/auth.js";
+import { API_BODY_MAX_BYTES } from "./lib/request-limits.js";
 import { CLIENT_SESSION_COOKIE, TEAM_SESSION_COOKIE } from "./lib/session-cookies.js";
 import { adminRouter } from "./routes/admin.js";
 import { clientsRouter, getClientSessionFromCookie } from "./routes/clients.js";
@@ -55,12 +60,14 @@ import {
   createPreviewGateway,
 } from "./services/preview-gateway.js";
 import {
+  PREVIEW_UPSTREAM_TIMEOUT_MS,
   injectPreviewToolbarCss,
   rewritePreviewResourcePaths,
   sanitizePreviewRequestHeaders,
   securePreviewResponse,
 } from "./services/preview-proxy.js";
 import { readPreviewStatus } from "./services/preview-status.js";
+import { previewUpstreamUrl } from "./services/preview-upstream.js";
 import { startReportScheduler } from "./services/report-scheduler.js";
 import { getTrustedOrigins, isTrustedBrowserRequest } from "./services/trusted-origins.js";
 import { getPreviewAddress, sweepOrphanedProjectWorkspaces } from "./services/workspace.js";
@@ -127,8 +134,10 @@ app.onError((err, c) => {
   );
 });
 
-const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
-wss.options.maxPayload = PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES;
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: PREVIEW_WEBSOCKET_MAX_PAYLOAD_BYTES,
+});
 const previewGateway = createPreviewGateway(upgradeWebSocket);
 app.use("*", previewGateway.middleware);
 app.get("/api/caddy-check", previewGateway.caddyCheck);
@@ -190,6 +199,14 @@ app.use(
     exposeHeaders: ["Content-Length"],
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  }),
+);
+
+app.use(
+  "/api/*",
+  bodyLimit({
+    maxSize: API_BODY_MAX_BYTES,
+    onError: (c) => c.json({ error: "Request body too large" }, 413),
   }),
 );
 
@@ -294,7 +311,9 @@ app.get("/api/session", async (c) => {
     projectId: clientSession?.projectId ?? null,
     user: {
       ...sessionUser,
-      instanceRole: row?.instanceRole ?? null,
+      // A project-scoped client cookie must not inherit or even advertise the
+      // underlying account's instance-wide role.
+      instanceRole: clientSession ? null : (row?.instanceRole ?? null),
       language: row?.language ?? null,
     },
   });
@@ -365,11 +384,24 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
     );
   }
   const rest = c.req.path.replace(`/__preview/${rawPort}/${capability}`, "") || "/";
-  const target = `http://127.0.0.1:${port}${rest}`;
-  const url = new URL(target);
-  url.search = new URL(c.req.url).search;
+  const requestUrl = new URL(c.req.url);
+  const upstreamAccess = previewUpstreamUrl(access.projectId, port, rest, requestUrl.search);
+  if (!upstreamAccess) {
+    return securePreviewResponse(
+      new Response(previewBootHtml(port, capability), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+      }),
+      externalPreviewRequestUrl(c),
+      port,
+      capability,
+    );
+  }
 
   const headers = sanitizePreviewRequestHeaders(c.req.raw.headers);
+  for (const [name, value] of Object.entries(upstreamAccess.headers)) {
+    headers.set(name, value);
+  }
   headers.set("accept-encoding", "identity");
 
   try {
@@ -378,13 +410,20 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
       headers,
       body: c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body,
       redirect: "manual",
+      signal: AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(PREVIEW_UPSTREAM_TIMEOUT_MS)]),
     };
     if (init.body) init.duplex = "half";
-    const upstream = await fetch(url.toString(), init);
+    const upstream = await fetch(upstreamAccess.url, init);
 
     const withCss = await injectPreviewToolbarCss(upstream);
     const withScopedPaths = await rewritePreviewResourcePaths(withCss, port, capability);
-    return securePreviewResponse(withScopedPaths, externalPreviewRequestUrl(c), port, capability);
+    return securePreviewResponse(
+      withScopedPaths,
+      externalPreviewRequestUrl(c),
+      port,
+      capability,
+      new URL(upstreamAccess.url).origin,
+    );
   } catch {
     return securePreviewResponse(
       new Response(previewBootHtml(port, capability), {
@@ -469,8 +508,7 @@ try {
 
 const port = Number(process.env.PORT ?? 3000);
 const hostname = resolveListenHost();
-const server = serve({ fetch: app.fetch, port, hostname }, (_info) => {});
-injectWebSocket(server);
+serve({ fetch: app.fetch, port, hostname, websocket: { server: wss } }, (_info) => {});
 
 // Kick off the monthly-report cron + boot-time catch-up. Runs in the
 // same process as the API; when Quillra moves to a multi-worker setup

@@ -1,12 +1,14 @@
 /**
- * Integrations tab, two separate GitHub configurations stacked in one view:
+ * Integrations tab for secure execution and GitHub connectivity:
  *
- *   1. GitHub App (top, primary): the one that commits to repos. Its
+ *   1. E2B: isolates project code from the Quillra application container.
+ *
+ *   2. GitHub App: the one that commits to repos. Its
  *      credentials are set through the setup-wizard manifest flow, or
  *      via GITHUB_APP_* env vars. Shown here as read-only status with
  *      buttons to re-create, install on more repos, and rotate.
  *
- *   2. GitHub OAuth App (bottom, optional): lets users link their
+ *   3. GitHub OAuth App (bottom, optional): lets users link their
  *      GitHub account for wizard sign-in. Owner-editable here because
  *      it's the one thing the wizard can't self-bootstrap.
  */
@@ -17,6 +19,7 @@ import { SecretField, type SecretStatus } from "@/components/molecules/SecretFie
 import { useT } from "@/i18n/i18n";
 import { apiJson } from "@/lib/api";
 import { useEffect, useState } from "react";
+import { E2bIntegrationCard } from "./E2bIntegrationCard";
 import { type StatusResponse, getStatus } from "./types";
 
 type Props = {
@@ -148,6 +151,8 @@ export function IntegrationsTab({ status, onSaved }: Props) {
       <h2 className="text-lg font-semibold tracking-tight text-neutral-900">
         {t("instanceSettings.tabIntegrations")}
       </h2>
+
+      <E2bIntegrationCard status={status} onSaved={onSaved} />
 
       {/* GitHub App, the one that commits */}
       <div className="rounded-xl border border-neutral-200 bg-white p-5">

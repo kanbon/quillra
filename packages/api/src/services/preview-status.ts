@@ -3,6 +3,7 @@
  * page can show what's happening (cloning, installing, starting…) instead
  * of a generic "Bad gateway" or vague spinner.
  */
+import { previewUpstreamUrl } from "./preview-upstream.js";
 
 export type PreviewStage = "idle" | "cloning" | "installing" | "starting" | "ready" | "error";
 
@@ -97,8 +98,11 @@ export function describeStage(stage: PreviewStage): { label: string; detail: str
 /** Capability resolution must happen before calling this loopback probe. */
 export async function readPreviewStatus(projectId: string, port: number) {
   if (isPreviewPortActive(projectId, port)) {
+    const upstream = previewUpstreamUrl(projectId, port, "/");
     try {
-      const probe = await fetch(`http://127.0.0.1:${port}/`, {
+      if (!upstream) throw new Error("Preview upstream is unavailable");
+      const probe = await fetch(upstream.url, {
+        headers: upstream.headers,
         signal: AbortSignal.timeout(1_500),
         redirect: "manual",
       });

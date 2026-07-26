@@ -78,6 +78,71 @@ afterEach(() => {
 });
 
 describe("client login codes", () => {
+  it("sets and clears secure __Host client cookies in production", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.BETTER_AUTH_URL = "https://quillra.example";
+    vi.resetModules();
+    const { clientsRouter } = await import("./clients.js");
+    const { rawSqlite } = await import("../db/index.js");
+    const { hashOtpCode } = await import("../lib/otp.js");
+    openDatabase = rawSqlite;
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO projects (id, name, github_repo_full_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("project-1", "Example", "example/repo", now, now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+         VALUES (?, ?, ?, 1, ?, ?)`,
+      )
+      .run("client-1", "Client", "client@example.com", now, now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO project_members (id, project_id, user_id, role, created_at)
+         VALUES (?, ?, ?, 'client', ?)`,
+      )
+      .run("membership-1", "project-1", "client-1", now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO client_login_codes
+           (id, project_id, email, code_hash, expires_at, attempts)
+         VALUES (?, ?, ?, ?, ?, 0)`,
+      )
+      .run("client-code-1", "project-1", "client@example.com", hashOtpCode("123456"), now + 60_000);
+
+    const verified = await clientsRouter.request("/verify-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        email: "client@example.com",
+        code: "123456",
+      }),
+    });
+
+    expect(verified.status).toBe(200);
+    expect(verified.headers.get("set-cookie")).toContain("__Host-quillra_client_session=");
+    expect(verified.headers.get("set-cookie")).toContain("Secure");
+    const { token } = rawSqlite
+      .prepare("SELECT token FROM client_sessions WHERE user_id = ?")
+      .get("client-1") as { token: string };
+
+    const logout = await clientsRouter.request("/logout", {
+      method: "POST",
+      headers: { Cookie: `__Host-quillra_client_session=${token}` },
+    });
+
+    expect(logout.status).toBe(200);
+    expect(logout.headers.get("set-cookie")).toContain("__Host-quillra_client_session=");
+    expect(logout.headers.get("set-cookie")).toContain("Secure");
+    expect(rawSqlite.prepare("SELECT count(*) AS count FROM client_sessions").get()).toEqual({
+      count: 0,
+    });
+  });
+
   it("treats an anonymous client session probe as an expected empty state", async () => {
     vi.resetModules();
     const { clientsRouter } = await import("./clients.js");

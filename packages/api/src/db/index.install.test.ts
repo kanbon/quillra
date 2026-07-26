@@ -143,6 +143,45 @@ describe("fresh-install database constraints", () => {
     expect(sqlite.pragma("foreign_key_check")).toEqual([]);
   });
 
+  it("bootstraps immutable GitHub bindings and user-scoped OAuth tables", async () => {
+    const sqlite = await loadFreshDatabase();
+    const now = Date.now();
+    const projectColumns = sqlite.pragma("table_info(projects)") as RuntimeColumn[];
+    expect(projectColumns.map((column) => column.name)).toContain("github_repository_id");
+    expect(projectColumns.map((column) => column.name)).toContain("github_binding_generation");
+
+    sqlite
+      .prepare(
+        `INSERT INTO user
+          (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("github-user", "GitHub User", "github@example.com", 1, "member", now, now);
+    sqlite
+      .prepare(
+        `INSERT INTO github_oauth_states
+          (state_hash, user_id, code_verifier, return_to, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("state-hash", "github-user", "encrypted-verifier", "/", now + 60_000, now);
+    sqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("github-user", "123", "octocat", "encrypted-token", now, now);
+
+    sqlite.prepare("DELETE FROM user WHERE id = ?").run("github-user");
+    expect(sqlite.prepare("SELECT count(*) AS count FROM github_oauth_states").get()).toEqual({
+      count: 0,
+    });
+    expect(sqlite.prepare("SELECT count(*) AS count FROM github_user_connections").get()).toEqual({
+      count: 0,
+    });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+  });
+
   it("keeps runtime usage-table types and natural keys aligned with Drizzle", async () => {
     const sqlite = await loadFreshDatabase();
     const tables: UsageTable[] = [usageLimits, usageAlertsSent, usageReportsSent];

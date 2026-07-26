@@ -95,7 +95,10 @@ export function humanizeToolCall(toolName: string, input: Record<string, unknown
     case "WebSearch":
       return "Looking something up online";
     case "Bash":
+    case "mcp__quillra-execution__bash":
       return humanBash(typeof input.command === "string" ? input.command : "");
+    case "mcp__quillra-execution__promote_attachment":
+      return "Adding an uploaded file to your site";
     case "mcp__quillra-diagnostics__get_preview_status":
       return "Checking your site";
     case "mcp__quillra-diagnostics__tail_preview_logs":

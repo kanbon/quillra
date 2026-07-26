@@ -14,6 +14,7 @@ import { getProjectBrand, projectBrandForEmail } from "../services/branding.js";
 import { renderInviteEmail } from "../services/email-templates.js";
 import { isMailerEnabled, sendEmail } from "../services/mailer.js";
 import { revokePreviewCapability } from "../services/preview-capability.js";
+import { beginProjectWriterAuthorizationChange } from "../services/project-workspace-lifecycle.js";
 
 type Variables = {
   user: SessionUser | null;
@@ -237,10 +238,24 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     const parsed = schema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
-    await db
-      .update(projectMembers)
-      .set({ role: parsed.data.role as ProjectRole })
+    const [target] = await db
+      .select()
+      .from(projectMembers)
       .where(and(eq(projectMembers.id, memberId), eq(projectMembers.projectId, projectId)));
+    if (!target) return c.json({ error: "Not found" }, 404);
+
+    const finishAuthorizationChange = beginProjectWriterAuthorizationChange(
+      projectId,
+      target.userId,
+    );
+    try {
+      await db
+        .update(projectMembers)
+        .set({ role: parsed.data.role as ProjectRole })
+        .where(and(eq(projectMembers.id, memberId), eq(projectMembers.projectId, projectId)));
+    } finally {
+      finishAuthorizationChange();
+    }
 
     return c.json({ ok: true });
   })
@@ -260,10 +275,19 @@ export const teamRouter = new Hono<{ Variables: Variables }>()
     if (!target) return c.json({ error: "Not found" }, 404);
     if (target.userId === r.user.id) return c.json({ error: "Cannot remove yourself" }, 400);
 
-    const deleted = await db
-      .delete(projectMembers)
-      .where(eq(projectMembers.id, memberId))
-      .returning({ id: projectMembers.id });
+    const finishAuthorizationChange = beginProjectWriterAuthorizationChange(
+      projectId,
+      target.userId,
+    );
+    let deleted: { id: string }[];
+    try {
+      deleted = await db
+        .delete(projectMembers)
+        .where(eq(projectMembers.id, memberId))
+        .returning({ id: projectMembers.id });
+    } finally {
+      finishAuthorizationChange();
+    }
     if (deleted.length > 0) revokePreviewCapability(projectId);
     return c.newResponse(null, 204);
   })

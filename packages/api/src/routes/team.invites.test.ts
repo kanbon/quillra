@@ -583,4 +583,70 @@ describe("project invite authorization", () => {
     ).toBe(204);
     expect(resolvePreviewCapability("4173", capability.token)).toEqual({ ok: false });
   });
+
+  it("cancels active member writers and invalidates stale role checks on role change and removal", async () => {
+    const { rawSqlite, teamRouter } = await loadRuntime();
+    const { projectWriterAuthorizationEpoch, registerProjectWriter } = await import(
+      "../services/project-workspace-lifecycle.js"
+    );
+    seedProject(rawSqlite);
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO user
+           (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES ('member-1', 'Member', 'member@example.com', 1, 'member', ?, ?)`,
+      )
+      .run(now, now);
+    rawSqlite
+      .prepare(
+        `INSERT INTO project_members
+           (id, project_id, user_id, role, invited_by_user_id, created_at)
+         VALUES ('member-row', 'project-1', 'member-1', 'editor', 'owner-1', ?)`,
+      )
+      .run(now);
+    const app = teamApp(teamRouter);
+
+    const staleEpoch = projectWriterAuthorizationEpoch("project-1", "member-1");
+    const roleChangeCancel = vi.fn();
+    const releaseRoleWriter = registerProjectWriter("project-1", roleChangeCancel, {
+      userId: "member-1",
+      expectedEpoch: staleEpoch,
+    });
+    const patched = await app.request("/projects/project-1/members/member-row", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "client" }),
+    });
+    expect(patched.status).toBe(200);
+    expect(roleChangeCancel).toHaveBeenCalledOnce();
+    expect(
+      rawSqlite.prepare("SELECT role FROM project_members WHERE id = 'member-row'").get(),
+    ).toEqual({ role: "client" });
+    expect(() =>
+      registerProjectWriter("project-1", vi.fn(), {
+        userId: "member-1",
+        expectedEpoch: staleEpoch,
+      }),
+    ).toThrow("Project authorization changed");
+    releaseRoleWriter();
+
+    const freshEpoch = projectWriterAuthorizationEpoch("project-1", "member-1");
+    const removalCancel = vi.fn();
+    const releaseRemovalWriter = registerProjectWriter("project-1", removalCancel, {
+      userId: "member-1",
+      expectedEpoch: freshEpoch,
+    });
+    const removed = await app.request("/projects/project-1/members/member-row", {
+      method: "DELETE",
+    });
+    expect(removed.status).toBe(204);
+    expect(removalCancel).toHaveBeenCalledOnce();
+    expect(
+      rawSqlite
+        .prepare("SELECT count(*) AS count FROM project_members WHERE id = 'member-row'")
+        .get(),
+    ).toEqual({ count: 0 });
+    releaseRemovalWriter();
+  });
 });
