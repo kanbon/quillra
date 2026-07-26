@@ -20,10 +20,16 @@ import { SetupStatusScreen } from "@/components/organisms/setup/SetupStatusScree
 import { SigninStep } from "@/components/organisms/setup/SigninStep";
 import { StepIndicator } from "@/components/organisms/setup/StepIndicator";
 import { WelcomeStep } from "@/components/organisms/setup/WelcomeStep";
-import type { Step } from "@/components/organisms/setup/types";
+import type {
+  E2bVerificationFeedback,
+  E2bVerificationLog,
+  E2bVerificationStage,
+  E2bVerificationStageStatus,
+  Step,
+} from "@/components/organisms/setup/types";
 import { clearSetupGateCache } from "@/components/templates/SetupGate";
 import { useT } from "@/i18n/i18n";
-import { apiJson } from "@/lib/api";
+import { ApiError, apiJson } from "@/lib/api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -42,6 +48,88 @@ type StatusResponse =
       needsSetup: boolean;
       needsOwner: boolean;
     };
+
+const E2B_STAGE_STATUSES = new Set<E2bVerificationStageStatus>([
+  "pending",
+  "running",
+  "passed",
+  "failed",
+  "skipped",
+]);
+const E2B_LOG_LEVELS = new Set<E2bVerificationLog["level"]>([
+  "info",
+  "success",
+  "warning",
+  "error",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function boundedString(value: unknown, maxLength: number): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : undefined;
+}
+
+function parseE2bVerificationReport(value: unknown): {
+  failedStage?: string;
+  stages: E2bVerificationStage[];
+  logs: E2bVerificationLog[];
+} {
+  const rawVerification = isRecord(value) ? value : undefined;
+  const rawStages = Array.isArray(rawVerification?.stages) ? rawVerification.stages : [];
+  const stages: E2bVerificationStage[] = rawStages
+    .flatMap((candidate) => {
+      if (!isRecord(candidate)) return [];
+      const id = boundedString(candidate.id, 80);
+      const status = boundedString(candidate.status, 20) as E2bVerificationStageStatus | undefined;
+      if (!id || !status || !E2B_STAGE_STATUSES.has(status)) return [];
+      const message = boundedString(candidate.message, 500);
+      const detail = boundedString(candidate.detail, 1_000);
+      return [
+        {
+          id,
+          status,
+          ...(message ? { message } : {}),
+          ...(detail ? { detail } : {}),
+        },
+      ];
+    })
+    .slice(0, 40);
+  const rawLogs = Array.isArray(rawVerification?.logs) ? rawVerification.logs : [];
+  const logs: E2bVerificationLog[] = rawLogs
+    .flatMap((candidate) => {
+      if (!isRecord(candidate)) return [];
+      const level = boundedString(candidate.level, 20) as E2bVerificationLog["level"] | undefined;
+      const message = boundedString(candidate.message, 2_000);
+      if (!level || !message || !E2B_LOG_LEVELS.has(level)) return [];
+      return [{ level, message }];
+    })
+    .slice(0, 60);
+
+  const failedStage = boundedString(rawVerification?.failedStage, 80);
+  return {
+    ...(failedStage ? { failedStage } : {}),
+    stages,
+    logs,
+  };
+}
+
+function parseE2bVerificationFailure(
+  failure: unknown,
+  fallbackMessage: string,
+): E2bVerificationFeedback {
+  const payload = failure instanceof ApiError ? failure.payload : null;
+  const report = parseE2bVerificationReport(payload?.verification);
+  const code = failure instanceof ApiError ? boundedString(failure.code, 80) : undefined;
+  return {
+    phase: "error",
+    message:
+      boundedString(failure instanceof Error ? failure.message : undefined, 600) ?? fallbackMessage,
+    ...(code ? { code } : {}),
+    ...report,
+  };
+}
 
 export function SetupPage() {
   const { t } = useT();
@@ -65,6 +153,9 @@ export function SetupPage() {
   const [anthropicKey, setAnthropicKey] = useState("");
   const [e2bApiKey, setE2bApiKey] = useState("");
   const [e2bTemplateId, setE2bTemplateId] = useState("");
+  const [e2bVerification, setE2bVerification] = useState<E2bVerificationFeedback>({
+    phase: "idle",
+  });
   const [emailProvider, setEmailProvider] = useState<"none" | "resend" | "smtp">("none");
   const [emailFrom, setEmailFrom] = useState("");
   const [resendKey, setResendKey] = useState("");
@@ -229,14 +320,20 @@ export function SetupPage() {
     }
   }
 
-  async function handleSecureExecutionNext() {
+  async function handleSecureExecutionNext(templateIdOverride?: string) {
     if (saving) return;
     const previousTemplate = grantedStatus?.values.E2B_TEMPLATE_ID?.value ?? "";
     const apiKey = e2bApiKey.trim();
-    const templateId = e2bTemplateId.trim();
+    const templateId = (templateIdOverride ?? e2bTemplateId).trim();
 
     if (!apiKey && !e2bConfigured) {
-      setError(t("setup.secureExecution.keyRequired"));
+      setE2bVerification({
+        phase: "error",
+        message: t("setup.secureExecution.keyRequired"),
+        failedStage: "credentials",
+        stages: [{ id: "credentials", status: "failed" }],
+        logs: [],
+      });
       return;
     }
     if (!apiKey && e2bReady && templateId === previousTemplate) {
@@ -246,8 +343,13 @@ export function SetupPage() {
 
     setSaving(true);
     setError(null);
+    setE2bVerification({ phase: "running" });
     try {
-      const response = await apiJson<{ ok: true; status: GrantedStatus }>("/api/setup/e2b", {
+      const response = await apiJson<{
+        ok: true;
+        status: GrantedStatus;
+        verification?: unknown;
+      }>("/api/setup/e2b", {
         method: "POST",
         body: JSON.stringify({
           ...(apiKey ? { apiKey } : {}),
@@ -256,16 +358,30 @@ export function SetupPage() {
       });
       setStatus(response.status);
       setE2bApiKey("");
-      moveToStep("githubApp");
+      setE2bVerification({
+        phase: "success",
+        ...parseE2bVerificationReport(response.verification),
+      });
     } catch (verificationFailure) {
-      setError(
-        verificationFailure instanceof Error
-          ? verificationFailure.message
-          : t("setup.secureExecution.verifyFailed"),
+      setE2bVerification(
+        parseE2bVerificationFailure(verificationFailure, t("setup.secureExecution.verifyFailed")),
       );
     } finally {
       setSaving(false);
     }
+  }
+
+  function retrySecureExecutionWithBaseTemplate() {
+    setE2bTemplateId("");
+    void handleSecureExecutionNext("");
+  }
+
+  function keepExistingSecureExecution() {
+    if (!e2bReady) return;
+    setE2bApiKey("");
+    setE2bTemplateId(grantedStatus?.values.E2B_TEMPLATE_ID?.value ?? "");
+    setE2bVerification({ phase: "idle" });
+    moveToStep("githubApp");
   }
 
   // The GitHub App step has no "next" handler that saves fields, the
@@ -382,7 +498,7 @@ export function SetupPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
-      <main className="mx-auto w-full max-w-xl flex-1 px-4 py-8 sm:px-6 sm:py-14">
+      <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-8 sm:px-6 sm:py-14">
         <div className="mb-8 flex items-center gap-3 sm:mb-10">
           <LogoMark size={28} />
           <span className="font-brand text-xl font-bold tracking-tight text-ink">Quillra</span>
@@ -423,11 +539,24 @@ export function SetupPage() {
               )}
               verifiedAt={e2bVerifiedAt}
               saving={saving}
-              error={error}
-              onApiKeyChange={setE2bApiKey}
-              onTemplateIdChange={setE2bTemplateId}
+              verification={e2bVerification}
+              canKeepExisting={Boolean(
+                e2bReady &&
+                  (e2bApiKey.trim() ||
+                    e2bTemplateId.trim() !== (grantedStatus.values.E2B_TEMPLATE_ID?.value ?? "")),
+              )}
+              onApiKeyChange={(value) => {
+                setE2bApiKey(value);
+                setE2bVerification({ phase: "idle" });
+              }}
+              onTemplateIdChange={(value) => {
+                setE2bTemplateId(value);
+                setE2bVerification({ phase: "idle" });
+              }}
               onBack={() => moveToStep("anthropic")}
               onNext={handleSecureExecutionNext}
+              onRetryWithBaseTemplate={retrySecureExecutionWithBaseTemplate}
+              onKeepExisting={keepExistingSecureExecution}
             />
           )}
 

@@ -7,6 +7,11 @@ import {
   E2BSdkAdapter,
 } from "./e2b-adapter.js";
 import {
+  E2BTrustedEnvironmentError,
+  E2B_PREVIEW_RELAY_PORT,
+  assertE2BPreviewTargetPort,
+} from "./e2b-preview-relay.js";
+import {
   type E2BSyncLimits,
   E2B_PREVIEW_ROOT,
   E2B_WORKSPACE_ROOT,
@@ -14,6 +19,7 @@ import {
   syncLocalWorkspaceToE2B,
 } from "./e2b-workspace-sync.js";
 import { getInstanceSetting } from "./instance-settings.js";
+import { unregisterPreviewUpstream } from "./preview-upstream.js";
 
 const DEFAULT_TEMPLATE_ID = "base";
 const SANDBOX_TIMEOUT_MS = 15 * 60_000;
@@ -311,12 +317,6 @@ function validateCommandTimeout(timeoutMs: number | undefined): number {
   return value;
 }
 
-function validatePort(port: number): void {
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("Preview port must be an integer between 1 and 65535.");
-  }
-}
-
 function truncateUtf8(value: string, maxBytes = MAX_OUTPUT_BYTES_PER_STREAM): string {
   const encoded = Buffer.from(value, "utf8");
   if (encoded.byteLength <= maxBytes) return value;
@@ -428,7 +428,8 @@ export class E2BRuntime {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ entries: number; bytes: number }> {
     return this.runProjectOperation(fence, async () => {
-      const { sandbox } = await this.ensureConnected(fence, options.signal);
+      const { sandbox, record } = await this.ensureConnected(fence, options.signal);
+      await this.prepareForWorkspaceAccess(record, sandbox);
       return syncLocalWorkspaceToE2B({
         sandbox,
         localRoot,
@@ -445,7 +446,8 @@ export class E2BRuntime {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ entries: number; bytes: number }> {
     return this.runProjectOperation(fence, async () => {
-      const { sandbox } = await this.ensureConnected(fence, options.signal);
+      const { sandbox, record } = await this.ensureConnected(fence, options.signal);
+      await this.prepareForWorkspaceAccess(record, sandbox);
       return syncE2BWorkspaceToLocal({
         sandbox,
         localRoot,
@@ -470,7 +472,13 @@ export class E2BRuntime {
     return this.runProjectOperation(fence, async () => {
       const command = validateCommand(options.command);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
-      const { sandbox } = await this.ensureConnected(fence, options.signal);
+      const { sandbox, record } = await this.ensureConnected(fence, options.signal);
+
+      // A previous finite command or preview may have daemonized descendants.
+      // Never replace workspace bytes while any project-owned process can race
+      // the sync, and never leave the trusted ingress relay active for a
+      // command that is not an explicitly managed preview.
+      await this.prepareForWorkspaceAccess(record, sandbox);
       await syncLocalWorkspaceToE2B({
         sandbox,
         localRoot: options.localRoot,
@@ -479,17 +487,17 @@ export class E2BRuntime {
         signal: options.signal,
       });
 
-      const process = await sandbox.startCommand(command, {
-        cwd: E2B_WORKSPACE_ROOT,
-        timeoutMs,
-        signal: options.signal,
-        maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
-        onStdout: cappedForwarder(options.onStdout),
-        onStderr: cappedForwarder(options.onStderr),
-      });
       let result: E2BCommandResult | undefined;
       let executionError: unknown;
       try {
+        const process = await sandbox.startCommand(command, {
+          cwd: E2B_WORKSPACE_ROOT,
+          timeoutMs,
+          signal: options.signal,
+          maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
+          onStdout: cappedForwarder(options.onStdout),
+          onStderr: cappedForwarder(options.onStderr),
+        });
         result = await waitForProcess(process, options.signal);
       } catch (error) {
         executionError = error;
@@ -497,9 +505,14 @@ export class E2BRuntime {
 
       // Commands are the only remote primitive allowed to write back. Even a
       // non-zero/aborted command may have made useful edits.
-      // Reassert after process-group quiescence and immediately before reading
-      // remote bytes so a concurrent repository rebind cannot write stale
-      // sandbox content into the replacement checkout.
+      // Kill every project-UID process, including descendants that escaped the
+      // foreground process group, before inventory or writeback. A failure
+      // quarantines the sandbox and skips all remote reads.
+      await this.quiesceBeforeWriteback(record, sandbox);
+
+      // Reassert immediately before reading remote bytes so a concurrent
+      // repository rebind cannot write stale sandbox content into the
+      // replacement checkout.
       await this.store.assertFence(fence);
       await syncE2BWorkspaceToLocal({
         sandbox,
@@ -534,34 +547,44 @@ export class E2BRuntime {
     return this.runProjectOperation(fence, async () => {
       const command = validateCommand(options.command);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
-      validatePort(options.port);
+      assertE2BPreviewTargetPort(options.port);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
-      if (record.previewPid !== null) {
-        await sandbox.killProcess(record.previewPid, options.signal).catch(() => false);
-        this.store.setPreview(fence.projectId, sandbox.sandboxId, null);
-      }
+      let process: E2BProcess;
+      try {
+        // Kill every process owned by project code, including descendants that
+        // escaped the previously recorded process group, before any trusted
+        // public port is rebound.
+        await sandbox.quiesceProjectProcesses(options.signal);
+        if (record.previewPid !== null) {
+          this.store.setPreview(fence.projectId, sandbox.sandboxId, null);
+        }
 
-      // Preview has its own copy and dependency tree. It can never be synced
-      // back into the control-plane checkout.
-      await syncLocalWorkspaceToE2B({
-        sandbox,
-        localRoot: options.localRoot,
-        remoteRoot: E2B_PREVIEW_ROOT,
-        limits: this.syncLimits,
-        signal: options.signal,
-      });
-      const process = await sandbox.startCommand(command, {
-        cwd: E2B_PREVIEW_ROOT,
-        timeoutMs,
-        signal: options.signal,
-        maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
-        envs: {
-          HOST: "0.0.0.0",
-          PORT: String(options.port),
-        },
-        onStdout: cappedForwarder(options.onStdout),
-        onStderr: cappedForwarder(options.onStderr),
-      });
+        // Preview has its own copy and dependency tree. It can never be synced
+        // back into the control-plane checkout.
+        await syncLocalWorkspaceToE2B({
+          sandbox,
+          localRoot: options.localRoot,
+          remoteRoot: E2B_PREVIEW_ROOT,
+          limits: this.syncLimits,
+          signal: options.signal,
+        });
+        await sandbox.startPreviewRelay(options.port, options.signal);
+        process = await sandbox.startCommand(command, {
+          cwd: E2B_PREVIEW_ROOT,
+          timeoutMs,
+          signal: options.signal,
+          maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
+          envs: {
+            HOST: "127.0.0.1",
+            PORT: String(options.port),
+          },
+          onStdout: cappedForwarder(options.onStdout),
+          onStderr: cappedForwarder(options.onStderr),
+        });
+      } catch (error) {
+        await this.quarantinePreviewFailure(record, sandbox);
+        throw error;
+      }
       this.store.setPreview(fence.projectId, sandbox.sandboxId, {
         pid: process.pid,
         port: options.port,
@@ -577,13 +600,29 @@ export class E2BRuntime {
           }),
         )
         .then(async (result) => {
-          await options.onExit?.(result);
-          await this.runProjectOperation(fence, async () => {
-            const current = this.store.get(fence.projectId);
-            if (current?.sandboxId === sandbox.sandboxId && current.previewPid === process.pid) {
-              this.store.setPreview(fence.projectId, sandbox.sandboxId, null);
-            }
-          });
+          const exited = this.store.get(fence.projectId);
+          if (exited?.sandboxId === sandbox.sandboxId && exited.previewPid === process.pid) {
+            // Revoke the traffic token route before user callbacks or remote
+            // cleanup can block.
+            unregisterPreviewUpstream(fence.projectId);
+          }
+          try {
+            await options.onExit?.(result);
+          } finally {
+            await this.runProjectOperation(fence, async () => {
+              const current = this.store.get(fence.projectId);
+              if (current?.sandboxId !== sandbox.sandboxId || current.previewPid !== process.pid) {
+                return;
+              }
+              try {
+                await sandbox.quiesceProjectProcesses();
+                await sandbox.stopPreviewRelay();
+                this.store.setPreview(fence.projectId, sandbox.sandboxId, null);
+              } catch {
+                await this.quarantinePreviewFailure(current, sandbox);
+              }
+            });
+          }
         })
         .catch(() => undefined);
       return { pid: process.pid, port: options.port };
@@ -594,20 +633,56 @@ export class E2BRuntime {
     return this.runProjectOperation(fence, async () => {
       await this.store.assertFence(fence);
       const record = this.store.get(fence.projectId);
-      if (!record?.previewPid) return;
+      if (!record) return;
+      // Revocation is synchronous and must precede any provider call: a failed
+      // reconnect can itself block while attempting cleanup.
+      unregisterPreviewUpstream(record.projectId);
       const config = this.configProvider();
+      let sandbox: E2BSandboxHandle;
       try {
-        const sandbox = await this.adapter.connect(record.sandboxId, {
+        sandbox = await this.adapter.connect(record.sandboxId, {
           apiKey: config.apiKey,
           timeoutMs: config.sandboxTimeoutMs,
           requestTimeoutMs: config.requestTimeoutMs,
           signal: options.signal,
         });
-        await sandbox.killProcess(record.previewPid, options.signal).catch(() => false);
       } catch (error) {
-        if (!this.adapter.isNotFound(error)) throw error;
-        this.store.delete(record.projectId, record.sandboxId);
-        return;
+        if (this.adapter.isNotFound(error)) {
+          this.store.delete(record.projectId, record.sandboxId);
+          return;
+        }
+        if (error instanceof E2BTrustedEnvironmentError) {
+          if (error.cleanupStatus === "confirmed") {
+            this.store.delete(record.projectId, record.sandboxId);
+            return;
+          }
+          // The adapter could not confirm that its failed bootstrap sandbox is
+          // gone. Retain the record so a later cleanup can retry it.
+          this.store.setPreview(record.projectId, record.sandboxId, null);
+          throw error;
+        }
+        throw error;
+      }
+
+      try {
+        await sandbox.quiesceProjectProcesses(options.signal);
+      } catch (error) {
+        const cleanupStatus = await this.discardUnsafeSandbox(record, sandbox);
+        if (cleanupStatus === "confirmed") return;
+        throw new E2BTrustedEnvironmentError(
+          error instanceof E2BTrustedEnvironmentError ? error.stage : "project-quiesce",
+          "failed",
+        );
+      }
+      try {
+        await sandbox.stopPreviewRelay(options.signal);
+      } catch (error) {
+        const cleanupStatus = await this.discardUnsafeSandbox(record, sandbox);
+        if (cleanupStatus === "confirmed") return;
+        throw new E2BTrustedEnvironmentError(
+          error instanceof E2BTrustedEnvironmentError ? error.stage : "relay-stop",
+          "failed",
+        );
       }
       this.store.setPreview(record.projectId, record.sandboxId, null);
     });
@@ -619,13 +694,16 @@ export class E2BRuntime {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ origin: string; headers: { "e2b-traffic-access-token": string } }> {
     return this.runProjectOperation(fence, async () => {
-      validatePort(port);
-      const { sandbox } = await this.ensureConnected(fence, options.signal);
+      assertE2BPreviewTargetPort(port);
+      const { sandbox, record } = await this.ensureConnected(fence, options.signal);
+      if (record.previewPid === null || record.previewPort !== port) {
+        throw new Error("The requested E2B preview is not active.");
+      }
       if (!sandbox.trafficAccessToken) {
         throw new Error("E2B did not return a protected public-traffic token.");
       }
       return {
-        origin: `https://${sandbox.getHost(port)}`,
+        origin: `https://${sandbox.getHost(E2B_PREVIEW_RELAY_PORT)}`,
         headers: {
           "e2b-traffic-access-token": sandbox.trafficAccessToken,
         },
@@ -645,6 +723,7 @@ export class E2BRuntime {
       await this.store.assertFence(fence);
       const record = this.store.get(fence.projectId);
       if (!record) return;
+      unregisterPreviewUpstream(record.projectId);
       const config = this.configProvider();
       try {
         await this.adapter.destroy(record.sandboxId, {
@@ -674,6 +753,7 @@ export class E2BRuntime {
     }
     const failures: Error[] = [];
     for (const record of records) {
+      unregisterPreviewUpstream(record.projectId);
       try {
         await this.adapter.destroy(record.sandboxId, {
           apiKey,
@@ -727,6 +807,7 @@ export class E2BRuntime {
       (record.githubBindingGeneration !== fence.githubBindingGeneration ||
         record.templateId !== config.templateId)
     ) {
+      unregisterPreviewUpstream(record.projectId);
       try {
         await this.adapter.destroy(record.sandboxId, {
           apiKey: config.apiKey,
@@ -741,6 +822,10 @@ export class E2BRuntime {
     }
 
     if (record) {
+      // `connect()` re-runs the trusted bootstrap and may wait for a failed
+      // sandbox cleanup. Remove the in-memory token route before entering that
+      // potentially blocking provider operation.
+      unregisterPreviewUpstream(record.projectId);
       try {
         const sandbox = await this.adapter.connect(record.sandboxId, {
           apiKey: config.apiKey,
@@ -751,6 +836,16 @@ export class E2BRuntime {
         await this.ensureRemoteRoots(sandbox, signal);
         return { sandbox, record };
       } catch (error) {
+        if (error instanceof E2BTrustedEnvironmentError) {
+          if (error.cleanupStatus === "confirmed") {
+            this.store.delete(record.projectId, record.sandboxId);
+          } else {
+            // A failed cleanup is materially different from a confirmed
+            // provider "not found". Keep the identifier for a later retry.
+            this.store.setPreview(record.projectId, record.sandboxId, null);
+          }
+          throw error;
+        }
         if (!this.adapter.isNotFound(error)) throw error;
         this.store.delete(record.projectId, record.sandboxId);
       }
@@ -786,6 +881,94 @@ export class E2BRuntime {
   private async ensureRemoteRoots(sandbox: E2BSandboxHandle, signal?: AbortSignal): Promise<void> {
     await sandbox.makeDir(E2B_WORKSPACE_ROOT, signal);
     await sandbox.makeDir(E2B_PREVIEW_ROOT, signal);
+  }
+
+  private async quarantinePreviewFailure(
+    record: E2BProjectSandboxRecord,
+    sandbox: E2BSandboxHandle,
+  ): Promise<void> {
+    unregisterPreviewUpstream(record.projectId);
+    try {
+      await sandbox.quiesceProjectProcesses();
+      await sandbox.stopPreviewRelay();
+      this.store.setPreview(record.projectId, record.sandboxId, null);
+      record.previewPid = null;
+      record.previewPort = null;
+    } catch {
+      await this.discardUnsafeSandbox(record, sandbox);
+    }
+  }
+
+  /**
+   * Establishes a stable workspace snapshot boundary. Mandatory containment
+   * deliberately ignores the caller's AbortSignal: cancellation must not be
+   * able to leave project processes racing a trusted filesystem operation.
+   */
+  private async prepareForWorkspaceAccess(
+    record: E2BProjectSandboxRecord,
+    sandbox: E2BSandboxHandle,
+  ): Promise<void> {
+    unregisterPreviewUpstream(record.projectId);
+    try {
+      await sandbox.quiesceProjectProcesses();
+    } catch (error) {
+      await this.throwContainedFailure(record, sandbox, "project-quiesce", error);
+    }
+    try {
+      await sandbox.stopPreviewRelay();
+    } catch (error) {
+      await this.throwContainedFailure(record, sandbox, "relay-stop", error);
+    }
+    this.store.setPreview(record.projectId, record.sandboxId, null);
+    record.previewPid = null;
+    record.previewPort = null;
+  }
+
+  private async quiesceBeforeWriteback(
+    record: E2BProjectSandboxRecord,
+    sandbox: E2BSandboxHandle,
+  ): Promise<void> {
+    try {
+      await sandbox.quiesceProjectProcesses();
+    } catch (error) {
+      await this.throwContainedFailure(record, sandbox, "project-quiesce", error);
+    }
+  }
+
+  private async throwContainedFailure(
+    record: E2BProjectSandboxRecord,
+    sandbox: E2BSandboxHandle,
+    fallbackStage: "project-quiesce" | "relay-stop",
+    error: unknown,
+  ): Promise<never> {
+    const cleanupStatus = await this.discardUnsafeSandbox(record, sandbox);
+    throw new E2BTrustedEnvironmentError(
+      error instanceof E2BTrustedEnvironmentError ? error.stage : fallbackStage,
+      cleanupStatus,
+    );
+  }
+
+  /**
+   * E2B documents both `true` (killed) and `false` (already absent) as
+   * confirmed terminal outcomes. Only a rejected kill is unconfirmed.
+   */
+  private async discardUnsafeSandbox(
+    record: E2BProjectSandboxRecord,
+    sandbox: E2BSandboxHandle,
+  ): Promise<"confirmed" | "failed"> {
+    // This must happen before `kill()`: provider cleanup can time out or reject,
+    // but no request may continue carrying the sandbox traffic token.
+    unregisterPreviewUpstream(record.projectId);
+    try {
+      await sandbox.kill();
+      this.store.delete(record.projectId, record.sandboxId);
+      return "confirmed";
+    } catch {
+      // Disable routing immediately, but retain the sandbox id so cleanup can
+      // be retried rather than losing track of a potentially live sandbox.
+      this.store.setPreview(record.projectId, record.sandboxId, null);
+      return "failed";
+    }
   }
 }
 

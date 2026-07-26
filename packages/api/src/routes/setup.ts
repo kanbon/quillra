@@ -42,7 +42,11 @@ import {
   verifyServerAccessSession,
   verifyServerAccessToken,
 } from "../lib/server-access.js";
-import { E2bConfigurationError, configureE2b } from "../services/e2b-configuration.js";
+import {
+  E2bConfigurationError,
+  configureE2b,
+  invalidE2bConfigurationVerification,
+} from "../services/e2b-configuration.js";
 import { exchangeManifestCode, isGithubAppConfigured } from "../services/github-app.js";
 import {
   SETTABLE_KEYS,
@@ -254,21 +258,36 @@ export const setupRouter = new Hono<{ Variables: Variables }>()
     const body = await c.req.json().catch(() => null);
     const parsed = e2bConfigurationSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: "Enter a valid E2B API key and optional template ID." }, 400);
+      return c.json(
+        {
+          error: "Enter a valid E2B API key and optional template ID.",
+          code: "invalid-configuration",
+          verification: invalidE2bConfigurationVerification(),
+        },
+        400,
+      );
     }
     try {
-      const e2b = await configureE2b(parsed.data);
+      const configured = await configureE2b(parsed.data);
       return c.json({
         ok: true,
-        e2b,
+        e2b: configured.status,
+        verification: configured.verification,
         status: { ...getSetupStatus(), access: "granted" as const },
       });
     } catch (error) {
       if (error instanceof E2bConfigurationError) {
         const status = error.code === "missing-api-key" ? 400 : 502;
         return status === 400
-          ? c.json({ error: error.message }, 400)
-          : c.json({ error: error.message }, 502);
+          ? c.json({ error: error.message, code: error.code }, 400)
+          : c.json(
+              {
+                error: error.message,
+                code: error.code,
+                ...(error.verification ? { verification: error.verification } : {}),
+              },
+              502,
+            );
       }
       return c.json({ error: "E2B configuration could not be verified." }, 502);
     }

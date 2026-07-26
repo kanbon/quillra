@@ -25,7 +25,7 @@ class FakeSandbox implements E2BSandboxHandle {
 
   constructor() {
     this.nodes.set("/home", { type: "dir", mode: 0o755 });
-    this.nodes.set("/home/user", { type: "dir", mode: 0o755 });
+    this.nodes.set("/home/quillra-project", { type: "dir", mode: 0o700 });
   }
 
   addDir(target: string): void {
@@ -127,6 +127,10 @@ class FakeSandbox implements E2BSandboxHandle {
     }
   }
 
+  prepareExecutionEnvironment = vi.fn(async () => undefined);
+  quiesceProjectProcesses = vi.fn(async () => undefined);
+  startPreviewRelay = vi.fn(async () => undefined);
+  stopPreviewRelay = vi.fn(async () => undefined);
   startCommand = vi.fn();
   killProcess = vi.fn(async () => false);
   getHost = vi.fn(() => "sandbox.e2b.app");

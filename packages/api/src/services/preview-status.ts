@@ -60,6 +60,15 @@ export function isPreviewPortActive(projectId: string, port: number): boolean {
   return activeProjects.has(projectId) && portByProject.get(projectId) === port;
 }
 
+/**
+ * An active local reservation is not enough: E2B routing is deliberately
+ * revoked before every reconnect/isolation proof. Without an upstream, the UI
+ * must restart the preview instead of waiting forever on a stale PID.
+ */
+export function isPreviewRoutable(projectId: string, port: number): boolean {
+  return isPreviewPortActive(projectId, port) && previewUpstreamUrl(projectId, port, "/") !== null;
+}
+
 export function getPortByProject(projectId: string): number | undefined {
   return portByProject.get(projectId);
 }

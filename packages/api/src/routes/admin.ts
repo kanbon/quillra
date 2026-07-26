@@ -13,6 +13,7 @@ import {
   E2bConfigurationError,
   configureE2b,
   getE2bConfigurationStatus,
+  invalidE2bConfigurationVerification,
   resetE2b,
 } from "../services/e2b-configuration.js";
 import { renderInviteEmail } from "../services/email-templates.js";
@@ -298,16 +299,35 @@ export const adminRouter = new Hono<{ Variables: Variables }>()
     const body = await c.req.json().catch(() => null);
     const parsed = e2bConfigurationSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: "Enter a valid E2B API key and optional template ID." }, 400);
+      return c.json(
+        {
+          error: "Enter a valid E2B API key and optional template ID.",
+          code: "invalid-configuration",
+          verification: invalidE2bConfigurationVerification(),
+        },
+        400,
+      );
     }
     try {
-      return c.json({ ok: true, e2b: await configureE2b(parsed.data) });
+      const configured = await configureE2b(parsed.data);
+      return c.json({
+        ok: true,
+        e2b: configured.status,
+        verification: configured.verification,
+      });
     } catch (error) {
       if (error instanceof E2bConfigurationError) {
         const status = error.code === "missing-api-key" ? 400 : 502;
         return status === 400
-          ? c.json({ error: error.message }, 400)
-          : c.json({ error: error.message }, 502);
+          ? c.json({ error: error.message, code: error.code }, 400)
+          : c.json(
+              {
+                error: error.message,
+                code: error.code,
+                ...(error.verification ? { verification: error.verification } : {}),
+              },
+              502,
+            );
       }
       return c.json({ error: "E2B configuration could not be verified." }, 502);
     }

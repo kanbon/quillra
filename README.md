@@ -124,7 +124,7 @@ server: E2B supplies one isolated execution sandbox per project.
 | `QUILLRA_SETUP_TOKEN` | Optional operator-chosen token that protects first-run setup and no-email recovery |
 | `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
 | `PREVIEW_DOMAIN` | Dedicated wildcard parent domain for router-correct live previews |
-| `E2B_API_KEY` | Required credential for isolated project execution; normally entered in first-run setup |
+| `E2B_API_KEY` | A standard E2B API key for isolated project execution; normally entered in first-run setup |
 | `E2B_TEMPLATE_ID` | Optional custom E2B template with the runtimes your projects need |
 | `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK in the control plane; normally entered in first-run setup |
 | `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`; configured in first-run setup |
@@ -133,9 +133,11 @@ On Railway, only the public domain, one persistent volume, and three generated
 control-plane secrets are needed before boot. The first browser visit collects
 the E2B and Anthropic keys, creates and installs the GitHub App, configures
 optional email, and creates the owner account. Quillra creates a temporary E2B
-sandbox, runs a fixed command, and verifies that private-host traffic requires
-E2B's token while the sandbox process itself cannot read that token. Execution
-is enabled only after the sandbox is removed successfully.
+sandbox, bootstraps separate locked OS users for project code and Quillra's
+trusted ingress relay, and runs a fixed live probe. E2B must validate the
+private-host traffic token; the relay then strips it before forwarding the
+request to project code. A normal E2B API key is sufficient. Execution is
+enabled only after the probe succeeds and the sandbox is removed successfully.
 
 GitHub App credentials, Resend / SMTP keys, usage limits, alert email, and
 `INSTANCE_*` Impressum fields remain configurable from Organization Settings.
@@ -167,9 +169,11 @@ without repository-specific base-path changes. The initial URL carries a
 short-lived, one-use handoff that the gateway atomically exchanges for a
 different host-bound HttpOnly preview session before removing the query
 parameter. Wildcard DNS and TLS terminate at Quillra's validating gateway. The
-gateway connects to the project's private E2B preview endpoint and adds the E2B
-traffic token server-side, so neither the provider URL nor its credential
-reaches the browser. A dedicated same-site subdomain
+gateway connects to the project's private E2B ingress relay and adds the E2B
+traffic token server-side. E2B validates that token, then Quillra's trusted
+relay strips it before forwarding to the project server, so neither the
+browser nor project code receives the credential. There is no direct-to-project
+ingress fallback. A dedicated same-site subdomain
 (for example, `cms.example.com` with `preview.example.com`) has the broadest
 browser-cookie compatibility. A separate registrable domain adds isolation but
 depends on browser support for partitioned third-party cookies. Local
@@ -183,10 +187,12 @@ preview URLs as secrets.
 
 The Quillra container never runs repository-defined shell commands, dependency
 installers, lifecycle scripts, or preview servers. Those processes run only in
-the E2B sandbox assigned to that project. There is no local execution fallback:
-if E2B is missing, unverified, or unavailable, Quillra fails the operation
-closed. Anthropic, GitHub, auth, email, encryption, and E2B credentials remain
-in the control plane and are never supplied as sandbox environment variables.
+the E2B sandbox assigned to that project, under the locked project OS user
+that Quillra creates separately from its relay user. There is no local
+execution fallback: if E2B or the trusted relay is missing, unverified, or
+unavailable, Quillra fails the operation closed. Anthropic, GitHub, auth, email,
+encryption, and E2B credentials remain in the control plane and are never
+supplied as project environment variables.
 
 **Server prerequisites:** Docker Engine with Compose, Git, OpenSSL, a text
 editor, and curl for the health check. Caddy or another TLS reverse proxy is

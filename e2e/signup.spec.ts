@@ -107,10 +107,18 @@ test("a fresh production install supports owner, collaborator, and client signup
   const unexpectedExternalHosts = await blockExternalRequests(page);
   const browserErrors: string[] = [];
   let intentionallyFailingSession = false;
+  let intentionallyFailingE2b = false;
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const location = message.location().url;
     if (intentionallyFailingSession && location.includes("/api/session")) return;
+    if (
+      intentionallyFailingE2b &&
+      message.text().includes("Failed to load resource") &&
+      message.text().includes("502")
+    ) {
+      return;
+    }
     browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
@@ -148,7 +156,6 @@ test("a fresh production install supports owner, collaborator, and client signup
   await page.getByRole("button", { name: "Continue securely" }).click();
   await expect(welcomeHeading).toBeVisible();
   await expect(welcomeHeading).toBeFocused();
-  await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.getByRole("button", { name: "Get started" }).click();
   const anthropicHeading = page.getByRole("heading", { name: "Anthropic API key" });
@@ -161,7 +168,96 @@ test("a fresh production install supports owner, collaborator, and client signup
   await expect(secureExecutionHeading).toBeVisible();
   await expect(page.getByText(/A key is configured and never returned/i)).toBeVisible();
   await expect(page.getByLabel("E2B API key")).toHaveValue("");
-  await page.getByRole("button", { name: "Continue" }).click();
+  let failedE2bVerificationAttempts = 0;
+  await page.route("**/api/setup/e2b", async (route) => {
+    failedE2bVerificationAttempts += 1;
+    await route.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: "The private preview route did not pass the isolation check.",
+        code: "verification-failed",
+        verification: {
+          failedStage: "protected-ingress",
+          stages: [
+            { id: "credentials", status: "passed" },
+            { id: "sandbox-create", status: "passed" },
+            { id: "prerequisite", status: "passed" },
+            {
+              id: "protected-ingress",
+              status: "failed",
+              message: "The protected route did not meet the required policy.",
+              detail:
+                'Provider detail {"authorization":"Bearer e2b_secret_that_must_not_render"} escaped={\\"trafficAccessToken\\":\\"opaque-traffic-secret\\"} Authorization: Basic Zm9vOmJhcg== apiKey=plain-secret',
+            },
+            { id: "cleanup", status: "passed" },
+          ],
+          logs: [
+            { level: "success", message: "Test sandbox created." },
+            {
+              level: "error",
+              message:
+                "Private ingress policy check failed. clientSecret=another-secret x-access-token: token-value",
+            },
+            {
+              level: "error",
+              message: `${"x".repeat(1_970)} apiKey="truncated-secret-without-closing-quote`,
+            },
+            {
+              level: "error",
+              message:
+                'Multiline clientSecret="first-secret-line\nsecond-secret-line" Authorization: Digest username="admin", response="digest-secret" Bearer abcd~remaining-secret',
+            },
+            { level: "success", message: "Test sandbox removed." },
+          ],
+        },
+      }),
+    });
+  });
+  await page.getByLabel("E2B API key").fill("e2b_e2e_replacement_key");
+  intentionallyFailingE2b = true;
+  await page.getByRole("button", { name: "Verify and enable" }).click();
+  await expect(page.getByText("One security check needs attention")).toBeVisible();
+  await expect(
+    page.getByText("The private preview route did not pass the isolation check.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry check" })).toBeFocused();
+  await expect(page.locator("p").filter({ hasText: "Provider detail" })).toContainText(
+    "[redacted]",
+  );
+  for (const secret of [
+    "e2b_secret_that_must_not_render",
+    "opaque-traffic-secret",
+    "Zm9vOmJhcg==",
+    "plain-secret",
+    "another-secret",
+    "token-value",
+    "truncated-secret",
+    "first-secret-line",
+    "second-secret-line",
+    "digest-secret",
+    "remaining-secret",
+  ]) {
+    await expect(page.getByText(secret, { exact: false })).toHaveCount(0);
+  }
+  await expect(
+    page.getByText(/Project code will not run in the application container/),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+  await page.getByText("Advanced error logs").click();
+  await expect(page.getByText(/\[failed-stage\] protected-ingress/)).toBeVisible();
+  await expect(page.getByText(/\[error\] Private ingress policy check failed/)).toBeVisible();
+  await page.getByRole("button", { name: "Retry check" }).click();
+  await expect.poll(() => failedE2bVerificationAttempts).toBe(2);
+  await expect(page.getByRole("button", { name: "Retry check" })).toBeFocused();
+  await page.getByRole("button", { name: "Keep verified setup" }).click();
+  intentionallyFailingE2b = false;
+  await page.unroute("**/api/setup/e2b");
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   await expect(page.getByRole("heading", { name: "GitHub App" })).toBeVisible();
   const seededSmtp = await page.request.post("/api/setup/save", {
@@ -190,7 +286,39 @@ test("a fresh production install supports owner, collaborator, and client signup
   await expect(secureExecutionHeading).toBeVisible();
   await expect(page.getByText(/A key is configured and never returned/i)).toBeVisible();
   await expect(page.getByLabel("E2B API key")).toHaveValue("");
+  const readySetupStatus = await page.request.get("/api/setup/status");
+  expect(readySetupStatus.ok()).toBe(true);
+  const readySetupPayload = await readySetupStatus.json();
+  await page.route("**/api/setup/e2b", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        status: readySetupPayload,
+        verification: {
+          stages: [
+            { id: "provider", status: "passed" },
+            { id: "sandbox", status: "passed" },
+            { id: "prerequisite", status: "passed" },
+            { id: "relay", status: "passed" },
+            { id: "traffic-server", status: "passed" },
+            { id: "protected-ingress", status: "passed" },
+            { id: "payload", status: "passed" },
+            { id: "unauthenticated-access", status: "passed" },
+            { id: "cleanup", status: "passed" },
+          ],
+          logs: [{ level: "success", message: "Secure E2B verification passed." }],
+        },
+      }),
+    });
+  });
+  await page.getByLabel("E2B API key").fill("e2b_e2e_success_key");
+  await page.getByRole("button", { name: "Verify and enable" }).click();
+  await expect(page.getByRole("heading", { name: "GitHub App" })).not.toBeVisible();
+  await expect(page.getByText("Passed", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
+  await page.unroute("**/api/setup/e2b");
 
   await expect(page.getByRole("heading", { name: "GitHub App" })).toBeVisible();
   await expect(page.getByText("GitHub credentials found.")).toBeVisible();

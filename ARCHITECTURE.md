@@ -28,6 +28,8 @@ Four pieces make that work:
    MCP tool routes approved commands to the current project's sandbox. Command
    output is captured remotely with hard byte limits and returned after the
    command exits; untrusted output never streams into an unbounded SDK buffer.
+   Quillra bootstraps separate locked OS users for project processes and its
+   trusted preview ingress relay.
 
 Everything else is supporting infrastructure: auth, email, billing limits,
 the first-run setup wizard, and the GitHub App that lets us push without
@@ -173,7 +175,9 @@ creates or reconnects to that project's E2B sandbox and mirrors the permitted
 workspace files into it. `.git`, `node_modules`, Quillra temporary state,
 symbolic links, special entries, unsafe paths, and snapshots over the configured
 limits do not cross the boundary. Command changes are synchronized back through
-the same validation. Project sandboxes are not shared.
+the same validation. Project sandboxes are not shared. Repository-defined
+commands run under the locked project OS user; they do not run as the trusted
+relay user.
 
 The preview server runs inside E2B. The user's browser talks to it only through
 Quillra's capability-authenticated host gateway. Its opaque per-project hostname
@@ -181,22 +185,26 @@ keeps the browser path identical to the sandbox dev-server path, which makes SPA
 history, root-relative resources, and HMR WebSockets framework-transparent.
 An initial 60-second handoff is consumed once and exchanged for a separate
 HttpOnly session bound to the exact host, project, and port. The gateway
-connects to the private E2B host and injects its traffic access token
-server-side. Quillra does not disclose the provider URL, although untrusted
-preview code can reflect its upstream hostname. That hostname is not a
-credential; the traffic token is removed before project code and is never
-exposed to the browser.
+connects to the private E2B relay endpoint and injects its traffic access token
+server-side. E2B validates that token, then Quillra's trusted in-sandbox relay
+strips it before forwarding the request to the project server. Quillra does not
+disclose the provider URL, although untrusted preview code can reflect its
+upstream hostname. That hostname is not a credential; the traffic token is
+never exposed to the browser or project code.
 The browser renders the preview origin inside a restricted iframe.
 Installations without wildcard DNS retain a compatibility path proxy with the
 known limitations that a browser router can still observe its mount prefix and
 that its longer-lived access bearer remains in rewritten preview URLs. Host
 mode is the security-recommended production configuration.
 
-E2B execution is fail-closed. The service does not enable it until a browser
-setup request has created, probed, and removed a temporary sandbox. There is no
-automatic local execution mode if the key, template, sandbox, or provider is
-unavailable. The control plane does not copy Anthropic, GitHub, auth, mail,
-encryption, or E2B secrets into a sandbox environment.
+E2B execution is fail-closed. A normal E2B API key is sufficient, but the
+service does not enable it until a browser setup request has created a
+temporary sandbox, bootstrapped the locked project and relay users,
+validated the relay path, and removed the sandbox. There is no direct ingress
+path to the project server and no automatic local execution mode if the key,
+template, sandbox, relay, or provider is unavailable. The control plane does
+not copy Anthropic, GitHub, auth, mail, encryption, or E2B secrets into a
+project environment.
 
 Git operations are serialised per project with an in-process mutex because
 concurrent chat turns used to race on `.git/index.lock`. Before and after every

@@ -1,15 +1,29 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { Sandbox } from "e2b";
+import {
+  AuthenticationError,
+  NotFoundError,
+  RateLimitError,
+  TemplateError,
+  TimeoutError,
+} from "e2b";
+import { type E2BProcess, type E2BSandboxHandle, E2BSdkAdapter } from "./e2b-adapter.js";
+import {
+  E2BTrustedEnvironmentError,
+  E2B_PREVIEW_RELAY_PORT,
+  E2B_PROJECT_HOME,
+} from "./e2b-preview-relay.js";
 
 const PROBE_OUTPUT = "quillra-e2b-ok";
 const TRAFFIC_ACCESS_HEADER = "e2b-traffic-access-token";
-const TRAFFIC_PROBE_PORT = 49_177;
+const TRAFFIC_PROBE_PORT = 6_317;
 const PROBE_SANDBOX_TIMEOUT_MS = 60_000;
 const PROBE_REQUEST_TIMEOUT_MS = 20_000;
 const PROBE_COMMAND_TIMEOUT_MS = 10_000;
 const PROBE_HTTP_TIMEOUT_MS = 5_000;
 const PROBE_READY_TIMEOUT_MS = 15_000;
 const PROBE_HTTP_BODY_LIMIT_BYTES = 4 * 1024;
+const PROBE_PUBLIC_HOST = "verification.quillra.invalid";
+const PROBE_PUBLIC_ORIGIN = `https://${PROBE_PUBLIC_HOST}`;
 const REQUIRED_RUNTIME_TOOLS = [
   "/bin/bash",
   "/bin/rm",
@@ -17,6 +31,7 @@ const REQUIRED_RUNTIME_TOOLS = [
   "/usr/bin/cat",
   "/usr/bin/dd",
   "/usr/bin/head",
+  "/usr/bin/id",
   "/usr/bin/kill",
   "/usr/bin/mkfifo",
   "/usr/bin/python3",
@@ -32,15 +47,26 @@ const PREREQUISITE_PROBE_SCRIPT = [
   `for quillra_tool in ${REQUIRED_RUNTIME_TOOLS.join(" ")}; do`,
   '  [ -x "$quillra_tool" ]',
   "done",
+  '[ "$(/usr/bin/id -u)" -ne 0 ]',
   `/usr/bin/python3 -I -S -c 'import base64,http.server,json,os,stat,sys;sys.stdout.write("${PROBE_OUTPUT}")'`,
 ].join("\n");
 const PREREQUISITE_PROBE_COMMAND = `/bin/bash -c ${shellQuote(PREREQUISITE_PROBE_SCRIPT)}`;
 const TRAFFIC_PROBE_SCRIPT = [
-  "import http.server,json",
+  "import http.server,json,os",
   "class Handler(http.server.BaseHTTPRequestHandler):",
   " def do_GET(self):",
-  `  present=any(name.lower()=="${TRAFFIC_ACCESS_HEADER}" for name in self.headers)`,
-  '  body=json.dumps({"trafficHeaderPresent":present},separators=(",",":")).encode()',
+  "  headers={name.lower():value for name,value in self.headers.items()}",
+  "  body=json.dumps({",
+  `   "trafficHeaderPresent":"${TRAFFIC_ACCESS_HEADER}" in headers,`,
+  '   "relayMetadataPresent":any(name.startswith("x-quillra-relay-") for name in headers),',
+  '   "host":headers.get("host"),',
+  '   "origin":headers.get("origin"),',
+  '   "forwardedHost":headers.get("x-forwarded-host"),',
+  '   "forwardedProto":headers.get("x-forwarded-proto"),',
+  '   "forwardedPort":headers.get("x-forwarded-port"),',
+  '   "uid":os.getuid(),',
+  '   "gid":os.getgid(),',
+  '  },separators=(",",":")).encode()',
   "  self.send_response(200)",
   '  self.send_header("content-type","application/json")',
   '  self.send_header("content-length",str(len(body)))',
@@ -48,34 +74,150 @@ const TRAFFIC_PROBE_SCRIPT = [
   "  self.wfile.write(body)",
   " def log_message(self,*args):",
   "  pass",
-  `http.server.ThreadingHTTPServer(("0.0.0.0",${TRAFFIC_PROBE_PORT}),Handler).serve_forever()`,
+  `http.server.ThreadingHTTPServer(("127.0.0.1",${TRAFFIC_PROBE_PORT}),Handler).serve_forever()`,
 ].join("\n");
-const TRAFFIC_PROBE_PROCESS = `/usr/bin/python3 -I -S -c ${shellQuote(TRAFFIC_PROBE_SCRIPT)}`;
-const TRAFFIC_PROBE_COMMAND = `/usr/bin/setsid --fork /bin/bash -c ${shellQuote(`exec ${TRAFFIC_PROBE_PROCESS}`)} </dev/null >/dev/null 2>&1`;
+const TRAFFIC_PROBE_COMMAND = `/usr/bin/python3 -I -S -c ${shellQuote(TRAFFIC_PROBE_SCRIPT)}`;
 
 export type E2bVerificationInput = {
   apiKey: string;
   templateId?: string;
 };
 
-type VerificationSandbox = {
-  trafficAccessToken?: string;
-  getHost(port: number): string;
-  commands: {
-    run(
-      command: string,
-      options: { timeoutMs: number },
-    ): Promise<{ exitCode: number; stdout: string }>;
-  };
-  kill(options: { requestTimeoutMs: number }): Promise<boolean>;
+export type E2bVerificationStageStatus = "pending" | "running" | "passed" | "failed" | "skipped";
+
+export type E2bVerificationStage = {
+  id: string;
+  status: E2bVerificationStageStatus;
+  message?: string;
+  detail?: string;
 };
+
+export type E2bVerificationLog = {
+  level: "info" | "success" | "warning" | "error";
+  message: string;
+};
+
+export type E2bVerificationReport = {
+  failedStage?: string;
+  stages: E2bVerificationStage[];
+  logs: E2bVerificationLog[];
+};
+
+const VERIFICATION_STAGE_DEFINITIONS = [
+  { id: "provider", message: "Connect to E2B" },
+  { id: "sandbox", message: "Create an isolated sandbox" },
+  { id: "prerequisite", message: "Check the secure runtime" },
+  { id: "relay", message: "Start the private preview relay" },
+  { id: "traffic-server", message: "Start the isolated test service" },
+  { id: "protected-ingress", message: "Check authenticated private ingress" },
+  { id: "payload", message: "Confirm credentials stay outside project code" },
+  { id: "unauthenticated-access", message: "Reject unauthenticated preview traffic" },
+  { id: "cleanup", message: "Remove the test sandbox" },
+] as const;
+
+type VerificationStageId = (typeof VERIFICATION_STAGE_DEFINITIONS)[number]["id"];
+
+class VerificationReportBuilder {
+  private readonly startedAt = Date.now();
+  private readonly stageById = new Map<VerificationStageId, E2bVerificationStage>(
+    VERIFICATION_STAGE_DEFINITIONS.map((stage) => [
+      stage.id,
+      { ...stage, status: "pending" as const },
+    ]),
+  );
+  private readonly logs: E2bVerificationLog[] = [];
+  private failedStage: VerificationStageId | undefined;
+
+  start(id: VerificationStageId, detail?: string): void {
+    this.update(id, "running", detail);
+    this.note("info", `${this.stageLabel(id)} started.`);
+  }
+
+  pass(id: VerificationStageId, detail?: string): void {
+    this.update(id, "passed", detail);
+    this.note("success", `${this.stageLabel(id)} passed${detail ? `: ${detail}` : "."}`);
+  }
+
+  fail(id: VerificationStageId, detail?: string): void {
+    this.failedStage = id;
+    this.update(id, "failed", detail);
+    this.note("error", `${this.stageLabel(id)} failed${detail ? `: ${detail}` : "."}`);
+  }
+
+  note(level: E2bVerificationLog["level"], message: string): void {
+    const elapsedSeconds = ((Date.now() - this.startedAt) / 1_000).toFixed(1);
+    this.logs.push({ level, message: `${elapsedSeconds}s ${message}` });
+  }
+
+  activeStage(): VerificationStageId | undefined {
+    return [...this.stageById].find(([, stage]) => stage.status === "running")?.[0];
+  }
+
+  skipPending(except: VerificationStageId[] = []): void {
+    const preserved = new Set(except);
+    for (const [id, stage] of this.stageById) {
+      if (stage.status === "pending" && !preserved.has(id)) {
+        this.stageById.set(id, { ...stage, status: "skipped" });
+      }
+    }
+  }
+
+  report(failedStage = this.failedStage): E2bVerificationReport {
+    return {
+      ...(failedStage ? { failedStage } : {}),
+      stages: VERIFICATION_STAGE_DEFINITIONS.map(({ id }) => ({
+        ...(this.stageById.get(id) as E2bVerificationStage),
+      })),
+      logs: [...this.logs],
+    };
+  }
+
+  private update(
+    id: VerificationStageId,
+    status: E2bVerificationStageStatus,
+    detail?: string,
+  ): void {
+    const current = this.stageById.get(id);
+    if (!current) return;
+    this.stageById.set(id, {
+      ...current,
+      status,
+      ...(detail ? { detail } : {}),
+    });
+  }
+
+  private stageLabel(id: VerificationStageId): string {
+    return this.stageById.get(id)?.message ?? id;
+  }
+}
+
+type VerificationSandbox = Pick<
+  E2BSandboxHandle,
+  | "trafficAccessToken"
+  | "prepareExecutionEnvironment"
+  | "startPreviewRelay"
+  | "startCommand"
+  | "getHost"
+  | "kill"
+>;
 
 export type E2bSandboxFactory = (input: E2bVerificationInput) => Promise<VerificationSandbox>;
 
+class VerificationProbeFailure extends Error {
+  constructor(
+    readonly stage: VerificationStageId,
+    readonly safeDetail: string,
+  ) {
+    super("The fixed E2B verification probe failed.");
+    this.name = "VerificationProbeFailure";
+  }
+}
+
 export class E2bVerificationError extends Error {
   readonly code: "unavailable" | "probe-failed" | "cleanup-failed";
+  readonly verification: E2bVerificationReport;
 
-  constructor(code: E2bVerificationError["code"]) {
+  constructor(code: E2bVerificationError["code"], verification?: E2bVerificationReport) {
     const message =
       code === "cleanup-failed"
         ? "The E2B test sandbox could not be removed. Try again before saving."
@@ -85,32 +227,85 @@ export class E2bVerificationError extends Error {
     super(message);
     this.name = "E2bVerificationError";
     this.code = code;
+    this.verification = verification ?? { stages: [], logs: [] };
   }
 }
 
-const createVerificationSandbox: E2bSandboxFactory = async ({ apiKey, templateId }) => {
-  const options = {
+const createVerificationSandbox: E2bSandboxFactory = async ({ apiKey, templateId }) =>
+  new E2BSdkAdapter().create({
     apiKey,
+    templateId: templateId?.trim() || "base",
+    projectId: "configuration-check",
     timeoutMs: PROBE_SANDBOX_TIMEOUT_MS,
     requestTimeoutMs: PROBE_REQUEST_TIMEOUT_MS,
-    lifecycle: { onTimeout: "kill" as const },
-    secure: true,
+    lifecycle: { onTimeout: "kill" },
     allowInternetAccess: false,
-    network: { allowPublicTraffic: false },
-    metadata: { purpose: "quillra-configuration-check" },
-  };
-  return templateId ? Sandbox.create(templateId, options) : Sandbox.create(options);
-};
+  });
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+function trustedEnvironmentStage(error: E2BTrustedEnvironmentError): VerificationStageId {
+  return error.stage === "bootstrap" || error.stage === "project-isolation"
+    ? "prerequisite"
+    : "relay";
+}
+
+function trustedEnvironmentDetail(error: E2BTrustedEnvironmentError): string {
+  switch (error.stage) {
+    case "bootstrap":
+      return "The selected template is missing a locked-user or relay prerequisite.";
+    case "project-isolation":
+      return "The project process did not satisfy the non-root isolation policy.";
+    case "relay-target":
+      return "The fixed preview target port was rejected.";
+    case "relay-ready":
+      return "The private relay did not become ready before the bounded timeout.";
+    default:
+      return "The trusted preview relay could not be prepared safely.";
+  }
+}
+
+function providerFailureDetail(error: unknown): string {
+  if (error instanceof AuthenticationError) {
+    return "E2B rejected the API credential.";
+  }
+  if (error instanceof NotFoundError || error instanceof TemplateError) {
+    return "The selected E2B template was not found or is incompatible.";
+  }
+  if (error instanceof RateLimitError) {
+    return "E2B rate-limited the verification request. Wait briefly and retry.";
+  }
+  if (error instanceof TimeoutError) {
+    return "E2B did not finish sandbox creation before the bounded timeout.";
+  }
+  return "The E2B provider request failed without exposing its response.";
+}
+
+function assertProbeCommandResult(
+  result: { exitCode: number; stdout: string },
+  stage: VerificationStageId,
+): void {
+  if (result.exitCode !== 0) {
+    throw new VerificationProbeFailure(stage, `Fixed command exited with code ${result.exitCode}.`);
+  }
+  if (result.stdout !== PROBE_OUTPUT) {
+    throw new VerificationProbeFailure(stage, "Fixed command returned an unexpected marker.");
+  }
+}
+
+async function readBoundedJson(response: Response, stage: VerificationStageId): Promise<unknown> {
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") {
+    throw new VerificationProbeFailure(stage, "Protected endpoint did not return JSON.");
+  }
   const declaredLength = response.headers.get("content-length");
   if (
     declaredLength !== null &&
     (!/^\d+$/.test(declaredLength) || Number(declaredLength) > PROBE_HTTP_BODY_LIMIT_BYTES)
   ) {
-    throw new E2bVerificationError("probe-failed");
+    throw new VerificationProbeFailure(stage, "Protected response exceeded the safe size limit.");
   }
-  if (!response.body) throw new E2bVerificationError("probe-failed");
+  if (!response.body) {
+    throw new VerificationProbeFailure(stage, "Protected endpoint returned an empty response.");
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -123,31 +318,75 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       bytesRead += chunk.value.byteLength;
       if (bytesRead > PROBE_HTTP_BODY_LIMIT_BYTES) {
         await reader.cancel().catch(() => undefined);
-        throw new E2bVerificationError("probe-failed");
+        throw new VerificationProbeFailure(
+          stage,
+          "Protected response exceeded the safe size limit.",
+        );
       }
       text += decoder.decode(chunk.value, { stream: true });
     }
     text += decoder.decode();
     return JSON.parse(text) as unknown;
   } catch (error) {
-    if (error instanceof E2bVerificationError) throw error;
-    throw new E2bVerificationError("probe-failed");
+    if (error instanceof VerificationProbeFailure) throw error;
+    throw new VerificationProbeFailure(stage, "Protected endpoint returned invalid JSON.");
   } finally {
     reader.releaseLock();
   }
 }
 
-async function fetchProtectedTrafficProbe(sandbox: VerificationSandbox): Promise<void> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function validateProbePayload(value: unknown): void {
+  if (
+    !isRecord(value) ||
+    value.trafficHeaderPresent !== false ||
+    value.relayMetadataPresent !== false ||
+    !Number.isSafeInteger(value.uid) ||
+    Number(value.uid) <= 0 ||
+    !Number.isSafeInteger(value.gid) ||
+    Number(value.gid) <= 0 ||
+    value.host !== PROBE_PUBLIC_HOST ||
+    value.origin !== PROBE_PUBLIC_ORIGIN ||
+    value.forwardedHost !== PROBE_PUBLIC_HOST ||
+    value.forwardedProto !== "https" ||
+    value.forwardedPort !== "443"
+  ) {
+    throw new VerificationProbeFailure(
+      "payload",
+      "Project code observed credentials, unsafe forwarding metadata, or a privileged identity.",
+    );
+  }
+}
+
+async function fetchProtectedTrafficProbe(
+  sandbox: VerificationSandbox,
+  report: VerificationReportBuilder,
+): Promise<void> {
   const token = sandbox.trafficAccessToken?.trim();
-  if (!token) throw new E2bVerificationError("probe-failed");
-  const url = `https://${sandbox.getHost(TRAFFIC_PROBE_PORT)}/`;
+  if (!token) {
+    throw new VerificationProbeFailure(
+      "protected-ingress",
+      "E2B did not issue a private traffic credential.",
+    );
+  }
+  const url = `https://${sandbox.getHost(E2B_PREVIEW_RELAY_PORT)}/`;
   const deadline = Date.now() + PROBE_READY_TIMEOUT_MS;
   let protectedResponse: Response | undefined;
 
+  report.start("protected-ingress");
   while (Date.now() < deadline) {
     try {
       const response = await fetch(url, {
-        headers: { [TRAFFIC_ACCESS_HEADER]: token },
+        headers: {
+          [TRAFFIC_ACCESS_HEADER]: token,
+          "x-quillra-relay-host": PROBE_PUBLIC_HOST,
+          "x-quillra-relay-origin": PROBE_PUBLIC_ORIGIN,
+          "x-quillra-relay-port": "443",
+          "x-quillra-relay-proto": "https",
+        },
         redirect: "manual",
         signal: AbortSignal.timeout(PROBE_HTTP_TIMEOUT_MS),
       });
@@ -155,77 +394,179 @@ async function fetchProtectedTrafficProbe(sandbox: VerificationSandbox): Promise
         protectedResponse = response;
         break;
       }
+      await response.body?.cancel().catch(() => undefined);
     } catch {
-      // The fixed server may still be starting. Retry only within the bounded
-      // readiness window; the overall sandbox timeout remains the final guard.
+      // The project service may still be starting. Retry only within the
+      // bounded readiness window and never expose the provider response.
     }
     await delay(200);
   }
-  if (!protectedResponse) throw new E2bVerificationError("probe-failed");
-
-  const payload = (await readBoundedJson(protectedResponse)) as {
-    trafficHeaderPresent?: unknown;
-  } | null;
-  if (payload?.trafficHeaderPresent !== false) {
-    throw new E2bVerificationError("probe-failed");
+  if (!protectedResponse) {
+    throw new VerificationProbeFailure(
+      "protected-ingress",
+      "No successful protected response arrived before the bounded timeout.",
+    );
   }
+  report.pass("protected-ingress", `Protected endpoint returned HTTP ${protectedResponse.status}.`);
 
-  let unauthenticatedResponse: Response;
+  report.start("payload");
+  const payload = await readBoundedJson(protectedResponse, "payload");
+  validateProbePayload(payload);
+  report.pass(
+    "payload",
+    "Project code ran non-root and received neither provider credentials nor relay metadata.",
+  );
+
+  report.start("unauthenticated-access");
+  let missingResponse: Response;
+  let incorrectResponse: Response;
   try {
-    unauthenticatedResponse = await fetch(url, {
+    missingResponse = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(PROBE_HTTP_TIMEOUT_MS),
+    });
+    incorrectResponse = await fetch(url, {
+      headers: { [TRAFFIC_ACCESS_HEADER]: "quillra-invalid-traffic-credential" },
       redirect: "manual",
       signal: AbortSignal.timeout(PROBE_HTTP_TIMEOUT_MS),
     });
   } catch {
-    throw new E2bVerificationError("probe-failed");
+    throw new VerificationProbeFailure(
+      "unauthenticated-access",
+      "A bounded unauthenticated request could not be evaluated.",
+    );
   }
-  if (unauthenticatedResponse.ok) {
-    throw new E2bVerificationError("probe-failed");
+  if (missingResponse.ok || incorrectResponse.ok) {
+    throw new VerificationProbeFailure(
+      "unauthenticated-access",
+      "Private ingress accepted a missing or incorrect traffic credential.",
+    );
   }
+  await missingResponse.body?.cancel().catch(() => undefined);
+  await incorrectResponse.body?.cancel().catch(() => undefined);
+  report.pass(
+    "unauthenticated-access",
+    `Missing and incorrect credentials were rejected with HTTP ${missingResponse.status} and ${incorrectResponse.status}.`,
+  );
 }
 
 /**
- * Prove that both the credential and optional template work by creating an
- * isolated, network-closed sandbox and running fixed probes. The HTTP probe
- * also proves that E2B protects private hosts and strips its traffic credential
- * before the request reaches project code. The API key is passed only as an SDK
- * option, never as a sandbox environment variable.
+ * Prove the key and optional template by creating an isolated, network-closed
+ * sandbox and exercising the same trusted relay used by project previews.
+ * E2B validates the public traffic credential; Quillra's separate relay user
+ * removes it before forwarding to non-root project code on loopback.
  */
 export async function verifyE2bConfiguration(
   input: E2bVerificationInput,
   createSandbox: E2bSandboxFactory = createVerificationSandbox,
-): Promise<void> {
+): Promise<E2bVerificationReport> {
+  const report = new VerificationReportBuilder();
   let sandbox: VerificationSandbox | undefined;
-  let verificationFailure: E2bVerificationError | undefined;
+  let trafficProcess: E2BProcess | undefined;
+  let verificationFailure:
+    | { code: "unavailable" | "probe-failed"; stage: VerificationStageId; detail: string }
+    | undefined;
+  let adapterCleanupStatus: "confirmed" | "failed" | undefined;
 
   try {
+    report.start("provider");
     sandbox = await createSandbox(input);
-    const result = await sandbox.commands.run(PREREQUISITE_PROBE_COMMAND, {
+    report.pass("provider", "The API key and template were accepted.");
+    report.pass("sandbox", "The isolated test sandbox started.");
+
+    report.start("prerequisite");
+    await sandbox.prepareExecutionEnvironment();
+    const prerequisiteProcess = await sandbox.startCommand(PREREQUISITE_PROBE_COMMAND, {
+      cwd: E2B_PROJECT_HOME,
       timeoutMs: PROBE_COMMAND_TIMEOUT_MS,
+      maxOutputBytes: 1_024,
     });
-    if (result.exitCode !== 0 || result.stdout !== PROBE_OUTPUT) {
-      throw new E2bVerificationError("probe-failed");
-    }
-    const server = await sandbox.commands.run(TRAFFIC_PROBE_COMMAND, {
-      timeoutMs: PROBE_COMMAND_TIMEOUT_MS,
+    const prerequisiteResult = await prerequisiteProcess.wait();
+    assertProbeCommandResult(prerequisiteResult, "prerequisite");
+    report.pass(
+      "prerequisite",
+      `Locked non-root project user and ${REQUIRED_RUNTIME_TOOLS.length} fixed tools verified.`,
+    );
+
+    report.start("relay");
+    await sandbox.startPreviewRelay(TRAFFIC_PROBE_PORT);
+    report.pass(
+      "relay",
+      `Root-installed relay is listening on the fixed public port ${E2B_PREVIEW_RELAY_PORT}.`,
+    );
+
+    report.start("traffic-server");
+    trafficProcess = await sandbox.startCommand(TRAFFIC_PROBE_COMMAND, {
+      cwd: E2B_PROJECT_HOME,
+      timeoutMs: PROBE_SANDBOX_TIMEOUT_MS,
+      maxOutputBytes: 1_024,
     });
-    if (server.exitCode !== 0) throw new E2bVerificationError("probe-failed");
-    await fetchProtectedTrafficProbe(sandbox);
+    report.pass(
+      "traffic-server",
+      `Non-root test service was started on loopback port ${TRAFFIC_PROBE_PORT}.`,
+    );
+
+    await fetchProtectedTrafficProbe(sandbox, report);
   } catch (error) {
-    verificationFailure =
-      error instanceof E2bVerificationError
-        ? error
-        : new E2bVerificationError(sandbox ? "probe-failed" : "unavailable");
+    let stage = report.activeStage() ?? (sandbox ? "prerequisite" : "provider");
+    let detail = "The bounded verification operation did not complete.";
+    let code: "unavailable" | "probe-failed" = sandbox ? "probe-failed" : "unavailable";
+
+    if (error instanceof VerificationProbeFailure) {
+      stage = error.stage;
+      detail = error.safeDetail;
+      code = "probe-failed";
+    } else if (error instanceof E2BTrustedEnvironmentError) {
+      stage = trustedEnvironmentStage(error);
+      detail = trustedEnvironmentDetail(error);
+      code = "probe-failed";
+      if (!sandbox) {
+        // This sanitized adapter error is only emitted after E2B created the
+        // sandbox and attempted trusted bootstrapping. The adapter removes it
+        // before propagating the error.
+        report.pass("provider", "The API key and template were accepted.");
+        report.pass("sandbox", "The isolated test sandbox started.");
+        adapterCleanupStatus = error.cleanupStatus;
+      }
+    } else if (!sandbox) {
+      detail = providerFailureDetail(error);
+    }
+
+    report.fail(stage, detail);
+    verificationFailure = { code, stage, detail };
   }
 
   if (sandbox) {
+    report.start("cleanup");
+    await trafficProcess?.kill().catch(() => false);
     try {
-      const removed = await sandbox.kill({ requestTimeoutMs: PROBE_REQUEST_TIMEOUT_MS });
-      if (!removed) throw new Error("E2B did not confirm sandbox removal.");
+      // E2B returns false when the sandbox is already absent. Both resolved
+      // boolean values are confirmed terminal states; only rejection leaves
+      // cleanup unconfirmed.
+      await sandbox.kill();
+      report.pass("cleanup", "E2B confirmed removal of the test sandbox.");
     } catch {
-      throw new E2bVerificationError("cleanup-failed");
+      report.fail("cleanup", "E2B did not confirm removal of the test sandbox.");
+      report.skipPending();
+      throw new E2bVerificationError("cleanup-failed", report.report("cleanup"));
     }
+  } else if (adapterCleanupStatus) {
+    report.start("cleanup");
+    if (adapterCleanupStatus === "confirmed") {
+      report.pass("cleanup", "E2B confirmed removal of the test sandbox.");
+    } else {
+      report.fail("cleanup", "E2B did not confirm removal of the test sandbox.");
+      report.skipPending();
+      throw new E2bVerificationError("cleanup-failed", report.report("cleanup"));
+    }
+  } else {
+    report.skipPending();
   }
 
-  if (verificationFailure) throw verificationFailure;
+  if (verificationFailure) {
+    report.skipPending();
+    throw new E2bVerificationError(verificationFailure.code, report.report());
+  }
+  report.skipPending();
+  return report.report();
 }
