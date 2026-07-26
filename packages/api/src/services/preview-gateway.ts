@@ -226,10 +226,11 @@ export function createPreviewGateway<RawWebSocket>(
         const projectCookie = sanitized.get("cookie");
         const headers: Record<string, string> = {
           ...upstreamAccess.headers,
-          origin: new URL(upstreamAccess.url).origin.replace(/^wss:/, "https:"),
-          "x-forwarded-host": new URL(access.publicUrl).host,
-          "x-forwarded-proto": config.protocol.slice(0, -1),
+          "x-quillra-relay-host": new URL(access.publicUrl).host,
+          "x-quillra-relay-origin": new URL(access.publicUrl).origin,
+          "x-quillra-relay-proto": config.protocol.slice(0, -1),
         };
+        if (config.port) headers["x-quillra-relay-port"] = config.port;
         if (projectCookie) headers.cookie = projectCookie;
 
         upstream = new UpstreamWebSocket(upstreamAccess.url, protocols, {
@@ -410,11 +411,11 @@ export function createPreviewGateway<RawWebSocket>(
       headers.set(name, value);
     }
     headers.set("accept-encoding", "identity");
-    headers.set("x-forwarded-host", publicUrl.host);
-    headers.set("x-forwarded-proto", config.protocol.slice(0, -1));
-    if (config.port) headers.set("x-forwarded-port", config.port);
+    headers.set("x-quillra-relay-host", publicUrl.host);
+    headers.set("x-quillra-relay-proto", config.protocol.slice(0, -1));
+    if (config.port) headers.set("x-quillra-relay-port", config.port);
     if (c.req.raw.headers.has("origin")) {
-      headers.set("origin", new URL(upstreamAccess.url).origin);
+      headers.set("x-quillra-relay-origin", publicUrl.origin);
     }
     if (c.req.header("service-worker")?.toLowerCase() === "script") {
       return c.text("Service workers are disabled in previews", 403);

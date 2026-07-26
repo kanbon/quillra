@@ -1,4 +1,6 @@
 import { Input } from "@/components/atoms/Input";
+import { E2bVerificationCheck } from "@/components/organisms/setup/E2bVerificationCheck";
+import type { E2bVerificationFeedback } from "@/components/organisms/setup/types";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 
@@ -10,11 +12,14 @@ type Props = {
   needsVerification: boolean;
   verifiedAt?: string;
   saving: boolean;
-  error: string | null;
+  verification: E2bVerificationFeedback;
+  canKeepExisting: boolean;
   onApiKeyChange: (value: string) => void;
   onTemplateIdChange: (value: string) => void;
   onBack: () => void;
   onNext: () => void;
+  onRetryWithBaseTemplate: () => void;
+  onKeepExisting: () => void;
 };
 
 export function SecureExecutionStep({
@@ -25,11 +30,14 @@ export function SecureExecutionStep({
   needsVerification,
   verifiedAt,
   saving,
-  error,
+  verification,
+  canKeepExisting,
   onApiKeyChange,
   onTemplateIdChange,
   onBack,
   onNext,
+  onRetryWithBaseTemplate,
+  onKeepExisting,
 }: Props) {
   const { t } = useT();
   const canSubmit = Boolean(apiKey.trim() || configured);
@@ -105,7 +113,7 @@ export function SecureExecutionStep({
         </div>
       </div>
 
-      <div className="mt-5 space-y-4">
+      <div className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1.45fr)_minmax(13rem,0.8fr)]">
         <div>
           <label
             htmlFor="setup-e2b-key"
@@ -166,7 +174,7 @@ export function SecureExecutionStep({
         </div>
       </div>
 
-      {enabled && (
+      {enabled && !needsVerification && (
         <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800">
           {verifiedDate
             ? t("setup.secureExecution.verifiedAt", {
@@ -176,17 +184,27 @@ export function SecureExecutionStep({
         </p>
       )}
 
+      {enabled && needsVerification && (
+        <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900">
+          {t("setup.secureExecution.pendingChanges")}
+        </p>
+      )}
+
       {!configured && !apiKey.trim() && (
         <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900">
           {t("setup.secureExecution.requiredWarning")}
         </p>
       )}
 
-      {error && (
-        <p className="mt-3 text-sm text-red-600" role="alert">
-          {error}
-        </p>
-      )}
+      <E2bVerificationCheck
+        feedback={verification}
+        enabled={enabled && !needsVerification}
+        hasCustomTemplate={Boolean(templateId.trim() && templateId.trim().toLowerCase() !== "base")}
+        canKeepExisting={canKeepExisting}
+        onRetry={onNext}
+        onRetryWithBaseTemplate={onRetryWithBaseTemplate}
+        onKeepExisting={onKeepExisting}
+      />
 
       <div className="mt-6 flex items-center justify-between">
         <button
@@ -197,23 +215,25 @@ export function SecureExecutionStep({
         >
           {t("common.back")}
         </button>
-        <button
-          type="submit"
-          disabled={saving || !canSubmit}
-          className={cn(
-            "inline-flex h-10 items-center rounded-lg px-5 text-[13px] font-semibold shadow-sm",
-            needsVerification
-              ? "bg-sky-700 text-white hover:bg-sky-800"
-              : "bg-neutral-900 text-white hover:bg-neutral-800",
-            (saving || !canSubmit) && "cursor-not-allowed opacity-50",
-          )}
-        >
-          {saving
-            ? t("setup.secureExecution.verifying")
-            : needsVerification
-              ? t("setup.secureExecution.verifyAndEnable")
-              : t("common.continue")}
-        </button>
+        {verification.phase !== "error" && (
+          <button
+            type="submit"
+            disabled={saving || !canSubmit}
+            className={cn(
+              "inline-flex h-10 items-center rounded-lg px-5 text-[13px] font-semibold shadow-sm",
+              needsVerification
+                ? "bg-sky-700 text-white hover:bg-sky-800"
+                : "bg-neutral-900 text-white hover:bg-neutral-800",
+              (saving || !canSubmit) && "cursor-not-allowed opacity-50",
+            )}
+          >
+            {saving
+              ? t("setup.secureExecution.verifying")
+              : needsVerification
+                ? t("setup.secureExecution.verifyAndEnable")
+                : t("common.continue")}
+          </button>
+        )}
       </div>
     </form>
   );

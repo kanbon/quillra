@@ -9,13 +9,14 @@ const sync = vi.hoisted(() => ({
 }));
 
 vi.mock("./e2b-workspace-sync.js", () => ({
-  E2B_WORKSPACE_ROOT: "/home/user/quillra-workspace",
-  E2B_PREVIEW_ROOT: "/home/user/quillra-preview",
+  E2B_WORKSPACE_ROOT: "/home/quillra-project/quillra-workspace",
+  E2B_PREVIEW_ROOT: "/home/quillra-project/quillra-preview",
   syncLocalWorkspaceToE2B: sync.to,
   syncE2BWorkspaceToLocal: sync.from,
 }));
 
 import type { E2BAdapter, E2BCommandResult, E2BProcess, E2BSandboxHandle } from "./e2b-adapter.js";
+import { E2BTrustedEnvironmentError } from "./e2b-preview-relay.js";
 import {
   type E2BProjectFence,
   E2BProjectFenceError,
@@ -23,6 +24,11 @@ import {
   type E2BProjectSandboxStore,
   E2BRuntime,
 } from "./e2b-runtime.js";
+import {
+  getPreviewUpstream,
+  registerPreviewUpstream,
+  unregisterPreviewUpstream,
+} from "./preview-upstream.js";
 
 class MemoryStore implements E2BProjectSandboxStore {
   readonly records = new Map<string, E2BProjectSandboxRecord>();
@@ -84,6 +90,10 @@ function fakeSandbox(processResult?: Promise<E2BCommandResult>): E2BSandboxHandl
   return {
     sandboxId: "sandbox-a",
     trafficAccessToken: "traffic-a",
+    prepareExecutionEnvironment: vi.fn(async () => undefined),
+    quiesceProjectProcesses: vi.fn(async () => undefined),
+    startPreviewRelay: vi.fn(async () => undefined),
+    stopPreviewRelay: vi.fn(async () => undefined),
     list: vi.fn(async () => []),
     getInfo: vi.fn(),
     readFileChunk: vi.fn(),
@@ -94,7 +104,7 @@ function fakeSandbox(processResult?: Promise<E2BCommandResult>): E2BSandboxHandl
     rename: vi.fn(async () => undefined),
     startCommand: vi.fn(async () => process),
     killProcess: vi.fn(async () => false),
-    getHost: vi.fn(() => "4321-sandbox.e2b.app"),
+    getHost: vi.fn((port: number) => `${port}-sandbox.e2b.app`),
     pause: vi.fn(async () => true),
     kill: vi.fn(async () => true),
   };
@@ -129,6 +139,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  unregisterPreviewUpstream("project-a");
   await rm(localRoot, { recursive: true, force: true });
 });
 
@@ -173,6 +184,120 @@ describe("E2B runtime", () => {
     expect(sync.from).not.toHaveBeenCalled();
   });
 
+  it("quiesces daemons and disables preview ingress before sync and again before writeback", async () => {
+    const commandDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox(commandDone.promise);
+    const { runtime, store } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.ensureProject(fence);
+    store.setPreview(fence.projectId, sandbox.sandboxId, { pid: 99, port: 4_321 });
+    vi.clearAllMocks();
+
+    const execution = runtime.runCommand(fence, {
+      localRoot,
+      command: "build-and-daemonize",
+    });
+    await vi.waitFor(() => expect(sandbox.startCommand).toHaveBeenCalledOnce());
+
+    expect(store.get(fence.projectId)?.previewPid).toBeNull();
+    expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
+    expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
+    const firstQuiesce =
+      vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[0] ?? 0;
+    const relayStop = vi.mocked(sandbox.stopPreviewRelay).mock.invocationCallOrder[0] ?? 0;
+    const syncTo = sync.to.mock.invocationCallOrder[0] ?? 0;
+    const commandStart = vi.mocked(sandbox.startCommand).mock.invocationCallOrder[0] ?? 0;
+    expect(firstQuiesce).toBeLessThan(relayStop);
+    expect(relayStop).toBeLessThan(syncTo);
+    expect(syncTo).toBeLessThan(commandStart);
+
+    commandDone.resolve({ exitCode: 0, stdout: "done", stderr: "" });
+    await expect(execution).resolves.toMatchObject({ exitCode: 0, stdout: "done" });
+
+    expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledTimes(2);
+    const secondQuiesce =
+      vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[1] ?? 0;
+    const syncFrom = sync.from.mock.invocationCallOrder[0] ?? 0;
+    expect(commandStart).toBeLessThan(secondQuiesce);
+    expect(secondQuiesce).toBeLessThan(syncFrom);
+  });
+
+  it("quarantines the sandbox and skips writeback when descendant quiescence fails", async () => {
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.quiesceProjectProcesses)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("untrusted provider detail"));
+    const { runtime, store } = runtimeFixture(sandbox);
+
+    await expect(
+      runtime.runCommand(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        { localRoot, command: "start-background-child" },
+      ),
+    ).rejects.toMatchObject({
+      name: "E2BTrustedEnvironmentError",
+      stage: "project-quiesce",
+      cleanupStatus: "confirmed",
+    });
+
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+    expect(sync.from).not.toHaveBeenCalled();
+    expect(store.get("project-a")).toBeNull();
+  });
+
+  it("revokes the traffic-token route before a failed reconnect cleanup settles", async () => {
+    const sandbox = fakeSandbox();
+    const { runtime, adapter } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.ensureProject(fence);
+    registerPreviewUpstream(fence.projectId, 4_321, {
+      origin: "https://733-sandbox.e2b.app",
+      headers: { "e2b-traffic-access-token": "must-be-revoked" },
+    });
+
+    const cleanupPending = deferred<void>();
+    const connectEntered = deferred<void>();
+    vi.mocked(adapter.connect).mockImplementationOnce(async () => {
+      connectEntered.resolve();
+      await cleanupPending.promise;
+      throw new E2BTrustedEnvironmentError("project-isolation", "failed");
+    });
+
+    const reconnect = runtime.ensureProject(fence);
+    await connectEntered.promise;
+    expect(getPreviewUpstream(fence.projectId, 4_321)).toBeNull();
+
+    cleanupPending.resolve();
+    await expect(reconnect).rejects.toMatchObject({
+      name: "E2BTrustedEnvironmentError",
+      cleanupStatus: "failed",
+    });
+  });
+
+  it("stabilizes a direct workspace sync and clears stale preview state first", async () => {
+    const sandbox = fakeSandbox();
+    const { runtime, store } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.ensureProject(fence);
+    store.setPreview(fence.projectId, sandbox.sandboxId, { pid: 99, port: 4_321 });
+    vi.clearAllMocks();
+
+    sync.to.mockImplementationOnce(async () => {
+      expect(store.get(fence.projectId)?.previewPid).toBeNull();
+      return { entries: 1, bytes: 1 };
+    });
+    await runtime.syncToSandbox(fence, localRoot);
+
+    expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
+    expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
+    expect(vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.stopPreviewRelay).mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(vi.mocked(sandbox.stopPreviewRelay).mock.invocationCallOrder[0]).toBeLessThan(
+      sync.to.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
   it("runs preview from its isolated copy, never writes it back, and reports exit", async () => {
     const previewDone = deferred<E2BCommandResult>();
     const sandbox = fakeSandbox(previewDone.promise);
@@ -189,30 +314,88 @@ describe("E2B runtime", () => {
       },
     );
     expect(sync.to).toHaveBeenCalledWith(
-      expect.objectContaining({ remoteRoot: "/home/user/quillra-preview" }),
+      expect.objectContaining({ remoteRoot: "/home/quillra-project/quillra-preview" }),
     );
     expect(sync.from).not.toHaveBeenCalled();
+    expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
+    expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(4_321, undefined);
+    expect(vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.startPreviewRelay).mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(vi.mocked(sandbox.startPreviewRelay).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.startCommand).mock.invocationCallOrder[0] ?? 0,
+    );
     expect(sandbox.startCommand).toHaveBeenCalledWith(
       "npm run dev",
       expect.objectContaining({
-        cwd: "/home/user/quillra-preview",
-        envs: { HOST: "0.0.0.0", PORT: "4321" },
+        cwd: "/home/quillra-project/quillra-preview",
+        envs: { HOST: "127.0.0.1", PORT: "4321" },
       }),
     );
 
     const result = { exitCode: 2, stdout: "", stderr: "failed" };
     previewDone.resolve(result);
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(result));
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
     expect(sync.from).not.toHaveBeenCalled();
   });
 
-  it("returns only the protected E2B upstream credential", async () => {
-    const { runtime } = runtimeFixture();
-    await expect(
-      runtime.getPreviewAccess({ projectId: "project-a", githubBindingGeneration: 1 }, 4_321),
-    ).resolves.toEqual({
-      origin: "https://4321-sandbox.e2b.app",
+  it("returns only the protected E2B credential for the fixed trusted relay", async () => {
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox(previewDone.promise);
+    const { runtime } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.startPreview(fence, {
+      localRoot,
+      command: "npm run dev",
+      port: 4_321,
+    });
+
+    await expect(runtime.getPreviewAccess(fence, 4_321)).resolves.toEqual({
+      origin: "https://733-sandbox.e2b.app",
       headers: { "e2b-traffic-access-token": "traffic-a" },
     });
+    expect(sandbox.getHost).toHaveBeenCalledWith(733);
+    await expect(runtime.getPreviewAccess(fence, 4_322)).rejects.toThrow(
+      "requested E2B preview is not active",
+    );
+    previewDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+  });
+
+  it("quiesces project descendants before stopping the relay even without a recorded PID", async () => {
+    const { runtime, store, sandbox } = runtimeFixture();
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.ensureProject(fence);
+    expect(store.get(fence.projectId)?.previewPid).toBeNull();
+
+    await runtime.stopPreview(fence);
+
+    expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
+    expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
+    expect(vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.stopPreviewRelay).mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("fails closed and does not start project code when the trusted relay fails", async () => {
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.startPreviewRelay).mockRejectedValueOnce(new Error("relay failed"));
+    const { runtime, store } = runtimeFixture(sandbox);
+
+    await expect(
+      runtime.startPreview(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        {
+          localRoot,
+          command: "npm run dev",
+          port: 4_321,
+        },
+      ),
+    ).rejects.toThrow("relay failed");
+
+    expect(sandbox.startCommand).not.toHaveBeenCalled();
+    expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
+    expect(store.get("project-a")?.previewPid).toBeNull();
   });
 });

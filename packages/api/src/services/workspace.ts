@@ -5,6 +5,7 @@ import { simpleGit } from "simple-git";
 import { rawSqlite } from "../db/index.js";
 import { ensureProjectDirectory, ensureProjectGitExclude } from "../lib/project-files.js";
 import { createSafeChildEnv } from "./child-process-env.js";
+import { E2B_PREVIEW_TARGET_MAX_PORT, E2B_PREVIEW_TARGET_MIN_PORT } from "./e2b-preview-relay.js";
 import { type E2BProjectFence, getDefaultE2BRuntime } from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
@@ -182,7 +183,9 @@ const PREVIEW_PORT_SLOTS = 2_000;
 
 function previewPortBase(): number {
   const configured = Number(process.env.PREVIEW_PORT_BASE ?? 4_321);
-  return Number.isInteger(configured) && configured > 0 && configured <= 65_535 - PREVIEW_PORT_SLOTS
+  return Number.isInteger(configured) &&
+    configured >= E2B_PREVIEW_TARGET_MIN_PORT &&
+    configured <= E2B_PREVIEW_TARGET_MAX_PORT - PREVIEW_PORT_SLOTS + 1
     ? configured
     : 4_321;
 }
@@ -323,8 +326,7 @@ export function resolveDevCommand(
   // 1) Project-level override always wins
   const interpolated = (override?.trim() ?? "")
     .replace(/\{port\}/g, String(port))
-    .replace(/\$PORT/g, String(port))
-    .replace(/127\.0\.0\.1/g, "0.0.0.0");
+    .replace(/\$PORT/g, String(port));
   if (interpolated) {
     if (process.platform === "win32") {
       return {
@@ -342,9 +344,7 @@ export function resolveDevCommand(
   if (def) {
     return {
       command: def.devCommand.binary,
-      args: def.devCommand.args.map((a) =>
-        a.replace(/\{port\}/g, String(port)).replace(/127\.0\.0\.1/g, "0.0.0.0"),
-      ),
+      args: def.devCommand.args.map((a) => a.replace(/\{port\}/g, String(port))),
       label: def.label,
     };
   }
@@ -360,7 +360,7 @@ export function resolveDevCommand(
   // 4) Last-resort default
   return {
     command: "npx",
-    args: ["vite", "--host", "0.0.0.0", "--port", String(port), "--strictPort"],
+    args: ["vite", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
     label: "Static site",
   };
 }
@@ -972,7 +972,7 @@ async function startDevPreviewNow(
   const dev = resolveDevCommand(repoPath, port, previewCommandOverride);
   const install = packageInstallCommand(repoPath);
   const command = [
-    "export HOST=0.0.0.0",
+    "export HOST=127.0.0.1",
     `export PORT=${port}`,
     "export NODE_ENV=development",
     "export FORCE_COLOR=0",

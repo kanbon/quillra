@@ -43,18 +43,20 @@ state to an ephemeral filesystem.
 6. Deploy and open the generated domain. Enter `QUILLRA_SETUP_TOKEN`, then let
    the browser wizard configure:
 
-   - the required E2B API key and optional custom template id;
+   - a normal E2B API key and optional custom template id;
    - the Anthropic API key;
    - creation and installation of the Quillra GitHub App;
    - optional email delivery;
    - the initial owner account.
 
-   E2B setup creates a temporary network-closed sandbox, runs a fixed command,
-   and probes a private HTTP endpoint. The probe requires E2B's traffic token
-   at the edge and confirms the token is stripped before sandbox code receives
-   the request. Quillra writes its internal `E2B_ENABLED` flag only after that
-   live check succeeds and the sandbox is removed. Do not add or set
-   `E2B_ENABLED` as a Railway variable.
+   A standard API key created in E2B is sufficient. Setup creates a temporary
+   outbound-disabled sandbox with protected ingress, bootstraps separate locked
+   OS users for project code and Quillra's trusted ingress relay, and probes a
+   private HTTP endpoint.
+   E2B must validate its traffic token; the relay then strips it before
+   forwarding the request to project code. Quillra writes its internal
+   `E2B_ENABLED` flag only after that live check succeeds and the sandbox is
+   removed. Do not add or set `E2B_ENABLED` as a Railway variable.
 
    When a published Template generated `QUILLRA_SETUP_TOKEN`, open the
    deployed service's **Variables** tab in Railway and copy that value into the
@@ -88,10 +90,13 @@ PREVIEW_DOMAIN=preview.example.com
 Railway terminates TLS and forwards both hostnames to the same `PORT`; no Caddy
 sidecar is required. Configure the DNS records Railway displays for both
 domains. Quillra's preview gateway proxies HTTP and WebSocket traffic to the
-project's E2B preview host and injects the E2B traffic access token server-side.
-Quillra does not intentionally expose the direct sandbox URL. Untrusted preview
-code can still reflect its upstream hostname, but that hostname is not a
-credential: the traffic token never reaches the browser or project code.
+project's trusted in-sandbox relay and injects the E2B traffic access token
+server-side. E2B validates that token, and Quillra's relay removes it before
+forwarding to the project server. Quillra does not intentionally expose the
+direct sandbox URL. Untrusted preview code can still reflect its upstream
+hostname, but that hostname is not a credential: the traffic token never
+reaches the browser or project code. There is no direct-to-project ingress
+fallback.
 
 Host mode is also the recommended security configuration. Compatibility mode
 keeps a longer-lived Quillra bearer in rewritten preview URLs so nested assets
@@ -150,8 +155,10 @@ configuration.
 The Railway container is the control plane and persistent draft store, not a
 repository execution host. E2B receives project files and the minimum
 command-specific environment only. Quillra does not send Anthropic, GitHub,
-auth, mail, encryption, or E2B secrets into project sandboxes, and it has no
-local execution fallback.
+auth, mail, encryption, or E2B secrets into project environments. Project
+commands run under a locked OS user separate from Quillra's trusted relay.
+Quillra has neither a direct-to-project ingress fallback nor a local execution
+fallback.
 
 Back up the whole Railway Volume with the service stopped and keep all three
 generated control-plane secrets stable. The backup contains SQLite, uploaded

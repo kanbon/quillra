@@ -30,17 +30,21 @@ dependency installers, lifecycle scripts, or preview servers.
 
 Each project gets its own E2B sandbox for those processes. Quillra synchronizes
 only project files across that boundary and rejects symbolic links, special
-filesystem entries, unsafe paths, and over-limit snapshots. There is no local
-execution fallback. If the E2B key has not passed the browser setup live test,
-or if the assigned sandbox cannot be reached, execution and preview operations
-fail closed.
+filesystem entries, unsafe paths, and over-limit snapshots. Inside each
+sandbox, Quillra bootstraps separate locked OS users for untrusted project
+processes and its trusted ingress relay. There is no local execution or
+direct-to-project ingress fallback. If the E2B key has not passed the browser
+setup live test, or if the sandbox or relay cannot be reached, execution and
+preview operations fail closed.
 
-The E2B API key is a control-plane credential. Quillra stores it encrypted when
-it is entered in the browser and sets the internal `E2B_ENABLED` state only
-after creating a temporary sandbox, running a fixed probe, and removing it.
-The same probe starts a fixed private HTTP endpoint, proves that requests
-without E2B's traffic token are rejected, and fails setup if the token header
-reaches sandbox application code.
+The E2B API key is a control-plane credential. A normal API key created in E2B
+is sufficient; Quillra does not require a special or elevated key. Quillra
+stores it encrypted when it is entered in the browser and sets the internal
+`E2B_ENABLED` state only after creating a temporary sandbox, bootstrapping the
+locked project and relay users, running a fixed probe, and removing the
+sandbox. The probe starts a private HTTP endpoint, proves that E2B rejects
+requests without its traffic token, and proves that Quillra's trusted relay
+strips the validated token before forwarding the request to project code.
 `E2B_TEMPLATE_ID` is optional. Changing or resetting E2B configuration first
 removes project sandboxes; a cleanup failure leaves the previous configuration
 in place.
@@ -50,11 +54,13 @@ passed in sandbox environment variables. Preview traffic remains behind
 Quillra's capability-authenticated gateway. Host preview URLs contain a
 short-lived, single-use handoff. The gateway consumes it atomically and mints a
 different HttpOnly session bound to the exact preview host, project, and port;
-the handoff is never accepted as a cookie. The gateway adds E2B's traffic access
-token to its server-side request. Quillra does not intentionally disclose the
-direct sandbox URL, although untrusted preview code can reflect its upstream
-hostname. The hostname alone is not a credential; the browser and project code
-never receive the traffic token.
+the handoff is never accepted as a cookie. The gateway adds E2B's traffic
+access token to its server-side request. E2B validates the token before passing
+the request to Quillra's trusted in-sandbox relay, which removes the header
+before forwarding to the project server. Quillra does not intentionally
+disclose the direct sandbox URL, although untrusted preview code can reflect
+its upstream hostname. The hostname alone is not a credential; the browser and
+project code never receive the traffic token.
 
 Without `PREVIEW_DOMAIN`, Quillra uses its compatibility path proxy. That mode
 must keep a longer-lived bearer in rewritten preview URLs for nested assets and

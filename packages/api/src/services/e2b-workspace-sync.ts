@@ -3,9 +3,10 @@ import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { E2BRemoteEntry, E2BSandboxHandle } from "./e2b-adapter.js";
+import { E2B_PROJECT_HOME } from "./e2b-preview-relay.js";
 
-export const E2B_WORKSPACE_ROOT = "/home/user/quillra-workspace";
-export const E2B_PREVIEW_ROOT = "/home/user/quillra-preview";
+export const E2B_WORKSPACE_ROOT = `${E2B_PROJECT_HOME}/quillra-workspace`;
+export const E2B_PREVIEW_ROOT = `${E2B_PROJECT_HOME}/quillra-preview`;
 
 export type E2BSyncLimits = {
   maxEntries: number;

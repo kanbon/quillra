@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
-import { getPreviewStatus, isPreviewPortActive } from "../../services/preview-status.js";
+import { getPreviewStatus, isPreviewRoutable } from "../../services/preview-status.js";
 import { previewUpstreamUrl } from "../../services/preview-upstream.js";
 import {
   ensureRepoCloned,
@@ -158,7 +158,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     return c.json({
       url: preview.url,
       previewMode: preview.mode,
-      previewActive: isPreviewPortActive(projectId, port),
+      previewActive: isPreviewRoutable(projectId, port),
       port,
       previewLabel,
     });

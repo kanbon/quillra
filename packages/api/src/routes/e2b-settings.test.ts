@@ -6,17 +6,42 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionUser } from "../lib/auth.js";
 
 const e2bMocks = vi.hoisted(() => {
+  const successfulReport = () => ({
+    stages: [
+      { id: "provider", status: "passed" as const },
+      { id: "sandbox", status: "passed" as const },
+      { id: "prerequisite", status: "passed" as const },
+      { id: "relay", status: "passed" as const },
+      { id: "traffic-server", status: "passed" as const },
+      { id: "protected-ingress", status: "passed" as const },
+      { id: "payload", status: "passed" as const },
+      { id: "unauthenticated-access", status: "passed" as const },
+      { id: "cleanup", status: "passed" as const },
+    ],
+    logs: [{ level: "success" as const, message: "Secure E2B verification passed." }],
+  });
   class VerificationError extends Error {
     readonly code: "unavailable" | "probe-failed" | "cleanup-failed";
+    readonly verification: {
+      failedStage: string;
+      stages: Array<{ id: string; status: "failed" }>;
+      logs: Array<{ level: "error"; message: string }>;
+    };
 
     constructor(code: VerificationError["code"]) {
       super("E2B verification failed safely.");
       this.code = code;
+      this.verification = {
+        failedStage: "provider",
+        stages: [{ id: "provider", status: "failed" }],
+        logs: [{ level: "error", message: "Provider verification failed safely." }],
+      };
     }
   }
   return {
     VerificationError,
-    verify: vi.fn(async () => undefined),
+    successfulReport,
+    verify: vi.fn(async () => successfulReport()),
     rotate: vi.fn(async ({ commit }: { commit: () => void | Promise<void> }) => {
       await commit();
     }),
@@ -113,7 +138,7 @@ beforeEach(() => {
     delete process.env[key];
   }
   e2bMocks.verify.mockReset();
-  e2bMocks.verify.mockResolvedValue(undefined);
+  e2bMocks.verify.mockResolvedValue(e2bMocks.successfulReport());
   e2bMocks.rotate.mockReset();
   e2bMocks.rotate.mockImplementation(async ({ commit }: { commit: () => void | Promise<void> }) => {
     await commit();
@@ -160,6 +185,13 @@ describe("E2B setup configuration", () => {
       body: JSON.stringify({ apiKey: "not-an-e2b-key", templateId: "base" }),
     });
     expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({
+      code: "invalid-configuration",
+      verification: {
+        failedStage: "credentials",
+        stages: [{ id: "credentials", status: "failed" }],
+      },
+    });
     expect(e2bMocks.verify).not.toHaveBeenCalled();
 
     const configured = await setupRouter.request("/e2b", {
@@ -173,6 +205,7 @@ describe("E2B setup configuration", () => {
     const payload = JSON.parse(responseText) as {
       e2b: Record<string, unknown>;
       status: { missing: string[] };
+      verification: { stages: Array<{ status: string }> };
     };
     expect(payload).toMatchObject({
       ok: true,
@@ -184,6 +217,7 @@ describe("E2B setup configuration", () => {
       },
     });
     expect(payload.status.missing).not.toContain("E2B");
+    expect(payload.verification.stages.every(({ status }) => status === "passed")).toBe(true);
     expect(e2bMocks.verify).toHaveBeenCalledWith({
       apiKey,
       templateId: "quillra-secure",
@@ -320,7 +354,7 @@ describe("E2B owner settings", () => {
     expect(settings.getInstanceSetting("E2B_TEMPLATE_ID")).toBe("previous-template");
     expect(e2bMocks.rotate).not.toHaveBeenCalled();
 
-    e2bMocks.verify.mockResolvedValueOnce(undefined);
+    e2bMocks.verify.mockResolvedValueOnce(e2bMocks.successfulReport());
     e2bMocks.rotate.mockRejectedValueOnce(new Error(`cleanup leaked ${replacementKey}`));
     const cleanupFailure = await owner.request("/e2b", {
       method: "PUT",

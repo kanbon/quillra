@@ -1,14 +1,27 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { CommandExitError, FileType, Sandbox, SandboxNotFoundError, type SandboxOpts } from "e2b";
+import {
+  E2BTrustedEnvironmentError,
+  type E2BTrustedEnvironmentStage,
+  E2B_ENVD_PORT,
+  E2B_PREVIEW_RELAY_PORT,
+  E2B_PREVIEW_RELAY_SOURCE,
+  E2B_PROJECT_HOME,
+  E2B_PROJECT_USER,
+  E2B_RELAY_INSTALL_PATH,
+  E2B_RELAY_RUNTIME_ROOT,
+  E2B_RELAY_USER,
+  assertE2BPreviewTargetPort,
+} from "./e2b-preview-relay.js";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const ABSOLUTE_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
-const PROCESS_LOG_ROOT = "/home/user/.quillra-processes";
+const PROCESS_LOG_ROOT = `${E2B_PROJECT_HOME}/.quillra-processes`;
 const MAX_FILE_CHUNK_BYTES = 256 * 1024;
 const ABSOLUTE_MAX_DIRECTORY_ENTRIES = 20_000;
 const ABSOLUTE_MAX_DIRECTORY_OUTPUT_BYTES = 4 * 1024 * 1024;
-const TRUSTED_CONTROL_PATH = "/usr/bin:/bin";
+const TRUSTED_CONTROL_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/bin";
 const TRUSTED_BASH = "/bin/bash";
 const TRUSTED_RM = "/bin/rm";
 const TRUSTED_BASE64 = "/usr/bin/base64";
@@ -19,6 +32,16 @@ const TRUSTED_KILL = "/usr/bin/kill";
 const TRUSTED_MKFIFO = "/usr/bin/mkfifo";
 const TRUSTED_PYTHON = "/usr/bin/python3";
 const TRUSTED_SETSID = "/usr/bin/setsid";
+const TRUSTED_SETPRIV = "/usr/bin/setpriv";
+const TRUSTED_ENV = "/usr/bin/env";
+const TRUSTED_LAUNCH_HOME = `${E2B_RELAY_RUNTIME_ROOT}/control-home`;
+const SENSITIVE_SANDBOX_ENV_KEYS = new Set([
+  "E2B_ACCESS_TOKEN",
+  "E2B_API_KEY",
+  "E2B_ENVD_ACCESS_TOKEN",
+  "E2B_TRAFFIC_ACCESS_TOKEN",
+  "ENVD_ACCESS_TOKEN",
+]);
 
 export type E2BRemoteEntry = {
   name: string;
@@ -56,6 +79,10 @@ export interface E2BSandboxHandle {
   readonly sandboxId: string;
   readonly trafficAccessToken?: string;
 
+  prepareExecutionEnvironment(signal?: AbortSignal): Promise<void>;
+  quiesceProjectProcesses(signal?: AbortSignal): Promise<void>;
+  startPreviewRelay(targetPort: number, signal?: AbortSignal): Promise<void>;
+  stopPreviewRelay(signal?: AbortSignal): Promise<void>;
   list(
     path: string,
     options: {
@@ -89,6 +116,8 @@ export type E2BCreateOptions = {
   projectId: string;
   timeoutMs: number;
   requestTimeoutMs: number;
+  lifecycle?: SandboxOpts["lifecycle"];
+  allowInternetAccess?: boolean;
   signal?: AbortSignal;
 };
 
@@ -162,6 +191,90 @@ function normalizeCommandFailure(error: unknown): E2BCommandResult | null {
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
 }
+
+function isolatedUserShell(
+  user: typeof E2B_PROJECT_USER | typeof E2B_RELAY_USER,
+  command: string,
+  envs: Record<string, string> = {},
+  newSession = false,
+): string {
+  for (const key of Object.keys(envs)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error("Invalid E2B command environment variable name.");
+    }
+    if (SENSITIVE_SANDBOX_ENV_KEYS.has(key.toUpperCase())) {
+      throw new Error("Sensitive E2B credentials cannot enter a sandbox command.");
+    }
+  }
+  const home = user === E2B_PROJECT_USER ? E2B_PROJECT_HOME : "/nonexistent";
+  const environment = {
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    ...envs,
+    HOME: home,
+    LOGNAME: user,
+    PATH: TRUSTED_CONTROL_PATH,
+    USER: user,
+  };
+  const environmentArgs = Object.entries(environment)
+    .map(([key, value]) => shellQuote(`${key}=${value}`))
+    .join(" ");
+  const sessionPrefix = newSession ? `${TRUSTED_SETSID} ` : "";
+  return [
+    "exec",
+    TRUSTED_SETPRIV,
+    `--reuid=${user}`,
+    `--regid=${user}`,
+    "--clear-groups",
+    "--no-new-privs",
+    "--bounding-set=-all",
+    "--inh-caps=-all",
+    "--ambient-caps=-all",
+    "--",
+    TRUSTED_ENV,
+    "-i",
+    environmentArgs,
+    sessionPrefix + TRUSTED_BASH,
+    "-c",
+    shellQuote(command),
+  ].join(" ");
+}
+
+function privilegedRelayBootstrap(command: string): string {
+  const environmentArgs = [
+    "HOME=/nonexistent",
+    "LANG=C.UTF-8",
+    "LC_ALL=C.UTF-8",
+    `LOGNAME=${E2B_RELAY_USER}`,
+    `PATH=${TRUSTED_CONTROL_PATH}`,
+    `USER=${E2B_RELAY_USER}`,
+  ]
+    .map(shellQuote)
+    .join(" ");
+  return [
+    "exec",
+    TRUSTED_SETPRIV,
+    "--no-new-privs",
+    "--inh-caps=-all",
+    "--ambient-caps=-all",
+    "--",
+    TRUSTED_ENV,
+    "-i",
+    environmentArgs,
+    TRUSTED_BASH,
+    "-c",
+    shellQuote(command),
+  ].join(" ");
+}
+
+const TRUSTED_LAUNCH_ENV = {
+  BASH_ENV: "/dev/null",
+  ENV: "/dev/null",
+  HOME: TRUSTED_LAUNCH_HOME,
+  LOGNAME: "root",
+  PATH: TRUSTED_CONTROL_PATH,
+  USER: "root",
+} as const;
 
 const BOUNDED_DIRECTORY_SCANNER = [
   "import base64,json,os,stat,sys",
@@ -284,6 +397,7 @@ export function boundedCommandWrapper(input: {
   command: string;
   logDirectory: string;
   maxOutputBytes: number;
+  envs?: Record<string, string>;
 }): string {
   const stdoutFile = `${input.logDirectory}/stdout`;
   const stderrFile = `${input.logDirectory}/stderr`;
@@ -306,10 +420,288 @@ export function boundedCommandWrapper(input: {
   ].join("\n");
   // The outer redirect is the memory-safety boundary: even setup failures do
   // not reach CommandHandle's unbounded internal stdout/stderr strings.
-  return `exec ${TRUSTED_SETSID} ${TRUSTED_BASH} -c ${shellQuote(script)} >/dev/null 2>/dev/null`;
+  return `${isolatedUserShell(E2B_PROJECT_USER, script, input.envs, true)} >/dev/null 2>/dev/null`;
 }
 
+const TRUSTED_NODE_COMMAND = [
+  "if [ -x /usr/bin/node ]; then",
+  "  quillra_node=/usr/bin/node",
+  "elif [ -x /usr/local/bin/node ]; then",
+  "  quillra_node=/usr/local/bin/node",
+  "else",
+  "  exit 1",
+  "fi",
+].join("\n");
+
+/**
+ * Creates/chowns only directory entries anchored beneath a root-owned,
+ * non-writable parent. O_NOFOLLOW prevents an existing leaf symlink from
+ * redirecting root metadata changes to a trusted system directory.
+ *
+ * Arguments repeat as: absolute-path uid gid octal-mode.
+ */
+export const SECURE_DIRECTORY_SETUP_SCRIPT = [
+  "import os,stat,sys",
+  "TRUSTED_PARENT_UID=0",
+  "if len(sys.argv)<5 or (len(sys.argv)-1)%4:",
+  " sys.exit(1)",
+  "flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW",
+  "for index in range(1,len(sys.argv),4):",
+  " path=sys.argv[index]",
+  " try:",
+  "  uid=int(sys.argv[index+1])",
+  "  gid=int(sys.argv[index+2])",
+  "  mode=int(sys.argv[index+3],8)",
+  " except ValueError:",
+  "  sys.exit(1)",
+  ' if not path.startswith("/") or path=="/" or "\\x00" in path or uid<0 or gid<0 or mode<0 or mode>0o777:',
+  "  sys.exit(1)",
+  " parent,leaf=os.path.split(path)",
+  ' if not parent or leaf in ("",".",".."):',
+  "  sys.exit(1)",
+  " parent_fd=os.open(parent,flags)",
+  " try:",
+  "  parent_info=os.fstat(parent_fd)",
+  "  if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid!=TRUSTED_PARENT_UID or parent_info.st_mode&0o022:",
+  "   sys.exit(1)",
+  "  try:",
+  "   os.mkdir(leaf,mode,dir_fd=parent_fd)",
+  "  except FileExistsError:",
+  "   pass",
+  "  child_fd=os.open(leaf,flags,dir_fd=parent_fd)",
+  "  try:",
+  "   child_info=os.fstat(child_fd)",
+  "   if not stat.S_ISDIR(child_info.st_mode) or child_info.st_uid not in (TRUSTED_PARENT_UID,uid) or child_info.st_gid not in (0,gid):",
+  "    sys.exit(1)",
+  "   os.fchown(child_fd,uid,gid)",
+  "   os.fchmod(child_fd,mode)",
+  "   final_info=os.fstat(child_fd)",
+  "   if final_info.st_uid!=uid or final_info.st_gid!=gid or stat.S_IMODE(final_info.st_mode)!=mode:",
+  "    sys.exit(1)",
+  "  finally:",
+  "   os.close(child_fd)",
+  " finally:",
+  "  os.close(parent_fd)",
+].join("\n");
+
+const SANDBOX_BOOTSTRAP_SCRIPT = [
+  "set -eu",
+  `export PATH=${shellQuote(TRUSTED_CONTROL_PATH)}`,
+  "for quillra_tool in /bin/bash /bin/rm /usr/bin/awk /usr/bin/base64 /usr/bin/cat /usr/bin/cut /usr/bin/dd /usr/bin/env /usr/bin/getent /usr/bin/head /usr/bin/id /usr/bin/install /usr/bin/kill /usr/bin/mkfifo /usr/bin/python3 /usr/bin/setpriv /usr/bin/setsid /usr/bin/sha256sum /usr/bin/stat /usr/bin/true /usr/sbin/groupadd /usr/sbin/nologin /usr/sbin/useradd /usr/sbin/usermod; do",
+  '  [ -x "$quillra_tool" ]',
+  "done",
+  `if ! /usr/bin/getent group ${E2B_PROJECT_USER} >/dev/null; then`,
+  `  /usr/sbin/groupadd --system ${E2B_PROJECT_USER}`,
+  "fi",
+  `if ! /usr/bin/getent passwd ${E2B_PROJECT_USER} >/dev/null; then`,
+  `  /usr/sbin/useradd --system --gid ${E2B_PROJECT_USER} --home-dir ${E2B_PROJECT_HOME} --no-create-home --shell /usr/sbin/nologin ${E2B_PROJECT_USER}`,
+  "fi",
+  `if ! /usr/bin/getent group ${E2B_RELAY_USER} >/dev/null; then`,
+  `  /usr/sbin/groupadd --system ${E2B_RELAY_USER}`,
+  "fi",
+  `if ! /usr/bin/getent passwd ${E2B_RELAY_USER} >/dev/null; then`,
+  `  /usr/sbin/useradd --system --gid ${E2B_RELAY_USER} --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin ${E2B_RELAY_USER}`,
+  "fi",
+  `/usr/sbin/usermod --lock --shell /usr/sbin/nologin ${E2B_PROJECT_USER}`,
+  `/usr/sbin/usermod --lock --shell /usr/sbin/nologin ${E2B_RELAY_USER}`,
+  `quillra_project_uid=$(/usr/bin/id -u ${E2B_PROJECT_USER})`,
+  `quillra_project_gid=$(/usr/bin/id -g ${E2B_PROJECT_USER})`,
+  `quillra_relay_uid=$(/usr/bin/id -u ${E2B_RELAY_USER})`,
+  `quillra_relay_gid=$(/usr/bin/id -g ${E2B_RELAY_USER})`,
+  '[ "$quillra_project_uid" -ne 0 ]',
+  '[ "$quillra_project_gid" -ne 0 ]',
+  '[ "$quillra_relay_uid" -ne 0 ]',
+  '[ "$quillra_relay_gid" -ne 0 ]',
+  '[ "$quillra_project_uid" -ne "$quillra_relay_uid" ]',
+  `set -- $(/usr/bin/id -G ${E2B_PROJECT_USER})`,
+  '[ "$#" -eq 1 ]',
+  '[ "$1" = "$quillra_project_gid" ]',
+  `set -- $(/usr/bin/id -G ${E2B_RELAY_USER})`,
+  '[ "$#" -eq 1 ]',
+  '[ "$1" = "$quillra_relay_gid" ]',
+  `${TRUSTED_PYTHON} -I -S -c ${shellQuote(SECURE_DIRECTORY_SETUP_SCRIPT)} ${shellQuote(E2B_PROJECT_HOME)} "$quillra_project_uid" "$quillra_project_gid" 0700 ${shellQuote(E2B_RELAY_RUNTIME_ROOT)} 0 0 0700 ${shellQuote(TRUSTED_LAUNCH_HOME)} 0 0 0700 /usr/local/libexec 0 0 0755`,
+  "quillra_unprivileged_port_start=$(/usr/bin/cat /proc/sys/net/ipv4/ip_unprivileged_port_start)",
+  'case "$quillra_unprivileged_port_start" in ""|*[!0-9]*) exit 1 ;; esac',
+  'if [ "$quillra_unprivileged_port_start" -lt 1024 ]; then',
+  "  echo 1024 > /proc/sys/net/ipv4/ip_unprivileged_port_start",
+  "fi",
+  '[ "$(/usr/bin/cat /proc/sys/net/ipv4/ip_unprivileged_port_start)" -ge 1024 ]',
+  `${TRUSTED_PYTHON} -I -S -c ${shellQuote(
+    [
+      "import os,stat,sys",
+      'trusted=("/bin/bash","/bin/rm","/usr/bin/awk","/usr/bin/base64","/usr/bin/cat","/usr/bin/cut","/usr/bin/dd","/usr/bin/env","/usr/bin/getent","/usr/bin/head","/usr/bin/id","/usr/bin/install","/usr/bin/kill","/usr/bin/mkfifo","/usr/bin/python3","/usr/bin/setpriv","/usr/bin/setsid","/usr/bin/sha256sum","/usr/bin/stat","/usr/bin/true","/usr/sbin/groupadd","/usr/sbin/nologin","/usr/sbin/useradd","/usr/sbin/usermod")',
+      "def valid(candidate):",
+      " try:",
+      "  info=os.stat(candidate)",
+      " except OSError:",
+      "  return False",
+      " return stat.S_ISREG(info.st_mode) and info.st_uid==0 and not info.st_mode & 0o022 and os.access(candidate,os.X_OK)",
+      "if not all(valid(candidate) for candidate in trusted):",
+      " sys.exit(1)",
+      'if not any(valid(candidate) for candidate in ("/usr/bin/node","/usr/local/bin/node")):',
+      " sys.exit(1)",
+    ].join("\n"),
+  )}`,
+].join("\n");
+
+const UNAUTHENTICATED_ENVD_PROBE = [
+  "import errno,http.client,os,sys",
+  'for name in ("E2B_ACCESS_TOKEN","E2B_API_KEY","E2B_ENVD_ACCESS_TOKEN","E2B_TRAFFIC_ACCESS_TOKEN","ENVD_ACCESS_TOKEN"):',
+  " if name in os.environ:",
+  "  sys.exit(1)",
+  "try:",
+  ` connection=http.client.HTTPConnection("127.0.0.1",${E2B_ENVD_PORT},timeout=0.5)`,
+  ' connection.request("POST","/process.Process/List",body=b"{}",headers={"Authorization":"Basic cm9vdDo=","Connect-Protocol-Version":"1","Content-Type":"application/json"})',
+  " response=connection.getresponse()",
+  " response.read(4096)",
+  " status=response.status",
+  " connection.close()",
+  "except ConnectionRefusedError:",
+  " sys.exit(0)",
+  "except OSError as error:",
+  " sys.exit(0 if error.errno==errno.ECONNREFUSED else 1)",
+  "sys.exit(0 if status in (401,403) else 1)",
+].join("\n");
+
+const PROJECT_PRIVILEGED_PORT_PROBE = [
+  "import errno,socket,sys",
+  `targets=((socket.AF_INET,("0.0.0.0",${E2B_PREVIEW_RELAY_PORT})),(socket.AF_INET6,("::",${E2B_PREVIEW_RELAY_PORT},0,0)))`,
+  "for family,address in targets:",
+  " try:",
+  "  sock=socket.socket(family,socket.SOCK_STREAM)",
+  " except OSError as error:",
+  "  if family==socket.AF_INET6 and error.errno in (errno.EAFNOSUPPORT,errno.EPROTONOSUPPORT):",
+  "   continue",
+  "  sys.exit(1)",
+  " try:",
+  "  sock.bind(address)",
+  " except OSError as error:",
+  "  sock.close()",
+  "  if error.errno in (errno.EACCES,errno.EPERM):",
+  "   continue",
+  "  sys.exit(1)",
+  " sock.close()",
+  " sys.exit(1)",
+  "sys.exit(0)",
+].join("\n");
+
+const PROJECT_ISOLATION_PROBE = [
+  "set -eu",
+  '[ "$(/usr/bin/id -u)" -ne 0 ]',
+  '[ "$(/usr/bin/id -g)" -ne 0 ]',
+  "for quillra_capability_field in CapInh CapPrm CapEff CapBnd CapAmb; do",
+  "  quillra_capability_value=$(/usr/bin/awk -v field=\"$quillra_capability_field:\" '$1 == field { print $2 }' /proc/self/status)",
+  '  [ -n "$quillra_capability_value" ]',
+  '  case "$quillra_capability_value" in *[!0]*) exit 1 ;; esac',
+  "done",
+  "[ \"$(/usr/bin/awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)\" = 1 ]",
+  "quillra_unprivileged_port_start=$(/usr/bin/cat /proc/sys/net/ipv4/ip_unprivileged_port_start)",
+  'case "$quillra_unprivileged_port_start" in ""|*[!0-9]*) exit 1 ;; esac',
+  '[ "$quillra_unprivileged_port_start" -ge 1024 ]',
+  `[ ! -r ${shellQuote(E2B_RELAY_RUNTIME_ROOT)} ]`,
+  `[ ! -r ${shellQuote(TRUSTED_LAUNCH_HOME)} ]`,
+  `[ ! -w ${shellQuote(E2B_RELAY_INSTALL_PATH)} ]`,
+  "if [ -x /usr/bin/sudo ] && /usr/bin/sudo -n /usr/bin/true >/dev/null 2>&1; then",
+  "  exit 1",
+  "fi",
+  `${TRUSTED_PYTHON} -I -S -c ${shellQuote(UNAUTHENTICATED_ENVD_PROBE)}`,
+].join("\n");
+
+const KILL_USER_PROCESSES_SCRIPT = [
+  "import errno,os,pwd,signal,sys,time",
+  "uid=pwd.getpwnam(sys.argv[1]).pw_uid",
+  "def process_status(name):",
+  ' path="/proc/"+name+"/status"',
+  " try:",
+  '  with open(path,"rb",buffering=0) as handle:',
+  "   raw=handle.read(65536)",
+  "   if handle.read(1):",
+  '    raise RuntimeError("oversized proc status")',
+  " except (FileNotFoundError,ProcessLookupError):",
+  "  return None",
+  " except OSError as error:",
+  "  if error.errno in (errno.ENOENT,errno.ESRCH):",
+  "   return None",
+  "  raise",
+  ' uid_lines=[line for line in raw.splitlines() if line.startswith(b"Uid:")]',
+  ' state_lines=[line for line in raw.splitlines() if line.startswith(b"State:")]',
+  " if len(uid_lines)!=1 or len(state_lines)!=1:",
+  '  raise RuntimeError("ambiguous proc status")',
+  " uid_fields=uid_lines[0].split()",
+  " state_fields=state_lines[0].split()",
+  " if len(uid_fields)!=5 or len(state_fields)<2:",
+  '  raise RuntimeError("invalid proc status")',
+  " try:",
+  "  process_uids=tuple(int(value) for value in uid_fields[1:])",
+  " except ValueError:",
+  '  raise RuntimeError("invalid proc uid")',
+  " return process_uids,state_fields[1]",
+  "def live_pids():",
+  " result=[]",
+  ' for name in os.listdir("/proc"):',
+  "  if not name.isdigit():",
+  "   continue",
+  "  status=process_status(name)",
+  "  if status is None:",
+  "   continue",
+  "  process_uids,state=status",
+  '  if uid not in process_uids or state in (b"Z",b"X"):',
+  "   continue",
+  "  result.append(int(name))",
+  " return result",
+  "for _ in range(20):",
+  " pids=live_pids()",
+  " if not pids:",
+  "  sys.exit(0)",
+  " for pid in pids:",
+  "  try:",
+  "   status=process_status(str(pid))",
+  "   if status is not None and uid in status[0]:",
+  "    os.kill(pid,signal.SIGKILL)",
+  "  except ProcessLookupError:",
+  "   pass",
+  " time.sleep(0.025)",
+  "sys.exit(1)",
+].join("\n");
+
+const ASSERT_RELAY_PORT_FREE_SCRIPT = [
+  "import socket,sys",
+  "sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)",
+  "try:",
+  " sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,0)",
+  ` sock.bind(("127.0.0.1",${E2B_PREVIEW_RELAY_PORT}))`,
+  "except OSError:",
+  " sys.exit(1)",
+  "finally:",
+  " sock.close()",
+].join("\n");
+
+const WAIT_FOR_RELAY_SCRIPT = [
+  "import socket,sys,time",
+  "request=b'GET / HTTP/1.1\\r\\nHost: relay-check\\r\\nConnection: close\\r\\n\\r\\n'",
+  "for _ in range(100):",
+  " try:",
+  `  sock=socket.create_connection(("127.0.0.1",${E2B_PREVIEW_RELAY_PORT}),0.1)`,
+  "  sock.settimeout(0.5)",
+  "  sock.sendall(request)",
+  "  response=b''",
+  "  while len(response)<4096:",
+  "   chunk=sock.recv(4096-len(response))",
+  "   if not chunk:",
+  "    break",
+  "   response+=chunk",
+  "  sock.close()",
+  "  if response.startswith(b'HTTP/1.1 502') and b'Preview upstream unavailable' in response:",
+  "   sys.exit(0)",
+  " except OSError:",
+  "  pass",
+  " time.sleep(0.05)",
+  "sys.exit(1)",
+].join("\n");
+
 class SdkSandboxHandle implements E2BSandboxHandle {
+  private preparation: Promise<void> | undefined;
+
   constructor(private readonly sandbox: Sandbox) {}
 
   get sandboxId(): string {
@@ -318,6 +710,169 @@ class SdkSandboxHandle implements E2BSandboxHandle {
 
   get trafficAccessToken(): string | undefined {
     return this.sandbox.trafficAccessToken;
+  }
+
+  async prepareExecutionEnvironment(signal?: AbortSignal): Promise<void> {
+    this.preparation ??= this.prepareExecutionEnvironmentNow(signal);
+    try {
+      await this.preparation;
+    } catch (error) {
+      this.preparation = undefined;
+      if (error instanceof E2BTrustedEnvironmentError) throw error;
+      throw new E2BTrustedEnvironmentError("bootstrap");
+    }
+  }
+
+  async quiesceProjectProcesses(signal?: AbortSignal): Promise<void> {
+    await this.prepareExecutionEnvironment(signal);
+    await this.killAllProcessesForUser(E2B_PROJECT_USER, "project-quiesce", signal);
+  }
+
+  async stopPreviewRelay(signal?: AbortSignal): Promise<void> {
+    await this.prepareExecutionEnvironment(signal);
+    await this.killAllProcessesForUser(E2B_RELAY_USER, "relay-stop", signal);
+  }
+
+  async startPreviewRelay(targetPort: number, signal?: AbortSignal): Promise<void> {
+    assertE2BPreviewTargetPort(targetPort);
+    await this.prepareExecutionEnvironment(signal);
+
+    // Nothing controlled by the project may run while the trusted public port
+    // is unbound. This closes both process-group escape and port-squatting
+    // races before the relay starts.
+    await this.quiesceProjectProcesses(signal);
+    await this.stopPreviewRelay(signal);
+    await this.runTrustedCommand(
+      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(ASSERT_RELAY_PORT_FREE_SCRIPT)}`,
+      "root",
+      "relay-start",
+      signal,
+    );
+    await this.runTrustedCommand(
+      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(PROJECT_PRIVILEGED_PORT_PROBE)}`,
+      E2B_PROJECT_USER,
+      "relay-start",
+      signal,
+    );
+
+    const startScript = [
+      "set -eu",
+      TRUSTED_NODE_COMMAND,
+      `exec ${TRUSTED_SETSID} --fork "$quillra_node" ${shellQuote(E2B_RELAY_INSTALL_PATH)} ${targetPort} </dev/null >/dev/null 2>&1`,
+    ].join("\n");
+    await this.runTrustedCommand(
+      privilegedRelayBootstrap(startScript),
+      "root",
+      "relay-start",
+      signal,
+    );
+    try {
+      await this.runTrustedCommand(
+        `${TRUSTED_PYTHON} -I -S -c ${shellQuote(WAIT_FOR_RELAY_SCRIPT)}`,
+        "root",
+        "relay-ready",
+        signal,
+        10_000,
+      );
+    } catch (error) {
+      await this.stopPreviewRelay().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async prepareExecutionEnvironmentNow(signal?: AbortSignal): Promise<void> {
+    await this.runTrustedCommand(
+      `${TRUSTED_BASH} -c ${shellQuote(SANDBOX_BOOTSTRAP_SCRIPT)}`,
+      "root",
+      "bootstrap",
+      signal,
+      20_000,
+    );
+
+    const uploadPath = `${E2B_RELAY_RUNTIME_ROOT}/relay-${randomUUID()}.mjs`;
+    try {
+      await this.sandbox.files.write([{ path: uploadPath, data: E2B_PREVIEW_RELAY_SOURCE }], {
+        user: "root",
+        signal,
+      });
+      const expectedHash = createHash("sha256")
+        .update(E2B_PREVIEW_RELAY_SOURCE, "utf8")
+        .digest("hex");
+      const installScript = [
+        "set -eu",
+        `/usr/bin/install -o root -g ${E2B_RELAY_USER} -m 0550 ${shellQuote(uploadPath)} ${shellQuote(E2B_RELAY_INSTALL_PATH)}`,
+        `quillra_relay_hash=$(/usr/bin/sha256sum ${shellQuote(E2B_RELAY_INSTALL_PATH)} | /usr/bin/cut -d ' ' -f 1)`,
+        `[ "$quillra_relay_hash" = ${shellQuote(expectedHash)} ]`,
+      ].join("\n");
+      await this.runTrustedCommand(
+        `${TRUSTED_BASH} -c ${shellQuote(installScript)}`,
+        "root",
+        "bootstrap",
+        signal,
+      );
+    } catch (error) {
+      if (error instanceof E2BTrustedEnvironmentError) throw error;
+      throw new E2BTrustedEnvironmentError("bootstrap");
+    } finally {
+      await this.sandbox.files.remove(uploadPath, { user: "root" }).catch(() => undefined);
+    }
+
+    await this.runTrustedCommand(
+      `${TRUSTED_BASH} -c ${shellQuote(PROJECT_ISOLATION_PROBE)}`,
+      E2B_PROJECT_USER,
+      "project-isolation",
+      signal,
+    );
+    const relayProbe = [
+      "set -eu",
+      TRUSTED_NODE_COMMAND,
+      `"$quillra_node" --check ${shellQuote(E2B_RELAY_INSTALL_PATH)} >/dev/null`,
+    ].join("\n");
+    await this.runTrustedCommand(
+      `${TRUSTED_BASH} -c ${shellQuote(relayProbe)}`,
+      E2B_RELAY_USER,
+      "bootstrap",
+      signal,
+    );
+  }
+
+  private async killAllProcessesForUser(
+    user: string,
+    stage: E2BTrustedEnvironmentStage,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.runTrustedCommand(
+      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(KILL_USER_PROCESSES_SCRIPT)} ${shellQuote(user)}`,
+      "root",
+      stage,
+      signal,
+    );
+  }
+
+  private async runTrustedCommand(
+    command: string,
+    user: string,
+    stage: E2BTrustedEnvironmentStage,
+    signal?: AbortSignal,
+    timeoutMs = 10_000,
+  ): Promise<void> {
+    try {
+      const outerUser = user === E2B_PROJECT_USER || user === E2B_RELAY_USER ? "root" : user;
+      const trustedCommand =
+        user === E2B_PROJECT_USER || user === E2B_RELAY_USER
+          ? isolatedUserShell(user, command)
+          : command;
+      const result = await this.sandbox.commands.run(trustedCommand, {
+        user: outerUser,
+        timeoutMs,
+        requestTimeoutMs: timeoutMs,
+        signal,
+        envs: TRUSTED_LAUNCH_ENV,
+      });
+      if (result.exitCode !== 0) throw new Error("Trusted E2B command failed.");
+    } catch {
+      throw new E2BTrustedEnvironmentError(stage);
+    }
   }
 
   async list(
@@ -329,13 +884,15 @@ class SdkSandboxHandle implements E2BSandboxHandle {
     },
   ): Promise<E2BRemoteEntry[]> {
     validateDirectoryListOptions(options);
+    const scanCommand = `${TRUSTED_PYTHON} -I -S -c ${shellQuote(BOUNDED_DIRECTORY_SCANNER)} ${shellQuote(directory)} ${options.maxEntries} ${options.maxOutputBytes} 2>/dev/null`;
     const result = await this.sandbox.commands.run(
-      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(BOUNDED_DIRECTORY_SCANNER)} ${shellQuote(directory)} ${options.maxEntries} ${options.maxOutputBytes} 2>/dev/null`,
+      isolatedUserShell(E2B_PROJECT_USER, scanCommand),
       {
+        user: "root",
         timeoutMs: 10_000,
         requestTimeoutMs: 10_000,
         signal: options.signal,
-        envs: { PATH: TRUSTED_CONTROL_PATH },
+        envs: TRUSTED_LAUNCH_ENV,
       },
     );
     if (Buffer.byteLength(result.stdout, "utf8") > options.maxOutputBytes) {
@@ -400,7 +957,9 @@ class SdkSandboxHandle implements E2BSandboxHandle {
   }
 
   async getInfo(path: string, signal?: AbortSignal): Promise<E2BRemoteEntry> {
-    return toRemoteEntry(await this.sandbox.files.getInfo(path, { signal }));
+    return toRemoteEntry(
+      await this.sandbox.files.getInfo(path, { user: E2B_PROJECT_USER, signal }),
+    );
   }
 
   async readFileChunk(
@@ -421,13 +980,15 @@ class SdkSandboxHandle implements E2BSandboxHandle {
     // A sandbox process may replace a previously inspected file with a
     // symlink, FIFO, or infinite device. `dd` reads exactly one bounded chunk;
     // base64 keeps binary data intact while the SDK sees at most ~350 KiB.
+    const readCommand = `${TRUSTED_DD} if=${shellQuote(filePath)} iflag=skip_bytes,count_bytes skip=${offset} count=${length} status=none 2>/dev/null | ${TRUSTED_BASE64}`;
     const result = await this.sandbox.commands.run(
-      `${TRUSTED_DD} if=${shellQuote(filePath)} iflag=skip_bytes,count_bytes skip=${offset} count=${length} status=none 2>/dev/null | ${TRUSTED_BASE64}`,
+      isolatedUserShell(E2B_PROJECT_USER, readCommand),
       {
+        user: "root",
         timeoutMs: 10_000,
         requestTimeoutMs: 10_000,
         signal,
-        envs: { PATH: TRUSTED_CONTROL_PATH },
+        envs: TRUSTED_LAUNCH_ENV,
       },
     );
     const decoded = Buffer.from(result.stdout.replaceAll(/\s/g, ""), "base64");
@@ -447,24 +1008,24 @@ class SdkSandboxHandle implements E2BSandboxHandle {
         path: file.path,
         data: Uint8Array.from(file.data).buffer,
       })),
-      { gzip: true, signal },
+      { gzip: true, user: E2B_PROJECT_USER, signal },
     );
   }
 
   async makeDir(path: string, signal?: AbortSignal): Promise<void> {
-    await this.sandbox.files.makeDir(path, { signal });
+    await this.sandbox.files.makeDir(path, { user: E2B_PROJECT_USER, signal });
   }
 
   exists(path: string, signal?: AbortSignal): Promise<boolean> {
-    return this.sandbox.files.exists(path, { signal });
+    return this.sandbox.files.exists(path, { user: E2B_PROJECT_USER, signal });
   }
 
   async remove(path: string, signal?: AbortSignal): Promise<void> {
-    await this.sandbox.files.remove(path, { signal });
+    await this.sandbox.files.remove(path, { user: E2B_PROJECT_USER, signal });
   }
 
   async rename(from: string, to: string, signal?: AbortSignal): Promise<void> {
-    await this.sandbox.files.rename(from, to, { signal });
+    await this.sandbox.files.rename(from, to, { user: E2B_PROJECT_USER, signal });
   }
 
   async startCommand(command: string, options: E2BCommandOptions): Promise<E2BProcess> {
@@ -472,23 +1033,39 @@ class SdkSandboxHandle implements E2BSandboxHandle {
     const logDirectory = `${PROCESS_LOG_ROOT}/${randomUUID()}`;
     const stdoutFile = `${logDirectory}/stdout`;
     const stderrFile = `${logDirectory}/stderr`;
-    await this.sandbox.files.makeDir(logDirectory, { signal: options.signal });
+    // Every operation beneath the project-owned home runs as the project UID.
+    // If an attacker replaces this path with a system-directory symlink, these
+    // calls fail without granting a root chown/chmod primitive.
+    await this.sandbox.files.makeDir(PROCESS_LOG_ROOT, {
+      user: E2B_PROJECT_USER,
+      signal: options.signal,
+    });
+    await this.sandbox.files.makeDir(logDirectory, {
+      user: E2B_PROJECT_USER,
+      signal: options.signal,
+    });
     await this.sandbox.files.write(
       [
         { path: stdoutFile, data: "" },
         { path: stderrFile, data: "" },
       ],
-      { signal: options.signal },
+      { user: E2B_PROJECT_USER, signal: options.signal },
     );
     const handle = await this.sandbox.commands.run(
-      boundedCommandWrapper({ command, logDirectory, maxOutputBytes }),
+      boundedCommandWrapper({
+        command,
+        logDirectory,
+        maxOutputBytes,
+        envs: options.envs,
+      }),
       {
         background: true,
+        user: "root",
         cwd: options.cwd,
         timeoutMs: options.timeoutMs,
         requestTimeoutMs: options.timeoutMs,
         signal: options.signal,
-        envs: options.envs,
+        envs: TRUSTED_LAUNCH_ENV,
         // Deliberately no stdout/stderr callbacks. The wrapped command redirects
         // both streams before the SDK can accumulate them.
       },
@@ -498,22 +1075,26 @@ class SdkSandboxHandle implements E2BSandboxHandle {
       // Never use files.read for a path the sandbox command can replace between
       // stat and read (symlink, FIFO, /dev/zero, or a growing file). This fixed
       // control command can emit at most maxOutputBytes into the SDK.
+      const readCommand = `${TRUSTED_HEAD} -c ${maxOutputBytes} -- ${shellQuote(filePath)} 2>/dev/null || true`;
       const result = await this.sandbox.commands.run(
-        `${TRUSTED_HEAD} -c ${maxOutputBytes} -- ${shellQuote(filePath)} 2>/dev/null || true`,
+        isolatedUserShell(E2B_PROJECT_USER, readCommand),
         {
+          user: "root",
           timeoutMs: 5_000,
           requestTimeoutMs: 5_000,
-          envs: { PATH: TRUSTED_CONTROL_PATH },
+          envs: TRUSTED_LAUNCH_ENV,
         },
       );
       return result.stdout;
     };
     const killGroup = async (): Promise<void> => {
+      const killCommand = `${TRUSTED_KILL} -KILL -- -${handle.pid} >/dev/null 2>&1 || true`;
       await this.sandbox.commands
-        .run(`${TRUSTED_KILL} -KILL -- -${handle.pid} >/dev/null 2>&1 || true`, {
+        .run(isolatedUserShell(E2B_PROJECT_USER, killCommand), {
+          user: "root",
           timeoutMs: 5_000,
           requestTimeoutMs: 5_000,
-          envs: { PATH: TRUSTED_CONTROL_PATH },
+          envs: TRUSTED_LAUNCH_ENV,
         })
         .catch(() => undefined);
     };
@@ -539,7 +1120,9 @@ class SdkSandboxHandle implements E2BSandboxHandle {
           if (options.onStderr && stderr) await options.onStderr(stderr);
           return { ...commandResult, stdout, stderr };
         })().finally(async () => {
-          await this.sandbox.files.remove(logDirectory).catch(() => undefined);
+          await this.sandbox.files
+            .remove(logDirectory, { user: E2B_PROJECT_USER })
+            .catch(() => undefined);
         });
         return waitPromise;
       },
@@ -552,12 +1135,14 @@ class SdkSandboxHandle implements E2BSandboxHandle {
   }
 
   async killProcess(pid: number, signal?: AbortSignal): Promise<boolean> {
+    const killCommand = `${TRUSTED_KILL} -KILL -- -${pid} >/dev/null 2>&1 || true`;
     await this.sandbox.commands
-      .run(`${TRUSTED_KILL} -KILL -- -${pid} >/dev/null 2>&1 || true`, {
+      .run(isolatedUserShell(E2B_PROJECT_USER, killCommand), {
+        user: "root",
         timeoutMs: 5_000,
         requestTimeoutMs: 5_000,
         signal,
-        envs: { PATH: TRUSTED_CONTROL_PATH },
+        envs: TRUSTED_LAUNCH_ENV,
       })
       .catch(() => undefined);
     return this.sandbox.commands.kill(pid, { signal });
@@ -576,6 +1161,21 @@ class SdkSandboxHandle implements E2BSandboxHandle {
   }
 }
 
+async function cleanupFailedSandbox(
+  sandboxId: string,
+  options: Pick<E2BCreateOptions, "apiKey" | "requestTimeoutMs">,
+): Promise<"confirmed" | "failed"> {
+  try {
+    await Sandbox.kill(sandboxId, {
+      apiKey: options.apiKey,
+      requestTimeoutMs: options.requestTimeoutMs,
+    });
+    return "confirmed";
+  } catch {
+    return "failed";
+  }
+}
+
 /**
  * Thin wrapper around the official SDK. Keeping this boundary small makes the
  * runtime testable without an E2B account and, more importantly, gives tests a
@@ -589,10 +1189,13 @@ export class E2BSdkAdapter implements E2BAdapter {
       requestTimeoutMs: options.requestTimeoutMs,
       signal: options.signal,
       secure: true,
-      lifecycle: {
-        onTimeout: "pause",
-        autoResume: true,
-      },
+      allowInternetAccess: options.allowInternetAccess,
+      lifecycle:
+        options.lifecycle ??
+        ({
+          onTimeout: "pause",
+          autoResume: true,
+        } as const),
       network: {
         allowPublicTraffic: false,
       },
@@ -607,18 +1210,37 @@ export class E2BSdkAdapter implements E2BAdapter {
       options.templateId === "base"
         ? await Sandbox.create(sandboxOptions)
         : await Sandbox.create(options.templateId, sandboxOptions);
-    return new SdkSandboxHandle(sandbox);
+    const handle = new SdkSandboxHandle(sandbox);
+    try {
+      await handle.prepareExecutionEnvironment(options.signal);
+      return handle;
+    } catch (error) {
+      const cleanupStatus = await cleanupFailedSandbox(sandbox.sandboxId, options);
+      throw new E2BTrustedEnvironmentError(
+        error instanceof E2BTrustedEnvironmentError ? error.stage : "bootstrap",
+        cleanupStatus,
+      );
+    }
   }
 
   async connect(sandboxId: string, options: E2BConnectOptions): Promise<E2BSandboxHandle> {
-    return new SdkSandboxHandle(
-      await Sandbox.connect(sandboxId, {
-        apiKey: options.apiKey,
-        timeoutMs: options.timeoutMs,
-        requestTimeoutMs: options.requestTimeoutMs,
-        signal: options.signal,
-      }),
-    );
+    const sandbox = await Sandbox.connect(sandboxId, {
+      apiKey: options.apiKey,
+      timeoutMs: options.timeoutMs,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
+    });
+    const handle = new SdkSandboxHandle(sandbox);
+    try {
+      await handle.prepareExecutionEnvironment(options.signal);
+      return handle;
+    } catch (error) {
+      const cleanupStatus = await cleanupFailedSandbox(sandbox.sandboxId, options);
+      throw new E2BTrustedEnvironmentError(
+        error instanceof E2BTrustedEnvironmentError ? error.stage : "bootstrap",
+        cleanupStatus,
+      );
+    }
   }
 
   destroy(
