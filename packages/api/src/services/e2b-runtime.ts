@@ -6,9 +6,11 @@ import {
   type E2BSandboxHandle,
   E2BSdkAdapter,
 } from "./e2b-adapter.js";
+import { type E2BNodeRuntimePlan, resolveProjectE2BNodeRuntime } from "./e2b-node-runtime.js";
 import {
   E2BTrustedEnvironmentError,
   E2B_PREVIEW_RELAY_PORT,
+  E2B_PROJECT_HOME,
   assertE2BPreviewTargetPort,
 } from "./e2b-preview-relay.js";
 import {
@@ -29,6 +31,9 @@ const MAX_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const MAX_COMMAND_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES_PER_STREAM = 2 * 1024 * 1024;
+const NODE_RUNTIME_BOOTSTRAP_TIMEOUT_MS = 5 * 60_000;
+const NODE_RUNTIME_BOOTSTRAP_OUTPUT_BYTES = 32 * 1024;
+const NODE_RUNTIME_ERROR_DETAIL_BYTES = 4 * 1024;
 
 export type E2BProjectFence = {
   projectId: string;
@@ -323,6 +328,49 @@ function truncateUtf8(value: string, maxBytes = MAX_OUTPUT_BYTES_PER_STREAM): st
   return `${encoded.subarray(0, maxBytes).toString("utf8")}\n[output truncated by Quillra]`;
 }
 
+async function forwardNodeRuntimeFailure(
+  callback: ((chunk: string) => void | Promise<void>) | undefined,
+  output: string,
+): Promise<void> {
+  if (!callback || !output) return;
+  await Promise.resolve(callback(output)).catch(() => undefined);
+}
+
+async function bootstrapNodeRuntime(
+  sandbox: E2BSandboxHandle,
+  runtime: E2BNodeRuntimePlan,
+  options: {
+    signal?: AbortSignal;
+    onStdout?: (chunk: string) => void | Promise<void>;
+    onStderr?: (chunk: string) => void | Promise<void>;
+  },
+): Promise<void> {
+  const process = await sandbox.startCommand(runtime.bootstrapCommand, {
+    cwd: E2B_PROJECT_HOME,
+    timeoutMs: NODE_RUNTIME_BOOTSTRAP_TIMEOUT_MS,
+    signal: options.signal,
+    maxOutputBytes: NODE_RUNTIME_BOOTSTRAP_OUTPUT_BYTES,
+  });
+  const result = await waitForProcess(process, options.signal);
+  if (result.exitCode === 0) return;
+
+  const stdout = truncateUtf8(result.stdout, NODE_RUNTIME_ERROR_DETAIL_BYTES);
+  const stderr = truncateUtf8(result.stderr, NODE_RUNTIME_ERROR_DETAIL_BYTES);
+  await Promise.all([
+    forwardNodeRuntimeFailure(options.onStdout, stdout),
+    forwardNodeRuntimeFailure(options.onStderr, stderr),
+  ]);
+  const details = [
+    stdout.trim() ? `stdout:\n${stdout.trim()}` : "",
+    stderr.trim() ? `stderr:\n${stderr.trim()}` : "",
+  ].filter(Boolean);
+  throw new Error(
+    details.length > 0
+      ? `Quillra could not prepare the project's Node.js runtime.\n${details.join("\n")}`
+      : "Quillra could not prepare the project's Node.js runtime.",
+  );
+}
+
 function cappedForwarder(
   callback: ((chunk: string) => void | Promise<void>) | undefined,
 ): (chunk: string) => void | Promise<void> {
@@ -398,6 +446,10 @@ export class E2BRuntime {
   private readonly gate: CredentialGate;
   private readonly syncLimits?: E2BSyncLimits;
   private readonly projectTails = new Map<string, Promise<unknown>>();
+  private readonly previewLaunches = new Map<
+    string,
+    { token: symbol; sandboxId: string; pid: number }
+  >();
 
   constructor(dependencies: RuntimeDependencies = {}) {
     this.adapter = dependencies.adapter ?? new E2BSdkAdapter();
@@ -472,6 +524,7 @@ export class E2BRuntime {
     return this.runProjectOperation(fence, async () => {
       const command = validateCommand(options.command);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
+      const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
 
       // A previous finite command or preview may have daemonized descendants.
@@ -490,10 +543,19 @@ export class E2BRuntime {
       let result: E2BCommandResult | undefined;
       let executionError: unknown;
       try {
+        if (nodeRuntime) {
+          await bootstrapNodeRuntime(sandbox, nodeRuntime, {
+            signal: options.signal,
+            onStdout: options.onStdout,
+            onStderr: options.onStderr,
+          });
+        }
         const process = await sandbox.startCommand(command, {
           cwd: E2B_WORKSPACE_ROOT,
           timeoutMs,
           signal: options.signal,
+          envs: nodeRuntime?.environment,
+          projectPathPrefix: nodeRuntime?.pathPrefix,
           maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
           onStdout: cappedForwarder(options.onStdout),
           onStderr: cappedForwarder(options.onStderr),
@@ -542,15 +604,20 @@ export class E2BRuntime {
       onStdout?: (chunk: string) => void | Promise<void>;
       onStderr?: (chunk: string) => void | Promise<void>;
       onExit?: (result: E2BCommandResult) => void | Promise<void>;
+      defaultNodeRuntime?: boolean;
     },
   ): Promise<{ pid: number; port: number }> {
     return this.runProjectOperation(fence, async () => {
       const command = validateCommand(options.command);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
+      const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot, {
+        defaultWhenMissing: options.defaultNodeRuntime,
+      });
       assertE2BPreviewTargetPort(options.port);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
       let process: E2BProcess;
       try {
+        this.previewLaunches.delete(fence.projectId);
         // Kill every process owned by project code, including descendants that
         // escaped the previously recorded process group, before any trusted
         // public port is rebound.
@@ -568,6 +635,13 @@ export class E2BRuntime {
           limits: this.syncLimits,
           signal: options.signal,
         });
+        if (nodeRuntime) {
+          await bootstrapNodeRuntime(sandbox, nodeRuntime, {
+            signal: options.signal,
+            onStdout: options.onStdout,
+            onStderr: options.onStderr,
+          });
+        }
         await sandbox.startPreviewRelay(options.port, options.signal);
         process = await sandbox.startCommand(command, {
           cwd: E2B_PREVIEW_ROOT,
@@ -575,9 +649,11 @@ export class E2BRuntime {
           signal: options.signal,
           maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
           envs: {
+            ...nodeRuntime?.environment,
             HOST: "127.0.0.1",
             PORT: String(options.port),
           },
+          projectPathPrefix: nodeRuntime?.pathPrefix,
           onStdout: cappedForwarder(options.onStdout),
           onStderr: cappedForwarder(options.onStderr),
         });
@@ -596,6 +672,12 @@ export class E2BRuntime {
         pid: process.pid,
         port: options.port,
       });
+      const launchToken = Symbol(fence.projectId);
+      this.previewLaunches.set(fence.projectId, {
+        token: launchToken,
+        sandboxId: sandbox.sandboxId,
+        pid: process.pid,
+      });
       void process
         .wait()
         .catch(
@@ -607,6 +689,14 @@ export class E2BRuntime {
           }),
         )
         .then(async (result) => {
+          const launch = this.previewLaunches.get(fence.projectId);
+          if (
+            launch?.token !== launchToken ||
+            launch.sandboxId !== sandbox.sandboxId ||
+            launch.pid !== process.pid
+          ) {
+            return;
+          }
           const exited = this.store.get(fence.projectId);
           if (exited?.sandboxId === sandbox.sandboxId && exited.previewPid === process.pid) {
             // Revoke the traffic token route before user callbacks or remote
@@ -617,6 +707,8 @@ export class E2BRuntime {
             await options.onExit?.(result);
           } finally {
             await this.runProjectOperation(fence, async () => {
+              if (this.previewLaunches.get(fence.projectId)?.token !== launchToken) return;
+              this.previewLaunches.delete(fence.projectId);
               const current = this.store.get(fence.projectId);
               if (current?.sandboxId !== sandbox.sandboxId || current.previewPid !== process.pid) {
                 return;
@@ -639,6 +731,10 @@ export class E2BRuntime {
   stopPreview(fence: E2BProjectFence, options: { signal?: AbortSignal } = {}): Promise<void> {
     return this.runProjectOperation(fence, async () => {
       await this.store.assertFence(fence);
+      // Invalidate only after the queued operation proves that this fence is
+      // still current. An obsolete caller must never suppress cleanup for the
+      // project's active preview.
+      this.previewLaunches.delete(fence.projectId);
       const record = this.store.get(fence.projectId);
       if (!record) return;
       // Revocation is synchronous and must precede any provider call: a failed
@@ -728,6 +824,8 @@ export class E2BRuntime {
   destroyProject(fence: E2BProjectFence, options: { signal?: AbortSignal } = {}): Promise<void> {
     return this.runProjectOperation(fence, async () => {
       await this.store.assertFence(fence);
+      // Keep the same fence boundary as the persistent sandbox mutation.
+      this.previewLaunches.delete(fence.projectId);
       const record = this.store.get(fence.projectId);
       if (!record) return;
       unregisterPreviewUpstream(record.projectId);
@@ -760,6 +858,7 @@ export class E2BRuntime {
     }
     const failures: Error[] = [];
     for (const record of records) {
+      this.previewLaunches.delete(record.projectId);
       unregisterPreviewUpstream(record.projectId);
       try {
         await this.adapter.destroy(record.sandboxId, {
@@ -882,6 +981,7 @@ export class E2BRuntime {
         projectId: fence.projectId,
         timeoutMs: config.sandboxTimeoutMs,
         requestTimeoutMs: config.requestTimeoutMs,
+        allowInternetAccess: true,
         onSandboxCreated: rememberCreatedSandbox,
         signal,
       });
@@ -961,6 +1061,7 @@ export class E2BRuntime {
     record: E2BProjectSandboxRecord,
     sandbox: E2BSandboxHandle,
   ): Promise<void> {
+    this.previewLaunches.delete(record.projectId);
     unregisterPreviewUpstream(record.projectId);
     try {
       await sandbox.quiesceProjectProcesses();
@@ -982,6 +1083,7 @@ export class E2BRuntime {
     record: E2BProjectSandboxRecord,
     sandbox: E2BSandboxHandle,
   ): Promise<void> {
+    this.previewLaunches.delete(record.projectId);
     unregisterPreviewUpstream(record.projectId);
     try {
       await sandbox.quiesceProjectProcesses();
@@ -1030,6 +1132,7 @@ export class E2BRuntime {
     record: E2BProjectSandboxRecord,
     sandbox: E2BSandboxHandle,
   ): Promise<"confirmed" | "failed"> {
+    this.previewLaunches.delete(record.projectId);
     // This must happen before `kill()`: provider cleanup can time out or reject,
     // but no request may continue carrying the sandbox traffic token.
     unregisterPreviewUpstream(record.projectId);

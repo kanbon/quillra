@@ -99,20 +99,20 @@ function installTrafficGateway(
 function verificationSandbox(
   options: {
     trafficAccessToken?: string;
-    networkResult?: { exitCode: number; stdout: string; stderr?: string };
+    downloadResult?: { exitCode: number; stdout: string; stderr?: string };
     prerequisiteResult?: { exitCode: number; stdout: string; stderr?: string };
     prepare?: () => Promise<void>;
     startRelay?: (targetPort: number) => Promise<void>;
     kill?: () => Promise<boolean>;
   } = {},
 ) {
-  const networkProcess = {
+  const downloadProcess = {
     pid: 40,
     wait: vi.fn(async () => ({
       exitCode: 0,
-      stdout: "quillra-e2b-egress-blocked",
+      stdout: "quillra-e2b-downloads-reachable",
       stderr: "",
-      ...options.networkResult,
+      ...options.downloadResult,
     })),
     kill: vi.fn(async () => true),
   };
@@ -133,7 +133,7 @@ function verificationSandbox(
   };
   const startCommand = vi
     .fn()
-    .mockResolvedValueOnce(networkProcess)
+    .mockResolvedValueOnce(downloadProcess)
     .mockResolvedValueOnce(prerequisiteProcess)
     .mockResolvedValueOnce(trafficProcess);
   const prepareExecutionEnvironment = vi.fn(options.prepare ?? (async () => undefined));
@@ -150,7 +150,7 @@ function verificationSandbox(
       kill,
     },
     kill,
-    networkProcess,
+    downloadProcess,
     prepareExecutionEnvironment,
     prerequisiteProcess,
     startCommand,
@@ -185,14 +185,17 @@ describe("E2B configuration verification", () => {
     expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(6_317);
     expect(sandbox.startCommand).toHaveBeenCalledTimes(3);
 
-    const [networkProbe, networkOptions] = sandbox.startCommand.mock.calls[0] ?? [];
-    expect(networkProbe).toContain('"1.1.1.1",80,"one.one.one.one"');
-    expect(networkProbe).toContain('"8.8.8.8",80,"dns.google"');
-    expect(networkProbe).toContain('"2606:4700:4700::1111",80');
-    expect(networkProbe).toContain('"2001:4860:4860::8888",80');
-    expect(networkProbe).toContain("sock.sendall(request)");
-    expect(networkProbe).toContain("if sock.recv(1):");
-    expect(networkOptions).toMatchObject({
+    const [downloadProbe, downloadOptions] = sandbox.startCommand.mock.calls[0] ?? [];
+    expect(downloadProbe).toContain("https://nodejs.org/dist/index.json");
+    expect(downloadProbe).toContain("https://registry.npmjs.org/corepack");
+    expect(downloadProbe).toContain("/usr/bin/curl");
+    expect(downloadProbe).toContain("--head");
+    expect(downloadProbe).toContain("--connect-timeout 3");
+    expect(downloadProbe).toContain("--max-time 4");
+    expect(downloadProbe).toContain('--proto "=https"');
+    expect(downloadProbe).toContain("quillra-e2b-downloads-reachable");
+    expect(downloadProbe).not.toContain("1.1.1.1");
+    expect(downloadOptions).toMatchObject({
       cwd: "/home/quillra-project",
       timeoutMs: 10_000,
       maxOutputBytes: 1_024,
@@ -202,15 +205,23 @@ describe("E2B configuration verification", () => {
     for (const tool of [
       "/bin/bash",
       "/bin/rm",
+      "/usr/bin/awk",
       "/usr/bin/base64",
       "/usr/bin/cat",
+      "/usr/bin/curl",
       "/usr/bin/dd",
       "/usr/bin/head",
       "/usr/bin/id",
       "/usr/bin/kill",
+      "/usr/bin/mkdir",
       "/usr/bin/mkfifo",
+      "/usr/bin/mv",
       "/usr/bin/python3",
       "/usr/bin/setsid",
+      "/usr/bin/sha256sum",
+      "/usr/bin/tar",
+      "/usr/bin/uname",
+      "/usr/bin/xz",
     ]) {
       expect(prerequisiteProbe).toContain(tool);
     }
@@ -268,13 +279,13 @@ describe("E2B configuration verification", () => {
     expect(JSON.stringify(report)).not.toContain("e2b_live_secret");
   });
 
-  it("fails closed and removes the sandbox when outbound data exchange succeeds", async () => {
+  it("fails closed and removes the sandbox when required downloads are unreachable", async () => {
     const sandbox = verificationSandbox({
-      networkResult: { exitCode: 41, stdout: "" },
+      downloadResult: { exitCode: 28, stdout: "" },
     });
 
     const failure = await verifyE2bConfiguration(
-      { apiKey: "e2b_open_egress" },
+      { apiKey: "e2b_downloads_unreachable" },
       async () => sandbox.handle,
     ).catch((error: unknown) => error);
 
@@ -283,7 +294,7 @@ describe("E2B configuration verification", () => {
       code: "probe-failed",
       verification: { failedStage: "sandbox" },
     });
-    expect(JSON.stringify(failure)).toContain("Fixed command exited with code 41");
+    expect(JSON.stringify(failure)).toContain("Fixed command exited with code 28");
     expect(sandbox.prepareExecutionEnvironment).not.toHaveBeenCalled();
     expect(sandbox.kill).toHaveBeenCalledOnce();
   });

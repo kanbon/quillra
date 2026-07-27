@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { type FrameworkDef, detectFromManifest } from "./framework-registry.js";
+import { readProjectPackageJson } from "./project-manifest.js";
 
 export type FrameworkInfo = {
   id: string;
@@ -44,19 +45,8 @@ function defToInfo(def: FrameworkDef): FrameworkInfo {
 type CacheEntry = { mtimeMs: number; info: FrameworkInfo };
 const cache = new Map<string, CacheEntry>();
 
-function readJson(
-  file: string,
-): { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
 function detect(repoPath: string): FrameworkInfo {
-  const pkgPath = path.join(repoPath, "package.json");
-  const packageJson = fs.existsSync(pkgPath) ? readJson(pkgPath) : null;
+  const packageJson = readProjectPackageJson(repoPath);
   const def = detectFromManifest({ packageJson });
   return def ? defToInfo(def) : UNKNOWN;
 }
@@ -69,7 +59,8 @@ export function detectFramework(repoPath: string): FrameworkInfo {
   const pkgPath = path.join(repoPath, "package.json");
   let mtimeMs = 0;
   try {
-    mtimeMs = fs.statSync(pkgPath).mtimeMs;
+    const info = fs.lstatSync(pkgPath);
+    if (info.isFile() && !info.isSymbolicLink()) mtimeMs = info.mtimeMs;
   } catch {
     // No package.json, still cache by repo path with mtime 0
   }

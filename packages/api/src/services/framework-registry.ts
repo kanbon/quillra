@@ -128,7 +128,7 @@ const FRAMEWORKS: FrameworkDef[] = [
     optimizes: false,
     blurb: "Simpler static site generator. Pure Node, no JS framework lock-in.",
     packageDeps: ["@11ty/eleventy"],
-    devCommand: { binary: "npx", args: ["@11ty/eleventy", "--serve", "--port={port}"] },
+    devCommand: { binary: "npx", args: ["eleventy", "--serve", "--port={port}"] },
   },
   {
     id: "vite",
@@ -154,9 +154,11 @@ const FRAMEWORKS: FrameworkDef[] = [
     blurb: "Create React App project. Classic react-scripts dev server.",
     packageDeps: ["react-scripts"],
     devCommand: {
-      // CRA reads PORT from env; pass it inline via sh -c so it binds to our port
-      binary: "sh",
-      args: ["-c", "HOST=127.0.0.1 PORT={port} BROWSER=none npx react-scripts start"],
+      // Preview startup already supplies HOST, PORT, and BROWSER. Keeping the
+      // package binary structured lets workspace resolution use npm, pnpm, or
+      // Yarn consistently instead of embedding an npm-only shell command.
+      binary: "npx",
+      args: ["react-scripts", "start"],
     },
   },
   {

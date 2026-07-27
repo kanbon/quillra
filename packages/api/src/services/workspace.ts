@@ -5,6 +5,12 @@ import { simpleGit } from "simple-git";
 import { rawSqlite } from "../db/index.js";
 import { ensureProjectDirectory, ensureProjectGitExclude } from "../lib/project-files.js";
 import { createSafeChildEnv } from "./child-process-env.js";
+import {
+  parseProjectDevEngineEntries,
+  projectDevEngineFailureIsBlocking,
+  validateProjectDevEngineVersionRange,
+} from "./dev-engines.js";
+import type { E2BCommandResult } from "./e2b-adapter.js";
 import { E2B_PREVIEW_TARGET_MAX_PORT, E2B_PREVIEW_TARGET_MIN_PORT } from "./e2b-preview-relay.js";
 import { type E2BProjectFence, getDefaultE2BRuntime } from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
@@ -42,6 +48,7 @@ import {
   assertProjectGithubBinding,
   resolveProjectGitToken,
 } from "./project-github-token.js";
+import { type ProjectPackageJson, readProjectPackageJson } from "./project-manifest.js";
 import {
   beginProjectWriterReset,
   blockProjectWritersForDeletion,
@@ -52,7 +59,12 @@ import {
 
 const previewProcesses = new Map<
   string,
-  { pid: number; port: number; githubBindingGeneration: number }
+  { launchToken: symbol; pid: number; port: number; githubBindingGeneration: number }
+>();
+const activePreviewLaunches = new Map<string, symbol>();
+const lastPreviewExits = new Map<
+  string,
+  { launchToken: symbol; pid: number | null; exitCode: number }
 >();
 const previewStartQueues = new Map<string, Promise<void>>();
 const previewReservationQueues = new Map<string, Promise<void>>();
@@ -255,26 +267,204 @@ export function reserveAvailablePreviewPort(
   return next;
 }
 
-export function getPackageManager(repoPath: string): "yarn" | "pnpm" | "npm" {
-  const declared = readPkgJson(repoPath)
-    ?.packageManager?.match(/^(yarn|pnpm|npm)@/i)?.[1]
-    ?.toLowerCase();
-  if (declared === "yarn" || declared === "pnpm" || declared === "npm") return declared;
-  if (fs.existsSync(path.join(repoPath, "yarn.lock"))) return "yarn";
-  if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) return "pnpm";
-  return "npm";
+export type PackageManagerName = "yarn" | "pnpm" | "npm";
+
+export type PackageManagerSelection = {
+  name: PackageManagerName;
+  /** Corepack version or range from package.json, excluding the manager name. */
+  version: string | null;
+};
+
+const PACKAGE_MANAGER_DECLARATION = /^([^@]+)@(.+)$/;
+const EXACT_SEMVER =
+  "(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?";
+const COREPACK_INTEGRITY =
+  "(?:\\+sha224\\.[0-9a-f]{56}|\\+sha256\\.[0-9a-f]{64}|\\+sha384\\.[0-9a-f]{96}|\\+sha512\\.[0-9a-f]{128})?";
+const SAFE_PACKAGE_MANAGER_REFERENCE = new RegExp(`^${EXACT_SEMVER}${COREPACK_INTEGRITY}$`, "i");
+const SAFE_PACKAGE_MANAGER_RANGE = /^[0-9A-Za-z*+.<>=^~| -]+$/;
+const MAX_PACKAGE_MANAGER_REFERENCE_LENGTH = 256;
+const COREPACK_ENVIRONMENT = [
+  "COREPACK_ENABLE_AUTO_PIN=0",
+  "COREPACK_DEFAULT_TO_LATEST=0",
+  "COREPACK_ENABLE_PROJECT_SPEC=0",
+] as const;
+
+function packageManagerName(value: string, source: string): PackageManagerName {
+  const normalized = value.toLowerCase();
+  if (normalized === "yarn" || normalized === "pnpm" || normalized === "npm") {
+    return normalized;
+  }
+  throw new Error(
+    `Unsupported package manager "${value}" in ${source}. Quillra supports npm, pnpm, and Yarn.`,
+  );
 }
 
-function packageInstallCommand(repoPath: string): string | null {
-  if (!fs.existsSync(path.join(repoPath, "package.json"))) return null;
+function exactPackageManagerVersion(value: unknown, source: string): string | null {
+  if (value === undefined) return null;
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_PACKAGE_MANAGER_REFERENCE_LENGTH ||
+    !SAFE_PACKAGE_MANAGER_REFERENCE.test(value)
+  ) {
+    throw new Error(`${source} must use an exact semantic version.`);
+  }
+  return value;
+}
+
+function topLevelPackageManager(value: unknown): PackageManagerSelection {
+  if (typeof value !== "string") {
+    throw new Error(
+      "packageManager must be a string such as pnpm@10.34.0, yarn@4.9.1, or npm@11.5.1.",
+    );
+  }
+  const match = value.match(PACKAGE_MANAGER_DECLARATION);
+  if (!match?.[1] || !match[2]) {
+    throw new Error("packageManager must include an exact version, such as pnpm@10.34.0.");
+  }
+  return {
+    name: packageManagerName(match[1], "packageManager"),
+    version: exactPackageManagerVersion(match[2], "packageManager version"),
+  };
+}
+
+function devEnginesPackageManagerVersion(value: string | undefined, source: string): string | null {
+  if (value === undefined || value === "*") return null;
+  if (
+    value.length > MAX_PACKAGE_MANAGER_REFERENCE_LENGTH ||
+    !SAFE_PACKAGE_MANAGER_RANGE.test(value)
+  ) {
+    throw new Error(`${source} must use a safe semantic version range.`);
+  }
+  return validateProjectDevEngineVersionRange(value, source);
+}
+
+function lockfilePackageManager(repoPath: string): PackageManagerName | null {
+  if (fs.existsSync(path.join(repoPath, "yarn.lock"))) return "yarn";
+  if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) return "pnpm";
+  return null;
+}
+
+function devEnginesPackageManager(
+  value: unknown,
+  preferredName: PackageManagerName | null,
+): PackageManagerSelection | null {
+  const entries = parseProjectDevEngineEntries(value, "devEngines.packageManager");
+  if (entries.length === 0) return null;
+
+  const selections: PackageManagerSelection[] = [];
+  let firstError: Error | undefined;
+  for (const entry of entries) {
+    try {
+      selections.push({
+        name: packageManagerName(entry.name, "devEngines.packageManager"),
+        version: devEnginesPackageManagerVersion(
+          entry.version,
+          "devEngines.packageManager.version",
+        ),
+      });
+    } catch (error) {
+      firstError ??=
+        error instanceof Error
+          ? error
+          : new Error("Quillra could not resolve devEngines.packageManager.");
+    }
+  }
+
+  const preferred = preferredName
+    ? selections.find((selection) => selection.name === preferredName)
+    : undefined;
+  const selected = preferred ?? selections[0];
+  if (selected) return selected;
+  if (!projectDevEngineFailureIsBlocking(entries)) return null;
+  throw firstError ?? new Error("devEngines.packageManager has no supported alternative.");
+}
+
+function declaredPackageManager(
+  manifest: ProjectPackageJson | null,
+  preferredName: PackageManagerName | null,
+): PackageManagerSelection | null {
+  if (!manifest) return null;
+  if (Object.hasOwn(manifest, "packageManager")) {
+    return topLevelPackageManager(manifest.packageManager);
+  }
+
+  const devEngines = manifest.devEngines;
+  if (!devEngines || typeof devEngines !== "object" || Array.isArray(devEngines)) return null;
+  if (!Object.hasOwn(devEngines, "packageManager")) return null;
+  return devEnginesPackageManager(
+    (devEngines as { packageManager?: unknown }).packageManager,
+    preferredName,
+  );
+}
+
+export function resolvePackageManager(repoPath: string): PackageManagerSelection {
+  const lockfileManager = lockfilePackageManager(repoPath);
+  const declared = declaredPackageManager(readProjectPackageJson(repoPath), lockfileManager);
+  if (declared) return declared;
+  if (lockfileManager) return { name: lockfileManager, version: null };
+  return { name: "npm", version: null };
+}
+
+export function getPackageManager(repoPath: string): PackageManagerName {
+  return resolvePackageManager(repoPath).name;
+}
+
+function corepackDescriptor(manager: PackageManagerSelection): string {
+  return manager.version ? `${manager.name}@${manager.version}` : manager.name;
+}
+
+function corepackDevCommand(args: string[], label: string): DevCmd {
+  return {
+    command: "env",
+    args: [...COREPACK_ENVIRONMENT, "corepack", ...args],
+    label,
+  };
+}
+
+function packageBinaryCommand(
+  manager: PackageManagerSelection,
+  binary: string,
+  args: string[],
+  label: string,
+): DevCmd {
+  if (manager.name === "pnpm") {
+    return corepackDevCommand([corepackDescriptor(manager), "exec", binary, ...args], label);
+  }
+  if (manager.name === "yarn") {
+    return corepackDevCommand([corepackDescriptor(manager), "run", binary, ...args], label);
+  }
+  if (manager.version) {
+    return corepackDevCommand([corepackDescriptor(manager), "exec", "--", binary, ...args], label);
+  }
+  return { command: "npx", args: [binary, ...args], label };
+}
+
+export function packageInstallCommand(repoPath: string): string | null {
+  if (!readProjectPackageJson(repoPath)) return null;
   const environment = "NODE_ENV=development NPM_CONFIG_PRODUCTION=false";
-  switch (getPackageManager(repoPath)) {
+  const manager = resolvePackageManager(repoPath);
+  const corepackEnvironment = COREPACK_ENVIRONMENT.join(" ");
+  switch (manager.name) {
     case "yarn":
-      return `${environment} sh -c 'command -v yarn >/dev/null 2>&1 || corepack enable; yarn install'`;
+      return `${environment} ${corepackEnvironment} ${shellCommand("corepack", [
+        corepackDescriptor(manager),
+        "install",
+      ])}`;
     case "pnpm":
-      return `${environment} sh -c 'command -v pnpm >/dev/null 2>&1 || corepack enable; pnpm install --prod=false'`;
+      return `${environment} ${corepackEnvironment} ${shellCommand("corepack", [
+        corepackDescriptor(manager),
+        "install",
+        "--prod=false",
+      ])}`;
     default:
-      return `${environment} npm install --include=dev`;
+      if (manager.version) {
+        return `${environment} ${corepackEnvironment} ${shellCommand("corepack", [
+          corepackDescriptor(manager),
+          "install",
+          "--include=dev",
+        ])}`;
+      }
+      return `${environment} ${shellCommand("npm", ["install", "--include=dev"])}`;
   }
 }
 
@@ -304,18 +494,7 @@ export async function installDependenciesIfNeeded(
 type DevCmd = { command: string; args: string[]; label: string };
 
 function readPkgJson(repoPath: string) {
-  const p = path.join(repoPath, "package.json");
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, "utf-8")) as {
-      packageManager?: string;
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-      scripts?: Record<string, string>;
-    };
-  } catch {
-    return null;
-  }
+  return readProjectPackageJson(repoPath);
 }
 
 export function resolveDevCommand(
@@ -342,27 +521,38 @@ export function resolveDevCommand(
   const pkg = readPkgJson(repoPath);
   const def = detectFromManifest({ packageJson: pkg });
   if (def) {
-    return {
-      command: def.devCommand.binary,
-      args: def.devCommand.args.map((a) => a.replace(/\{port\}/g, String(port))),
-      label: def.label,
-    };
+    const args = def.devCommand.args.map((a) => a.replace(/\{port\}/g, String(port)));
+    if (def.devCommand.binary === "npx") {
+      const [binary, ...binaryArgs] = args;
+      if (binary) {
+        return packageBinaryCommand(resolvePackageManager(repoPath), binary, binaryArgs, def.label);
+      }
+    }
+    return { command: def.devCommand.binary, args, label: def.label };
   }
 
   // 3) Fall back to whatever `dev` script is in package.json
-  const pm = getPackageManager(repoPath);
+  const pm = resolvePackageManager(repoPath);
   if (pkg?.scripts?.dev) {
-    if (pm === "yarn") return { command: "yarn", args: ["run", "dev"], label: "yarn dev" };
-    if (pm === "pnpm") return { command: "pnpm", args: ["run", "dev"], label: "pnpm dev" };
+    if (pm.name === "yarn") {
+      return corepackDevCommand([corepackDescriptor(pm), "run", "dev"], "yarn dev");
+    }
+    if (pm.name === "pnpm") {
+      return corepackDevCommand([corepackDescriptor(pm), "run", "dev"], "pnpm dev");
+    }
+    if (pm.version) {
+      return corepackDevCommand([corepackDescriptor(pm), "run", "dev"], "npm run dev");
+    }
     return { command: "npm", args: ["run", "dev"], label: "npm run dev" };
   }
 
   // 4) Last-resort default
-  return {
-    command: "npx",
-    args: ["vite", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
-    label: "Static site",
-  };
+  return packageBinaryCommand(
+    pm,
+    "vite",
+    ["--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+    "Static site",
+  );
 }
 
 function shellQuote(value: string): string {
@@ -384,13 +574,49 @@ export function getPreviewProcessInfo(projectId: string): {
   signalCode: string | null;
 } {
   const process = previewProcesses.get(projectId);
-  if (!process) return { running: false, pid: null, exitCode: null, signalCode: null };
+  if (process) {
+    return {
+      running: true,
+      pid: process.pid,
+      exitCode: null,
+      signalCode: null,
+    };
+  }
+  const exit = lastPreviewExits.get(projectId);
   return {
-    running: true,
-    pid: process.pid,
-    exitCode: null,
+    running: false,
+    pid: exit?.pid ?? null,
+    exitCode: exit?.exitCode ?? null,
     signalCode: null,
   };
+}
+
+function previewExitError(result: E2BCommandResult): Error {
+  return new Error(`The E2B dev server exited during startup with code ${result.exitCode}.`);
+}
+
+function finalizeUnexpectedPreviewExit(
+  projectId: string,
+  launchToken: symbol,
+  port: number,
+  pid: number | null,
+  result: E2BCommandResult,
+): boolean {
+  if (activePreviewLaunches.get(projectId) !== launchToken) return false;
+
+  activePreviewLaunches.delete(projectId);
+  const current = previewProcesses.get(projectId);
+  if (current?.launchToken === launchToken) previewProcesses.delete(projectId);
+  lastPreviewExits.set(projectId, {
+    launchToken,
+    pid: current?.pid ?? pid,
+    exitCode: result.exitCode,
+  });
+  unregisterPreviewUpstream(projectId, port);
+  revokePreviewCapability(projectId);
+  unregisterPreviewPort(projectId, port);
+  setPreviewStatus(projectId, "error", `Dev server exited with code ${result.exitCode}`);
+  return true;
 }
 
 async function removeManagedProjectPath(target: string): Promise<void> {
@@ -427,7 +653,9 @@ export async function destroyProjectExecution(
 ): Promise<void> {
   await stopPreviewAndWait(projectId, expectedBindingGeneration);
   await getDefaultE2BRuntime().destroyProject(projectFence(projectId, expectedBindingGeneration));
+  activePreviewLaunches.delete(projectId);
   previewProcesses.delete(projectId);
+  lastPreviewExits.delete(projectId);
   unregisterPreviewUpstream(projectId);
 }
 
@@ -908,6 +1136,9 @@ async function stopPreviewAndWait(
   projectId: string,
   expectedBindingGeneration?: number,
 ): Promise<void> {
+  const process = previewProcesses.get(projectId);
+  activePreviewLaunches.delete(projectId);
+  previewProcesses.delete(projectId);
   revokePreviewCapability(projectId);
   unregisterPreviewPort(projectId);
   unregisterPreviewUpstream(projectId);
@@ -919,7 +1150,6 @@ async function stopPreviewAndWait(
   }
 
   const termination = (async () => {
-    const process = previewProcesses.get(projectId);
     let fence: E2BProjectFence | null = null;
     try {
       fence = projectFence(
@@ -934,7 +1164,6 @@ async function stopPreviewAndWait(
     if (fence) {
       await getDefaultE2BRuntime().stopPreview(fence);
     }
-    previewProcesses.delete(projectId);
   })();
   previewTerminationQueues.set(projectId, termination);
   try {
@@ -987,7 +1216,10 @@ async function startDevPreviewNow(
   ].join("; ");
 
   clearPreviewLogs(projectId);
-  let exited = false;
+  const launchToken = Symbol(projectId);
+  activePreviewLaunches.set(projectId, launchToken);
+  lastPreviewExits.delete(projectId);
+  let exitResult: E2BCommandResult | null = null;
   let startedPid: number | null = null;
   try {
     const remote = await getDefaultE2BRuntime().startPreview(fence, {
@@ -995,31 +1227,52 @@ async function startDevPreviewNow(
       command,
       port,
       timeoutMs: 30 * 60_000,
+      defaultNodeRuntime: true,
       onStdout: (chunk) => appendLog(projectId, "stdout", chunk),
       onStderr: (chunk) => appendLog(projectId, "stderr", chunk),
       onExit: (result) => {
-        exited = true;
-        const current = previewProcesses.get(projectId);
-        if (!current || current.pid !== startedPid) return;
-        previewProcesses.delete(projectId);
-        unregisterPreviewUpstream(projectId, port);
-        revokePreviewCapability(projectId);
-        unregisterPreviewPort(projectId, port);
-        if (result.exitCode !== 0) {
-          setPreviewStatus(projectId, "error", `Dev server exited with code ${result.exitCode}`);
-        }
+        exitResult = result;
+        finalizeUnexpectedPreviewExit(projectId, launchToken, port, startedPid, result);
       },
     });
     startedPid = remote.pid;
-    if (exited) throw new Error("The E2B dev server exited during startup.");
-    const upstream = await getDefaultE2BRuntime().getPreviewAccess(fence, port);
-    registerPreviewUpstream(projectId, port, upstream);
+    if (exitResult) {
+      const recordedExit = lastPreviewExits.get(projectId);
+      if (recordedExit?.launchToken === launchToken && recordedExit.pid === null) {
+        lastPreviewExits.set(projectId, { ...recordedExit, pid: remote.pid });
+      }
+      throw previewExitError(exitResult);
+    }
+    if (activePreviewLaunches.get(projectId) !== launchToken) {
+      throw new Error("The preview start was stopped.");
+    }
     previewProcesses.set(projectId, {
+      launchToken,
       pid: remote.pid,
       port,
       githubBindingGeneration: fence.githubBindingGeneration,
     });
+    const upstream = await getDefaultE2BRuntime().getPreviewAccess(fence, port);
+    if (
+      exitResult ||
+      activePreviewLaunches.get(projectId) !== launchToken ||
+      previewProcesses.get(projectId)?.launchToken !== launchToken
+    ) {
+      throw exitResult ? previewExitError(exitResult) : new Error("The preview start was stopped.");
+    }
+    registerPreviewUpstream(projectId, port, upstream);
   } catch (error) {
+    if (activePreviewLaunches.get(projectId) === launchToken) {
+      activePreviewLaunches.delete(projectId);
+      if (previewProcesses.get(projectId)?.launchToken === launchToken) {
+        previewProcesses.delete(projectId);
+      }
+      setPreviewStatus(
+        projectId,
+        "error",
+        error instanceof Error ? error.message : "Failed to start preview",
+      );
+    }
     revokePreviewCapability(projectId);
     unregisterPreviewPort(projectId);
     unregisterPreviewUpstream(projectId, port);
@@ -1030,7 +1283,7 @@ async function startDevPreviewNow(
   }
 
   const markReady = () => {
-    if (previewProcesses.get(projectId)?.pid !== startedPid) return;
+    if (previewProcesses.get(projectId)?.launchToken !== launchToken) return;
     if (markPreviewPortActive(projectId, port)) setPreviewStatus(projectId, "ready");
   };
 
@@ -1038,7 +1291,7 @@ async function startDevPreviewNow(
   // loopback request or project process ever runs inside Quillra's container.
   void (async () => {
     for (let attempt = 0; ; attempt++) {
-      if (previewProcesses.get(projectId)?.pid !== startedPid) return;
+      if (previewProcesses.get(projectId)?.launchToken !== launchToken) return;
       const upstream = previewUpstreamUrl(projectId, port, "/");
       if (!upstream) return;
       try {

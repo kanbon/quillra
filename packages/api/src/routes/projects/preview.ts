@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../../db/index.js";
@@ -7,6 +6,7 @@ import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
 import { getPreviewStatus, isPreviewRoutable } from "../../services/preview-status.js";
 import { previewUpstreamUrl } from "../../services/preview-upstream.js";
+import { readProjectPackageJson } from "../../services/project-manifest.js";
 import {
   ensureRepoCloned,
   getPackageManager,
@@ -156,7 +156,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const preview = getPreviewAddress(projectId, port);
     let previewLabel = "-";
     const repo = projectRepoPath(projectId);
-    if (fs.existsSync(path.join(repo, "package.json"))) {
+    if (readProjectPackageJson(repo)) {
       previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
     }
     const previewActive = isPreviewRoutable(projectId, port);
@@ -188,20 +188,20 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const previewAddress = getPreviewAddress(projectId, port);
     const repoPath = projectRepoPath(projectId);
     const repoExists = fs.existsSync(repoPath);
-    const pkgPath = path.join(repoPath, "package.json");
-    const hasPackageJson = fs.existsSync(pkgPath);
+    const packageJson = repoExists ? readProjectPackageJson(repoPath) : null;
+    const hasPackageJson = packageJson !== null;
     const hasNodeModules = null;
 
     let packageJsonScripts: Record<string, string> | null = null;
     let packageManager: string | null = null;
-    if (hasPackageJson) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
-          scripts?: Record<string, string>;
-        };
-        packageJsonScripts = pkg.scripts ?? null;
-      } catch {
-        /* ignore malformed */
+    if (packageJson) {
+      const scripts = packageJson.scripts as unknown;
+      if (scripts && typeof scripts === "object" && !Array.isArray(scripts)) {
+        packageJsonScripts = Object.fromEntries(
+          Object.entries(scripts).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        );
       }
       packageManager = getPackageManager(repoPath);
     }
