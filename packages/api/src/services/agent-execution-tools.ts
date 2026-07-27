@@ -104,6 +104,16 @@ function commandResultText(result: {
   return chunks.join("\n") || "Command completed successfully.";
 }
 
+const PACKAGE_INSTALL_SEGMENT =
+  /(?:^|&&|\|\||;)\s*(?:env\s+(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*)?(?:corepack\s+)?(?:npm|pnpm|yarn)(?:@[^\s]+)?\s+(?:i|install|add|ci|update|up)\b/i;
+
+export function shouldEnsureAgentDependencies(command: string, migrationMode: boolean): boolean {
+  // Migration flows intentionally replace the old manifest. Explicit install
+  // commands must also run directly so a broken dependency tree can repair
+  // itself and return its real package-manager diagnostics to the agent.
+  return !migrationMode && !PACKAGE_INSTALL_SEGMENT.test(command);
+}
+
 export function buildAgentExecutionMcpServer(params: AgentExecutionParams) {
   const promoteAttachmentTool = tool(
     "promote_attachment",
@@ -171,6 +181,10 @@ export function buildAgentExecutionMcpServer(params: AgentExecutionParams) {
           expectedBindingGeneration: params.githubBindingGeneration,
           timeoutMs: timeout,
           signal: params.signal,
+          // Normal editing commands get a cached, project-local dependency
+          // setup in the same E2B operation. Migration mode owns its package
+          // replacement/install sequence and must not seed the old manifest.
+          ensureDependencies: shouldEnsureAgentDependencies(command, params.migrationMode),
         });
         return {
           content: [{ type: "text", text: commandResultText(result) }],

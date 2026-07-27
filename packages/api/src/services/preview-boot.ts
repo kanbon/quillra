@@ -78,6 +78,7 @@ export function previewBootHtml(
   var stages = ['cloning', 'installing', 'starting', 'ready'];
   var steps = document.querySelectorAll('.step');
   var currentStage = '';
+  var currentStageIndex = -1;
   var stagePolls = 0;
   var pollTimer = 0;
   var stopped = false;
@@ -91,15 +92,22 @@ export function previewBootHtml(
   } catch (_) {}
 
   function setStage(stage) {
-    if (errored) return;
+    if (errored) return false;
     var idx = stages.indexOf(stage);
     if (idx === -1) idx = 0;
+    if (idx < currentStageIndex) return false;
+    if (idx > currentStageIndex) {
+      currentStageIndex = idx;
+      currentStage = stages[idx];
+      stagePolls = 0;
+    }
     steps.forEach(function(s) {
       var sIdx = stages.indexOf(s.dataset.stage);
       s.classList.remove('active', 'done', 'failed');
-      if (sIdx < idx) s.classList.add('done');
-      else if (sIdx === idx) s.classList.add('active');
+      if (sIdx < currentStageIndex) s.classList.add('done');
+      else if (sIdx === currentStageIndex) s.classList.add('active');
     });
+    return true;
   }
 
   function showError(label, detail) {
@@ -152,11 +160,13 @@ export function previewBootHtml(
     errored = false;
     stopped = false;
     failedPolls = 0;
+    currentStage = '';
+    currentStageIndex = -1;
     stagePolls = 0;
     document.getElementById('retry').classList.add('hidden');
     document.getElementById('label').textContent = 'Retrying your preview';
     document.getElementById('detail').textContent = 'Asking Quillra to start a fresh preview…';
-    setStage(currentStage || 'cloning');
+    setStage('cloning');
     window.parent.postMessage({ type: 'quillra:retry-preview', nonce: retryNonce }, '*');
     pollTimer = setTimeout(function() {
       pollTimer = 0;
@@ -171,7 +181,14 @@ export function previewBootHtml(
 
   function scheduleNextPoll() {
     if (stopped) return;
-    var delay = stagePolls >= 30 ? 5000 : 1500;
+    var delay = 500;
+    if (failedPolls > 0) delay = 1500;
+    else if (currentStage === 'starting') delay = 250;
+    else if (currentStage === 'installing') {
+      if (stagePolls >= 30) delay = 5000;
+      else if (stagePolls >= 10) delay = 2000;
+      else delay = 1000;
+    }
     pollTimer = setTimeout(function() {
       pollTimer = 0;
       tick();
@@ -192,13 +209,9 @@ export function previewBootHtml(
           showError(data.label, data.detail);
           return;
         }
-        if (data.stage !== currentStage) {
-          currentStage = data.stage;
-          stagePolls = 0;
-        }
+        var acceptedStage = setStage(data.stage);
         stagePolls++;
-        setStage(data.stage);
-        if (data.stage === 'ready') {
+        if (currentStage === 'ready') {
           stopPolling();
           steps.forEach(function(s) { s.classList.remove('active', 'failed'); s.classList.add('done'); });
           setTimeout(function() {
@@ -209,12 +222,12 @@ export function previewBootHtml(
             } catch (_) {
               window.location.reload();
             }
-          }, 400);
+          }, 50);
         } else if (stagePolls >= 30) {
           // A slow package install is not a failure. The backend lifecycle is
           // authoritative, so keep polling until it reports ready or error.
-          showSlow(data.stage, data.detail);
-        } else {
+          if (acceptedStage) showSlow(currentStage, data.detail);
+        } else if (acceptedStage) {
           if (data.label) document.getElementById('label').textContent = data.label;
           if (data.detail) document.getElementById('detail').textContent = data.detail;
         }

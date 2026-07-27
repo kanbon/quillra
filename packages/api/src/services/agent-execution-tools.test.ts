@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ProjectRole } from "../db/app-schema.js";
-import { promoteAgentAttachment } from "./agent-execution-tools.js";
+import { promoteAgentAttachment, shouldEnsureAgentDependencies } from "./agent-execution-tools.js";
 
 let testRoot: string;
 let repoRoot: string;
@@ -176,5 +176,28 @@ describe("promoteAgentAttachment", () => {
 
     expect(fs.existsSync(path.join(outsideRoot, "escaped.png"))).toBe(false);
     expect(fs.readFileSync(path.join(repoRoot, source), "utf8")).toBe("inside");
+  });
+});
+
+describe("shouldEnsureAgentDependencies", () => {
+  it.each(["pnpm test", "npm run build", "npx vite build", "node scripts/check.mjs"])(
+    "prepares dependencies before %s",
+    (command) => {
+      expect(shouldEnsureAgentDependencies(command, false)).toBe(true);
+    },
+  );
+
+  it.each([
+    "pnpm install",
+    "npm ci",
+    "corepack yarn add react",
+    "rm -rf node_modules && pnpm install",
+    "echo reset; env NODE_ENV=development npm update",
+  ])("lets the explicit package operation run directly: %s", (command) => {
+    expect(shouldEnsureAgentDependencies(command, false)).toBe(false);
+  });
+
+  it("does not seed the old dependency tree during a migration", () => {
+    expect(shouldEnsureAgentDependencies("npm run build", true)).toBe(false);
   });
 });

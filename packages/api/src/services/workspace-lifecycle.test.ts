@@ -11,15 +11,29 @@ type PreviewExitResult = {
 
 type PreviewStartOptions = {
   setupCommand?: string;
+  setupCacheKey?: string;
   command: string;
   port: number;
   defaultNodeRuntime?: boolean;
+  onSetupStart?: () => void | Promise<void>;
   onSetupComplete?: () => void | Promise<void>;
   onExit?: (result: PreviewExitResult) => void | Promise<void>;
 };
 
+function previewStartResult(port: number, pid = 42) {
+  return {
+    pid,
+    port,
+    access: {
+      origin: "https://preview.example.test",
+      headers: { "e2b-traffic-access-token": "test-preview-token" },
+    },
+  };
+}
+
 const cloneMock = vi.hoisted(() => vi.fn());
 const e2bRuntimeMock = vi.hoisted(() => ({
+  cancelPendingPreviewStart: vi.fn(),
   destroyProject: vi.fn(async () => undefined),
   getPreviewAccess: vi.fn(async () => ({
     origin: "https://preview.example.test",
@@ -29,6 +43,10 @@ const e2bRuntimeMock = vi.hoisted(() => ({
   startPreview: vi.fn(async (_fence: unknown, _options: PreviewStartOptions) => ({
     pid: 42,
     port: 4321,
+    access: {
+      origin: "https://preview.example.test",
+      headers: { "e2b-traffic-access-token": "test-preview-token" },
+    },
   })),
   stopPreview: vi.fn(async () => undefined),
 }));
@@ -89,6 +107,7 @@ import {
   projectRepoPath,
   reinstallProjectDependencies,
   removeDeletedProjectWorkspace,
+  runFiniteProjectCommand,
   runInProjectLock,
   scheduleDeletedProjectWorkspaceCleanup,
   startDevPreview,
@@ -638,19 +657,29 @@ describe("project workspace lifecycle", () => {
     vi.stubEnv("PREVIEW_DOMAIN", "preview.example.test");
     e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
       lifecycleStages.push(getPreviewStatus(projectId).stage);
+      await options.onSetupStart?.();
+      lifecycleStages.push(getPreviewStatus(projectId).stage);
       await options.onSetupComplete?.();
       lifecycleStages.push(getPreviewStatus(projectId).stage);
-      return { pid: 42, port: options.port };
+      return previewStartResult(options.port);
     });
 
     await startDevPreview(projectId, repoPath, null, 1);
 
     expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
+    expect(e2bRuntimeMock.cancelPendingPreviewStart).toHaveBeenCalledWith({
+      projectId,
+      githubBindingGeneration: 1,
+    });
+    expect(e2bRuntimeMock.cancelPendingPreviewStart.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      e2bRuntimeMock.startPreview.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
-    expect(lifecycleStages).toEqual(["installing", "starting"]);
+    expect(lifecycleStages).toEqual(["cloning", "installing", "starting"]);
     const options = e2bRuntimeMock.startPreview.mock.calls[0]?.[1];
     expect(options?.defaultNodeRuntime).toBe(true);
-    expect(options?.setupCommand).toContain("--include=dev");
+    expect(options?.setupCommand).toContain("'corepack' 'pnpm' 'install' '--prod=false'");
+    expect(options?.setupCacheKey).toMatch(/^v\d+:[a-f0-9]{64}$/);
     expect(options?.command).not.toContain("--include=dev");
     expect(options?.command).toMatch(
       /export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS='p-[a-f0-9]{40}\.preview\.example\.test'/,
@@ -667,7 +696,7 @@ describe("project workspace lifecycle", () => {
     const repoPath = projectRepoPath(projectId);
     fs.mkdirSync(repoPath, { recursive: true });
     fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
-    const started = deferred<{ pid: number; port: number }>();
+    const started = deferred<ReturnType<typeof previewStartResult>>();
     e2bRuntimeMock.startPreview.mockReturnValueOnce(started.promise);
 
     const first = startDevPreview(projectId, repoPath, "npm run dev", 1);
@@ -676,14 +705,14 @@ describe("project workspace lifecycle", () => {
     expect(second).toBe(first);
     await vi.waitFor(() => expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce());
     const port = e2bRuntimeMock.startPreview.mock.calls[0]?.[1].port ?? 4_321;
-    started.resolve({ pid: 42, port });
+    started.resolve(previewStartResult(port));
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       { port, label: "Custom" },
       { port, label: "Custom" },
     ]);
     expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
-    expect(e2bRuntimeMock.stopPreview).toHaveBeenCalledOnce();
+    expect(e2bRuntimeMock.stopPreview).not.toHaveBeenCalled();
   });
 
   it("clears a failed preview before a finite workspace install", async () => {
@@ -703,7 +732,7 @@ describe("project workspace lifecycle", () => {
     let onExit: PreviewStartOptions["onExit"];
     e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
       onExit = options.onExit;
-      return { pid: 42, port: options.port };
+      return previewStartResult(options.port);
     });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -757,7 +786,7 @@ describe("project workspace lifecycle", () => {
     await vi.waitFor(() => expect(e2bRuntimeMock.runCommand).toHaveBeenCalledOnce());
     expect(getPreviewStatus(projectId)).toMatchObject({
       stage: "installing",
-      message: "Running npm install in E2B",
+      message: "Running pnpm install in E2B",
     });
 
     installDone.resolve({
@@ -766,12 +795,43 @@ describe("project workspace lifecycle", () => {
       stderr: "package resolution failed",
     });
     await expect(installing).rejects.toThrow(
-      "npm install failed in the secure sandbox: package resolution failed",
+      "pnpm install failed in the secure sandbox: package resolution failed",
     );
     expect(getPreviewStatus(projectId)).toMatchObject({
       stage: "error",
-      message: "npm install failed in E2B",
+      message: "pnpm install failed in E2B",
     });
+  });
+
+  it("ensures dependencies inside the same isolated agent command operation", async () => {
+    const projectId = "agent-command-dependencies";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoPath, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } }),
+    );
+    e2bRuntimeMock.runCommand.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: "passed",
+      stderr: "",
+    });
+
+    await runFiniteProjectCommand(projectId, repoPath, "pnpm test", {
+      expectedBindingGeneration: 1,
+      ensureDependencies: true,
+    });
+
+    expect(e2bRuntimeMock.runCommand).toHaveBeenCalledWith(
+      { projectId, githubBindingGeneration: 1 },
+      expect.objectContaining({
+        command: "pnpm test",
+        setupCommand: expect.stringContaining("'corepack' 'pnpm' 'install'"),
+        setupCacheKey: expect.stringMatching(/^v\d+:[a-f0-9]{64}$/),
+      }),
+    );
   });
 
   it("does not let a stale finite command clear the current binding's preview", async () => {
@@ -847,36 +907,22 @@ describe("project workspace lifecycle", () => {
     });
   });
 
-  it("does not publish stale process state when the preview exits while access is resolving", async () => {
-    const projectId = "preview-exits-during-access";
+  it("does not publish process state when the preview exits before startup returns", async () => {
+    const projectId = "preview-exits-during-start";
     cleanupProjectIds.add(projectId);
     ensureProjectRow(projectId);
     const repoPath = projectRepoPath(projectId);
     fs.mkdirSync(repoPath, { recursive: true });
     fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
 
-    const access = deferred<{
-      origin: string;
-      headers: { "e2b-traffic-access-token": string };
-    }>();
-    let onExit: PreviewStartOptions["onExit"];
     let port = 0;
     e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
-      onExit = options.onExit;
       port = options.port;
-      return { pid: 42, port: options.port };
+      await options.onExit?.({ exitCode: 1, stdout: "", stderr: "Vite crashed" });
+      return previewStartResult(options.port);
     });
-    e2bRuntimeMock.getPreviewAccess.mockImplementationOnce(() => access.promise);
 
     const starting = startDevPreview(projectId, repoPath, "npm run dev", 1);
-    await vi.waitFor(() => expect(e2bRuntimeMock.getPreviewAccess).toHaveBeenCalledOnce());
-
-    await onExit?.({ exitCode: 1, stdout: "", stderr: "Vite crashed" });
-    access.resolve({
-      origin: "https://preview.example.test",
-      headers: { "e2b-traffic-access-token": "test-preview-token" },
-    });
-
     await expect(starting).rejects.toThrow("exited during startup with code 1");
     expect(getPreviewProcessInfo(projectId)).toEqual({
       running: false,
@@ -902,7 +948,7 @@ describe("project workspace lifecycle", () => {
     let onExit: PreviewStartOptions["onExit"];
     e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
       onExit = options.onExit;
-      return { pid: 42, port: options.port };
+      return previewStartResult(options.port);
     });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -947,11 +993,11 @@ describe("project workspace lifecycle", () => {
     e2bRuntimeMock.startPreview
       .mockImplementationOnce(async (_fence, options) => {
         if (options.onExit) exits.push(options.onExit);
-        return { pid: 42, port: options.port };
+        return previewStartResult(options.port);
       })
       .mockImplementationOnce(async (_fence, options) => {
         if (options.onExit) exits.push(options.onExit);
-        return { pid: 42, port: options.port };
+        return previewStartResult(options.port);
       });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -971,6 +1017,38 @@ describe("project workspace lifecycle", () => {
       });
       expect(getPreviewStatus(projectId).stage).toBe("starting");
       expect(getPreviewUpstream(projectId, second.port)).not.toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("keeps the active preview when replacement preparation is invalid", async () => {
+    const projectId = "preview-invalid-replacement";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Preview is still starting"));
+
+    try {
+      const current = await startDevPreview(projectId, repoPath, "npm run dev", 1);
+      expect(getPreviewUpstream(projectId, current.port)).not.toBeNull();
+
+      fs.writeFileSync(
+        path.join(repoPath, "package.json"),
+        JSON.stringify({ packageManager: "bun@1.0.0", scripts: { dev: "vite" } }),
+      );
+
+      await expect(startDevPreview(projectId, repoPath, null, 1)).rejects.toThrow(
+        'Unsupported package manager "bun"',
+      );
+      expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
+      expect(e2bRuntimeMock.stopPreview).not.toHaveBeenCalled();
+      expect(getPreviewProcessInfo(projectId)).toMatchObject({ running: true, pid: 42 });
+      expect(getPreviewUpstream(projectId, current.port)).not.toBeNull();
     } finally {
       fetchSpy.mockRestore();
     }

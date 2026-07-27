@@ -27,6 +27,7 @@ import {
 } from "./preview-origin.js";
 import {
   deactivatePreviewPort,
+  getPreviewStatus,
   markPreviewPortActive,
   registerPreviewPort,
   setPreviewStatus,
@@ -349,6 +350,26 @@ describe("host preview gateway integration", () => {
     });
     expect(write.status).toBe(503);
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  it("clears stale ready state when an upstream navigation fails", async () => {
+    const cookie = await acquireAccessCookie();
+    setPreviewStatus(PROJECT_ID, "ready");
+    registerLoopbackPreviewUpstreamForTests(PROJECT_ID, upstreamPort, {
+      origin: "http://127.0.0.1:1",
+      headers: { [E2B_TRAFFIC_ACCESS_HEADER]: TRAFFIC_ACCESS_TOKEN },
+    });
+
+    const navigation = await gatewayFetch("/", {
+      headers: { cookie, accept: "text/html" },
+    });
+
+    expect(navigation.status).toBe(200);
+    expect(await navigation.text()).toContain("Starting your preview");
+    expect(getPreviewStatus(PROJECT_ID)).toMatchObject({
+      stage: "starting",
+      message: "Reconnecting to the preview…",
+    });
   });
 
   it("never accepts a handoff or path capability as the host session cookie", async () => {

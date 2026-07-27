@@ -156,11 +156,35 @@ describe("getPackageManager", () => {
     ["yarn.lock", "yarn"],
     ["pnpm-lock.yaml", "pnpm"],
     ["package-lock.json", "npm"],
+    ["npm-shrinkwrap.json", "npm"],
   ] as const)("falls back to %s for projects without a declaration", (lockfile, expected) => {
     const repo = createRepo(undefined);
     fs.writeFileSync(path.join(repo, lockfile), "");
 
     expect(getPackageManager(repo)).toBe(expected);
+  });
+
+  it("defaults to pnpm when the project declares no package manager or lockfile", () => {
+    expect(resolvePackageManager(createRepo())).toEqual({ name: "pnpm", version: null });
+  });
+
+  it.each(["bun.lock", "bun.lockb"])(
+    "does not silently replace the explicit unsupported %s choice with pnpm",
+    (lockfile) => {
+      const repo = createRepo();
+      fs.writeFileSync(path.join(repo, lockfile), "");
+
+      expect(() => resolvePackageManager(repo)).toThrow(
+        `Unsupported package manager lockfile "${lockfile}"`,
+      );
+    },
+  );
+
+  it("honors a supported declaration ahead of an unrelated unsupported lockfile", () => {
+    const repo = createRepo("pnpm@10.34.0");
+    fs.writeFileSync(path.join(repo, "bun.lock"), "");
+
+    expect(resolvePackageManager(repo)).toEqual({ name: "pnpm", version: "10.34.0" });
   });
 
   it("fails clearly for an explicitly unsupported package manager", () => {
@@ -241,7 +265,7 @@ describe("getPackageManager", () => {
       },
     });
 
-    expect(resolvePackageManager(repo)).toEqual({ name: "npm", version: null });
+    expect(resolvePackageManager(repo)).toEqual({ name: "pnpm", version: null });
   });
 
   it.each(["warn", "ignore"] as const)(
@@ -253,7 +277,7 @@ describe("getPackageManager", () => {
         },
       });
 
-      expect(resolvePackageManager(repo)).toEqual({ name: "npm", version: null });
+      expect(resolvePackageManager(repo)).toEqual({ name: "pnpm", version: null });
     },
   );
 
@@ -292,6 +316,23 @@ describe("packageInstallCommand", () => {
 
     expect(packageInstallCommand(repo)).toContain("'corepack' 'pnpm' 'install'");
   });
+
+  it("uses Corepack's known-good pnpm when the project has no package-manager marker", () => {
+    expect(packageInstallCommand(createRepo())).toContain(
+      "COREPACK_ENABLE_PROJECT_SPEC=0 'corepack' 'pnpm' 'install' '--prod=false'",
+    );
+  });
+
+  it.each(["package-lock.json", "npm-shrinkwrap.json"])(
+    "keeps unversioned npm for %s",
+    (lockfile) => {
+      const repo = createRepo();
+      fs.writeFileSync(path.join(repo, lockfile), "");
+
+      expect(packageInstallCommand(repo)).toContain("'npm' 'install' '--include=dev'");
+      expect(packageInstallCommand(repo)).not.toContain("'corepack' 'pnpm'");
+    },
+  );
 
   it("disables Corepack's second project-spec interpretation for a versionless declaration", () => {
     const repo = createRepo(undefined, {
@@ -347,12 +388,69 @@ describe("resolveDevCommand", () => {
     },
   );
 
-  it("uses bundled npx when npm has no explicit version", () => {
+  it("uses pnpm for a framework project without a package-manager marker", () => {
     const repo = createRepo(undefined, { devDependencies: { vite: "^7.0.0" } });
+
+    expect(resolveDevCommand(repo, 4_321, null)).toEqual({
+      command: "env",
+      args: [
+        "COREPACK_ENABLE_AUTO_PIN=0",
+        "COREPACK_DEFAULT_TO_LATEST=0",
+        "COREPACK_ENABLE_PROJECT_SPEC=0",
+        "corepack",
+        "pnpm",
+        "exec",
+        "vite",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "4321",
+        "--strictPort",
+      ],
+      label: "Vite",
+    });
+  });
+
+  it("keeps bundled npx when an npm lockfile selects unversioned npm", () => {
+    const repo = createRepo(undefined, { devDependencies: { vite: "^7.0.0" } });
+    fs.writeFileSync(path.join(repo, "package-lock.json"), "");
 
     expect(resolveDevCommand(repo, 4_321, null)).toMatchObject({
       command: "npx",
       args: ["vite", "--host", "127.0.0.1", "--port", "4321", "--strictPort"],
+    });
+  });
+
+  it("uses pnpm for a generic dev script without a package-manager marker", () => {
+    const resolved = resolveDevCommand(
+      createRepo(undefined, { scripts: { dev: "custom-dev-server" } }),
+      4_321,
+      null,
+    );
+
+    expect(resolved).toEqual({
+      command: "env",
+      args: [
+        "COREPACK_ENABLE_AUTO_PIN=0",
+        "COREPACK_DEFAULT_TO_LATEST=0",
+        "COREPACK_ENABLE_PROJECT_SPEC=0",
+        "corepack",
+        "pnpm",
+        "run",
+        "dev",
+      ],
+      label: "pnpm dev",
+    });
+  });
+
+  it("keeps a static repository without package.json usable through npx", () => {
+    const repo = createRepo();
+    fs.rmSync(path.join(repo, "package.json"));
+
+    expect(resolveDevCommand(repo, 4_321, null)).toEqual({
+      command: "npx",
+      args: ["vite", "--host", "127.0.0.1", "--port", "4321", "--strictPort"],
+      label: "Static site",
     });
   });
 

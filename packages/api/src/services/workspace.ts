@@ -5,6 +5,7 @@ import { simpleGit } from "simple-git";
 import { rawSqlite } from "../db/index.js";
 import { ensureProjectDirectory, ensureProjectGitExclude } from "../lib/project-files.js";
 import { createSafeChildEnv } from "./child-process-env.js";
+import { dependencyInstallFingerprint } from "./dependency-fingerprint.js";
 import {
   parseProjectDevEngineEntries,
   projectDevEngineFailureIsBlocking,
@@ -351,6 +352,19 @@ function devEnginesPackageManagerVersion(value: string | undefined, source: stri
 function lockfilePackageManager(repoPath: string): PackageManagerName | null {
   if (fs.existsSync(path.join(repoPath, "yarn.lock"))) return "yarn";
   if (fs.existsSync(path.join(repoPath, "pnpm-lock.yaml"))) return "pnpm";
+  if (
+    fs.existsSync(path.join(repoPath, "package-lock.json")) ||
+    fs.existsSync(path.join(repoPath, "npm-shrinkwrap.json"))
+  ) {
+    return "npm";
+  }
+  return null;
+}
+
+function unsupportedPackageManagerLockfile(repoPath: string): string | null {
+  for (const lockfile of ["bun.lock", "bun.lockb"]) {
+    if (fs.existsSync(path.join(repoPath, lockfile))) return lockfile;
+  }
   return null;
 }
 
@@ -412,7 +426,13 @@ export function resolvePackageManager(repoPath: string): PackageManagerSelection
   const declared = declaredPackageManager(readProjectPackageJson(repoPath), lockfileManager);
   if (declared) return declared;
   if (lockfileManager) return { name: lockfileManager, version: null };
-  return { name: "npm", version: null };
+  const unsupportedLockfile = unsupportedPackageManagerLockfile(repoPath);
+  if (unsupportedLockfile) {
+    throw new Error(
+      `Unsupported package manager lockfile "${unsupportedLockfile}". Quillra supports npm, pnpm, and Yarn.`,
+    );
+  }
+  return { name: "pnpm", version: null };
 }
 
 export function getPackageManager(repoPath: string): PackageManagerName {
@@ -485,6 +505,8 @@ type FiniteProjectCommandOptions = {
   onStdout?: (chunk: string) => void | Promise<void>;
   onStderr?: (chunk: string) => void | Promise<void>;
   onPreviewStopped?: () => void | Promise<void>;
+  /** Ensure the selected project's dependencies before an agent shell command. */
+  ensureDependencies?: boolean;
 };
 
 async function runFiniteProjectCommandWithLockHeld(
@@ -494,11 +516,19 @@ async function runFiniteProjectCommandWithLockHeld(
   options: FiniteProjectCommandOptions = {},
 ): Promise<E2BCommandResult> {
   const fence = projectFence(projectId, options.expectedBindingGeneration);
+  const setupCommand = options.ensureDependencies ? packageInstallCommand(repoPath) : null;
+  const packageManager = setupCommand ? resolvePackageManager(repoPath) : null;
+  const setupCacheKey =
+    setupCommand && packageManager
+      ? dependencyInstallFingerprint(repoPath, packageManager)
+      : undefined;
   await stopPreviewAndWait(projectId, fence.githubBindingGeneration);
   await options.onPreviewStopped?.();
   return getDefaultE2BRuntime().runCommand(fence, {
     localRoot: repoPath,
     command,
+    setupCommand: setupCommand ?? undefined,
+    setupCacheKey,
     timeoutMs: options.timeoutMs,
     signal: options.signal,
     onStdout: options.onStdout,
@@ -619,6 +649,13 @@ export function resolveDevCommand(
   }
 
   // 4) Last-resort default
+  if (!pkg) {
+    return {
+      command: "npx",
+      args: ["vite", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+      label: "Static site",
+    };
+  }
   return packageBinaryCommand(
     pm,
     "vite",
@@ -1127,42 +1164,11 @@ export async function ensureRepoCloned(
   opts: {
     /** Monotonic binding epoch captured with the caller's project row. */
     expectedBindingGeneration: number;
-    /**
-     * Install dependencies in the project's isolated E2B workspace after the
-     * Git refresh. This is intentionally opt-in: file, framework, sync, commit,
-     * and publish-status reads only need the credential-free checkout and must
-     * never stop a running preview just to refresh node_modules.
-     */
-    installDependencies?: boolean;
-    /** Called when the install step fails (missing version, ETARGET,
-     *  peer-dep conflict, OOM, etc). Called INSTEAD of throwing so the
-     *  chat turn can still run and the agent can see + fix the cause.
-     *  File ops don't require node_modules. When this callback is not
-     *  supplied, install failures still throw, the old behaviour. */
-    onInstallFailed?: (error: string) => void;
   },
 ): Promise<string> {
   assertProjectWorkspaceAvailable(projectId);
   const dir = projectRepoPath(projectId);
   const gitDir = path.join(dir, ".git");
-
-  const runInstall = async () => {
-    if (!opts.installDependencies) return;
-    try {
-      await installDependenciesIfNeeded(dir, projectId, opts.expectedBindingGeneration);
-    } catch (e) {
-      if (opts.onInstallFailed) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.warn(
-          `[workspace] install failed for ${projectId}; continuing so the chat can debug:`,
-          msg.slice(0, 200),
-        );
-        opts.onInstallFailed(msg);
-        return;
-      }
-      throw e;
-    }
-  };
 
   // Serialise every git touch per-project. Concurrent chat turns on
   // the same project would otherwise race on `.git/index.lock` and
@@ -1176,7 +1182,15 @@ export async function ensureRepoCloned(
     });
     const access = await resolveProjectGitToken(projectId, "read");
     const url = credentialFreeGithubUrl(access.fullName);
-    if (!fs.existsSync(gitDir)) {
+    if (fs.existsSync(gitDir)) {
+      sweepStaleGitLocks(dir);
+      await scrubGitRemoteCredentials(dir, access.fullName);
+      const networkGit = simpleGitForNetwork(dir, access.token);
+      await networkGit.fetch("origin", branch);
+      const localGit = simpleGitForProject(dir);
+      await localGit.checkout(branch);
+      await localGit.raw(["merge", "--ff-only", `origin/${branch}`]).catch(() => undefined);
+    } else {
       // A killed clone or an interrupted workspace reset can leave regular
       // files behind after `.git/` is already gone. Git refuses to clone into
       // that non-empty destination, so discard only this managed repo clone
@@ -1194,16 +1208,6 @@ export async function ensureRepoCloned(
         "--depth",
         "1",
       ]);
-      await runInstall();
-    } else {
-      sweepStaleGitLocks(dir);
-      await scrubGitRemoteCredentials(dir, access.fullName);
-      const networkGit = simpleGitForNetwork(dir, access.token);
-      await networkGit.fetch("origin", branch);
-      const localGit = simpleGitForProject(dir);
-      await localGit.checkout(branch);
-      await localGit.raw(["merge", "--ff-only", `origin/${branch}`]).catch(() => undefined);
-      await runInstall();
     }
     // Register .quillra-temp/ with git's local exclude so chat
     // attachments never show up in a diff, a status, or a commit.
@@ -1296,25 +1300,28 @@ async function startDevPreviewNow(
 ): Promise<{ port: number; label: string }> {
   assertProjectWorkspaceAvailable(projectId);
   const previous = previewProcesses.get(projectId);
-  await stopPreviewAndWait(
-    projectId,
-    expectedBindingGeneration ?? previous?.githubBindingGeneration,
-    { preserveStatusReservation: true },
-  );
+  const previousGeneration = expectedBindingGeneration ?? previous?.githubBindingGeneration;
+  if (previousGeneration !== undefined) {
+    assertCurrentProjectFence({
+      projectId,
+      githubBindingGeneration: previousGeneration,
+    });
+  }
+  const fence = projectFence(projectId, previousGeneration);
+  // Abort only an unfinished start for this exact repository binding. This is
+  // a local controller operation: it does not reconnect to E2B or stop a
+  // sandbox, and lets the replacement avoid waiting behind a long setup.
+  getDefaultE2BRuntime().cancelPendingPreviewStart(fence);
+  await (previewTerminationQueues.get(projectId) ?? Promise.resolve());
   assertProjectWorkspaceAvailable(projectId);
   const port = await reserveAvailablePreviewPort(projectId, true);
   assertProjectWorkspaceAvailable(projectId);
-  const fence = projectFence(projectId, expectedBindingGeneration);
   const dev = resolveDevCommand(repoPath, port, previewCommandOverride);
   const install = packageInstallCommand(repoPath);
+  const packageManager = install ? resolvePackageManager(repoPath) : null;
+  const setupCacheKey =
+    install && packageManager ? dependencyInstallFingerprint(repoPath, packageManager) : undefined;
   const additionalAllowedHost = previewBrowserHostname(projectId);
-  setPreviewStatus(
-    projectId,
-    install ? "installing" : "starting",
-    install
-      ? `Running ${getPackageManager(repoPath)} install in the E2B preview`
-      : "Launching dev server",
-  );
   const launch = `exec ${shellCommand(dev.command, dev.args)}`;
   const command = [
     "export HOST=127.0.0.1",
@@ -1326,6 +1333,22 @@ async function startDevPreviewNow(
     launch,
   ].join("; ");
 
+  // A new E2B preview launch already quiesces every project-owned process
+  // before syncing and rebinding the trusted relay. Repeating stopPreview()
+  // here added a second provider reconnect and made warm starts needlessly
+  // slow. Revoke the local route immediately, supersede old callbacks, and
+  // let the single start operation perform the remote replacement.
+  activePreviewLaunches.delete(projectId);
+  previewProcesses.delete(projectId);
+  lastPreviewExits.delete(projectId);
+  deactivatePreviewPort(projectId);
+  unregisterPreviewUpstream(projectId);
+  setPreviewStatus(
+    projectId,
+    install ? "cloning" : "starting",
+    install ? "Preparing the isolated project" : "Launching dev server",
+  );
+
   clearPreviewLogs(projectId);
   const launchToken = Symbol(projectId);
   activePreviewLaunches.set(projectId, launchToken);
@@ -1336,12 +1359,22 @@ async function startDevPreviewNow(
     const remote = await getDefaultE2BRuntime().startPreview(fence, {
       localRoot: repoPath,
       setupCommand: install ?? undefined,
+      setupCacheKey,
       command,
       port,
       timeoutMs: 30 * 60_000,
       defaultNodeRuntime: true,
       onStdout: (chunk) => appendLog(projectId, "stdout", chunk),
       onStderr: (chunk) => appendLog(projectId, "stderr", chunk),
+      onSetupStart: () => {
+        if (activePreviewLaunches.get(projectId) === launchToken && packageManager) {
+          setPreviewStatus(
+            projectId,
+            "installing",
+            `Running ${packageManager.name} install in the E2B preview`,
+          );
+        }
+      },
       onSetupComplete: () => {
         if (activePreviewLaunches.get(projectId) === launchToken) {
           setPreviewStatus(projectId, "starting", `Launching ${dev.label}`);
@@ -1370,7 +1403,6 @@ async function startDevPreviewNow(
       port,
       githubBindingGeneration: fence.githubBindingGeneration,
     });
-    const upstream = await getDefaultE2BRuntime().getPreviewAccess(fence, port);
     if (
       exitResult ||
       activePreviewLaunches.get(projectId) !== launchToken ||
@@ -1378,7 +1410,7 @@ async function startDevPreviewNow(
     ) {
       throw exitResult ? previewExitError(exitResult) : new Error("The preview start was stopped.");
     }
-    registerPreviewUpstream(projectId, port, upstream);
+    registerPreviewUpstream(projectId, port, remote.access);
   } catch (error) {
     if (activePreviewLaunches.get(projectId) === launchToken) {
       activePreviewLaunches.delete(projectId);

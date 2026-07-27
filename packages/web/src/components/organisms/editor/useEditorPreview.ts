@@ -46,7 +46,11 @@ export function useEditorPreview(projectId: string, autoStart = true) {
     },
     onMutate: () => setPreviewError(null),
     onSuccess: (res) => {
-      setPreviewSrc(res.url);
+      // /preview-meta already painted an authenticated boot URL. The start
+      // response contains a freshly minted one-time handoff for callers that
+      // did not fetch metadata first; replacing an existing URL here would
+      // navigate the iframe a second time and reset its visible progress.
+      setPreviewSrc((current) => current ?? res.url);
       setPreviewLabel(res.previewLabel);
       setPreviewMode(res.previewMode);
     },

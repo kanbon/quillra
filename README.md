@@ -208,8 +208,8 @@ tools that the verified base template does not provide.
 The Docker image builds Quillra with its pinned pnpm 10 release. Inside E2B,
 Corepack honors exact npm, pnpm, and Yarn versions from `packageManager` and
 compatible ranges or alternatives from `devEngines`. Without a declaration,
-Quillra selects Yarn or pnpm from its lockfile and otherwise uses npm. Runtime
-and dependency downloads happen from inside the project sandbox.
+Quillra follows Yarn, pnpm, or npm lockfiles and otherwise uses pnpm. Runtime and
+dependency downloads happen from inside the project sandbox.
 
 For the repository-side Railway configuration and the small external checklist
 needed to publish a Railway Marketplace Template, see

@@ -24,7 +24,7 @@ import {
   sanitizeHostPreviewRequestHeaders,
   secureHostPreviewResponse,
 } from "./preview-proxy.js";
-import { readPreviewStatus } from "./preview-status.js";
+import { readPreviewStatus, setPreviewStatus } from "./preview-status.js";
 import { previewUpstreamUrl } from "./preview-upstream.js";
 
 type PreviewEnvironment = Record<string, string | undefined>;
@@ -459,6 +459,11 @@ export function createPreviewGateway<RawWebSocket>(
           c.req.header("sec-fetch-dest") === "document" ||
           (c.req.header("accept") ?? "").includes("text/html"));
       if (!isNavigation) return c.text("Preview upstream unavailable", 502);
+      // The route may recover after a transient provider hiccup, so retain its
+      // capability and let the boot-page status probe test it again. Clearing
+      // the tracked ready state is essential: otherwise the ready fast path
+      // immediately reloads this failed navigation in a tight loop.
+      setPreviewStatus(active.projectId, "starting", "Reconnecting to the preview…");
       const statusUrl = "/.quillra/preview-status";
       const editorUrl = new URL(
         `/p/${encodeURIComponent(active.projectId)}`,

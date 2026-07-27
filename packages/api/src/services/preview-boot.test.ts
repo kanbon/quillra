@@ -222,7 +222,7 @@ function createHarness(
 }
 
 describe("preview boot document", () => {
-  it("polls single-flight, backs off after 30 installing responses, and reloads when ready", async () => {
+  it("polls single-flight, progressively backs off during installs, and reloads when ready", async () => {
     const harness = createHarness();
 
     // The first request starts immediately. No timer exists while it is in
@@ -239,8 +239,9 @@ describe("preview boot document", () => {
 
       expect(harness.inFlight).toBe(0);
       if (completedPolls < 30) {
-        expect(harness.pendingTimerDelays()).toEqual([1_500]);
-        harness.runTimer(1_500);
+        const delay = completedPolls >= 10 ? 2_000 : 1_000;
+        expect(harness.pendingTimerDelays()).toEqual([delay]);
+        harness.runTimer(delay);
         expect(harness.fetchMock).toHaveBeenCalledTimes(completedPolls + 1);
         expect(harness.inFlight).toBe(1);
         expect(harness.pendingTimerDelays()).toEqual([]);
@@ -279,9 +280,9 @@ describe("preview boot document", () => {
     expect(harness.maxInFlight).toBe(1);
     expect(harness.steps.every((step) => step.classList.contains("done"))).toBe(true);
     expect(harness.steps.every((step) => !step.classList.contains("failed"))).toBe(true);
-    expect(harness.pendingTimerDelays()).toEqual([400]);
+    expect(harness.pendingTimerDelays()).toEqual([50]);
 
-    harness.runTimer(400);
+    harness.runTimer(50);
     expect(harness.replace).toHaveBeenCalledWith("https://preview.example.com/");
     expect(harness.reload).not.toHaveBeenCalled();
     expect(harness.fetchMock).toHaveBeenCalledTimes(32);
@@ -317,7 +318,7 @@ describe("preview boot document", () => {
       stage: "installing",
       detail: "Installing dependencies",
     });
-    harness.runTimer(1_500);
+    harness.runTimer(1_000);
     await harness.respond({
       stage: "error",
       label: "Build failed",
@@ -334,6 +335,60 @@ describe("preview boot document", () => {
     expect(harness.steps.filter((step) => step.classList.contains("failed"))).toHaveLength(1);
     expect(harness.steps[1]?.classList.contains("failed")).toBe(true);
     expect(harness.reload).not.toHaveBeenCalled();
+  });
+
+  it("never moves the visible steps backward within one boot attempt", async () => {
+    const harness = createHarness();
+
+    await harness.respond({
+      stage: "cloning",
+      label: "Fetching your site",
+      detail: "Fetching the project",
+    });
+    harness.runTimer(500);
+    await harness.respond({
+      stage: "starting",
+      label: "Starting the preview",
+      detail: "Opening the project",
+    });
+
+    expect(harness.steps[0]?.classList.contains("done")).toBe(true);
+    expect(harness.steps[1]?.classList.contains("done")).toBe(true);
+    expect(harness.steps[2]?.classList.contains("active")).toBe(true);
+    expect(harness.pendingTimerDelays()).toEqual([250]);
+
+    harness.runTimer(250);
+    await harness.respond({
+      stage: "installing",
+      label: "Installing packages",
+      detail: "This stale status must not move the UI backward",
+    });
+
+    expect(harness.steps[0]?.classList.contains("done")).toBe(true);
+    expect(harness.steps[1]?.classList.contains("done")).toBe(true);
+    expect(harness.steps[2]?.classList.contains("active")).toBe(true);
+    expect(harness.elements.label.textContent).toBe("Starting the preview");
+    expect(harness.elements.detail.textContent).toBe("Opening the project");
+    expect(harness.pendingTimerDelays()).toEqual([250]);
+  });
+
+  it("reveals a warm preview within 300ms after it reaches the starting stage", async () => {
+    const harness = createHarness();
+
+    await harness.respond({
+      stage: "starting",
+      detail: "Waiting for the dev server",
+    });
+    expect(harness.pendingTimerDelays()).toEqual([250]);
+
+    harness.runTimer(250);
+    await harness.respond({ stage: "ready" });
+    expect(harness.pendingTimerDelays()).toEqual([50]);
+
+    harness.runTimer(50);
+    expect(harness.replace).toHaveBeenCalledWith("https://preview.example.com/");
+    expect(harness.reload).not.toHaveBeenCalled();
+    expect(harness.pendingTimerDelays()).toEqual([]);
   });
 
   it("asks the authorized editor parent for a fresh start when retry is selected", async () => {

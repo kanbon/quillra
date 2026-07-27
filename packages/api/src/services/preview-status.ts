@@ -117,6 +117,15 @@ export function describeStage(stage: PreviewStage): { label: string; detail: str
 
 /** Capability resolution must happen before calling this loopback probe. */
 export async function readPreviewStatus(projectId: string, port: number) {
+  const status = getPreviewStatus(projectId);
+  // Readiness is published only after the authenticated E2B route answered a
+  // real probe. While that exact route remains registered, the boot document
+  // can use the tracked result immediately instead of paying another provider
+  // round trip on every warm iframe load.
+  if (status.stage === "ready" && isPreviewRoutable(projectId, port)) {
+    return { stage: "ready" as const, label: "Ready", detail: "Loading your site…" };
+  }
+
   if (isPreviewPortActive(projectId, port)) {
     const upstream = previewUpstreamUrl(projectId, port, "/");
     try {
@@ -134,7 +143,6 @@ export async function readPreviewStatus(projectId: string, port: number) {
     }
   }
 
-  const status = getPreviewStatus(projectId);
   const description = describeStage(status.stage);
   return {
     stage: status.stage,

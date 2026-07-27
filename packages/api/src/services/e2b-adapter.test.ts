@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +28,7 @@ vi.mock("e2b", () => {
 });
 
 import {
+  BOUNDED_TREE_SCANNER,
   E2BSdkAdapter,
   SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT,
   SEAL_RELAY_NODE_SCRIPT,
@@ -499,6 +501,43 @@ describe("E2B SDK adapter", () => {
     }
   });
 
+  it("applies executable modes through one no-follow project-user command", async () => {
+    const sandbox = fakeSdkSandbox();
+    sdk.create.mockResolvedValue(sandbox);
+    const handle = await new E2BSdkAdapter().create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.files.write.mockClear();
+    sandbox.commands.run.mockClear();
+
+    await handle.writeFiles([
+      {
+        path: `${E2B_PROJECT_HOME}/quillra-workspace/script.sh`,
+        data: new TextEncoder().encode("#!/bin/sh\n"),
+        mode: 0o100755,
+      },
+    ]);
+
+    expect(sandbox.files.write).toHaveBeenCalledOnce();
+    expect(sandbox.commands.run).toHaveBeenCalledOnce();
+    const command = sandbox.commands.run.mock.calls[0]?.[0] ?? "";
+    expect(command).toContain(`--reuid=${E2B_PROJECT_USER}`);
+    expect(command).toContain("os.O_NOFOLLOW");
+    expect(command).toContain("os.fchmod");
+    expect(command).toContain(">/dev/null 2>/dev/null");
+    expect(sandbox.commands.run.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        user: "root",
+        timeoutMs: 10_000,
+        requestTimeoutMs: 10_000,
+      }),
+    );
+  });
+
   it("keeps untrusted output out of CommandHandle and reads only bounded remote logs", async () => {
     const sandbox = fakeSdkSandbox();
     const commandHandle = {
@@ -845,5 +884,234 @@ describe("E2B SDK adapter", () => {
       }),
     ).rejects.toThrow("entry limit");
     expect(sandbox.files.list).not.toHaveBeenCalled();
+  });
+
+  it("returns one freshly hashed, recursively bounded tree manifest", async () => {
+    const sandbox = fakeSdkSandbox();
+    const encode = (value: string) => Buffer.from(value).toString("base64");
+    const digest = "a".repeat(64);
+    sdk.create.mockResolvedValue(sandbox);
+    const adapter = new E2BSdkAdapter();
+    const handle = await adapter.create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    sandbox.commands.run.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        ok: true,
+        root: { t: "dir", s: 0, m: 0o700, l: null },
+        entries: [
+          {
+            p: encode("src/index.ts"),
+            t: "file",
+            s: 4,
+            m: 0o644,
+            l: null,
+            h: digest,
+          },
+          {
+            p: encode("node_modules"),
+            t: "dir",
+            s: 0,
+            m: 0o755,
+            l: null,
+            h: null,
+          },
+          {
+            p: encode("escape"),
+            t: "file",
+            s: 0,
+            m: 0o777,
+            l: encode("/etc/passwd"),
+            h: null,
+          },
+        ],
+      }),
+      stderr: "",
+    });
+
+    await expect(
+      handle.scanTree?.(`${E2B_PROJECT_HOME}/quillra-workspace`, {
+        maxEntries: 20,
+        maxOutputBytes: 4_096,
+        maxDepth: 40,
+        maxPathBytes: 1_024,
+        maxFileBytes: 1_024,
+        maxTotalBytes: 8_192,
+        excludedSegments: [".git", "node_modules"],
+      }),
+    ).resolves.toEqual({
+      root: expect.objectContaining({
+        path: `${E2B_PROJECT_HOME}/quillra-workspace`,
+        type: "dir",
+      }),
+      entries: [
+        expect.objectContaining({
+          path: `${E2B_PROJECT_HOME}/quillra-workspace/src/index.ts`,
+          sha256: digest,
+        }),
+        expect.objectContaining({
+          path: `${E2B_PROJECT_HOME}/quillra-workspace/node_modules`,
+          type: "dir",
+        }),
+        expect.objectContaining({
+          path: `${E2B_PROJECT_HOME}/quillra-workspace/escape`,
+          symlinkTarget: "/etc/passwd",
+        }),
+      ],
+    });
+    expect(sandbox.commands.run).toHaveBeenCalledOnce();
+    expect(sandbox.commands.run).toHaveBeenCalledWith(
+      expect.stringContaining("/usr/bin/python3 -I -S -c "),
+      expect.objectContaining({
+        user: "root",
+        timeoutMs: 30_000,
+        requestTimeoutMs: 30_000,
+      }),
+    );
+    const command = sandbox.commands.run.mock.calls[0]?.[0] ?? "";
+    expect(command).toContain(`${E2B_PROJECT_HOME}/quillra-workspace`);
+    expect(command).toContain(" 20 4096 40 1024 1024 8192 ");
+    expect(command).toContain(".git,node_modules");
+    expect(sandbox.files.list).not.toHaveBeenCalled();
+    expect(sandbox.files.read).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe tree budgets and malformed manifest hashes", async () => {
+    const sandbox = fakeSdkSandbox();
+    const encode = (value: string) => Buffer.from(value).toString("base64");
+    sdk.create.mockResolvedValue(sandbox);
+    const adapter = new E2BSdkAdapter();
+    const handle = await adapter.create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    const baseOptions = {
+      maxEntries: 20,
+      maxOutputBytes: 4_096,
+      maxDepth: 40,
+      maxPathBytes: 1_024,
+      maxFileBytes: 1_024,
+      maxTotalBytes: 8_192,
+      excludedSegments: [".git", "node_modules"],
+    };
+
+    await expect(
+      handle.scanTree?.(`${E2B_PROJECT_HOME}/quillra-workspace`, {
+        ...baseOptions,
+        maxDepth: 129,
+      }),
+    ).rejects.toThrow("depth limit");
+    expect(sandbox.commands.run).not.toHaveBeenCalled();
+
+    sandbox.commands.run.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: "x".repeat(4_097),
+      stderr: "",
+    });
+    await expect(
+      handle.scanTree?.(`${E2B_PROJECT_HOME}/quillra-workspace`, baseOptions),
+    ).rejects.toThrow("hard byte limit");
+
+    sandbox.commands.run.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        ok: true,
+        root: { t: "dir", s: 0, m: 0o700, l: null },
+        entries: [
+          {
+            p: encode("index.ts"),
+            t: "file",
+            s: 4,
+            m: 0o644,
+            l: null,
+            h: "project-controlled-marker",
+          },
+        ],
+      }),
+      stderr: "",
+    });
+    await expect(
+      handle.scanTree?.(`${E2B_PROJECT_HOME}/quillra-workspace`, baseOptions),
+    ).rejects.toThrow("invalid tree entry metadata");
+  });
+
+  it("hashes regular files without following symlinks or excluded dependency trees", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "quillra-tree-scan-"));
+    try {
+      await mkdir(path.join(root, "src"), { recursive: true });
+      await writeFile(path.join(root, "src/index.ts"), "same-size");
+      await mkdir(path.join(root, "node_modules/cache"), { recursive: true });
+      await writeFile(path.join(root, "node_modules/cache/ignored"), "dependency");
+      await symlink("/etc/passwd", path.join(root, "escape"));
+
+      const scan = () =>
+        execFileAsync("/usr/bin/python3", [
+          "-I",
+          "-S",
+          "-c",
+          BOUNDED_TREE_SCANNER,
+          root,
+          "20",
+          "4096",
+          "40",
+          "1024",
+          "1024",
+          "8192",
+          ".git,node_modules",
+        ]);
+      const { stdout } = await scan();
+      const payload = JSON.parse(stdout) as {
+        ok: boolean;
+        entries: Array<{ p: string; h: string | null; l: string | null }>;
+      };
+      const decoded = new Map(
+        payload.entries.map((entry) => [Buffer.from(entry.p, "base64").toString("utf8"), entry]),
+      );
+
+      expect(payload.ok).toBe(true);
+      expect(decoded.get("src/index.ts")?.h).toBe(
+        createHash("sha256").update("same-size").digest("hex"),
+      );
+      expect(decoded.get("escape")?.l).toBe(Buffer.from("/etc/passwd").toString("base64"));
+      expect(decoded.has("node_modules")).toBe(true);
+      expect(decoded.has("node_modules/cache")).toBe(false);
+
+      await writeFile(path.join(root, "src/index.ts"), "different");
+      const nextPayload = JSON.parse((await scan()).stdout) as typeof payload;
+      const nextEntry = nextPayload.entries.find(
+        (entry) => Buffer.from(entry.p, "base64").toString("utf8") === "src/index.ts",
+      );
+      expect(nextEntry?.h).toBe(createHash("sha256").update("different").digest("hex"));
+      expect(nextEntry?.h).not.toBe(decoded.get("src/index.ts")?.h);
+
+      const bounded = await execFileAsync("/usr/bin/python3", [
+        "-I",
+        "-S",
+        "-c",
+        BOUNDED_TREE_SCANNER,
+        root,
+        "20",
+        "128",
+        "40",
+        "1024",
+        "1024",
+        "8192",
+        ".git,node_modules",
+      ]);
+      expect(Buffer.byteLength(bounded.stdout, "utf8")).toBeLessThanOrEqual(128);
+      expect(JSON.parse(bounded.stdout)).toEqual({ ok: false, error: "byte_limit" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

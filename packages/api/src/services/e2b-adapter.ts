@@ -25,6 +25,10 @@ const PROCESS_LOG_ROOT = `${E2B_PROJECT_HOME}/.quillra-processes`;
 const MAX_FILE_CHUNK_BYTES = 256 * 1024;
 const ABSOLUTE_MAX_DIRECTORY_ENTRIES = 20_000;
 const ABSOLUTE_MAX_DIRECTORY_OUTPUT_BYTES = 4 * 1024 * 1024;
+const ABSOLUTE_MAX_TREE_DEPTH = 128;
+const ABSOLUTE_MAX_TREE_PATH_BYTES = 4 * 1024;
+const ABSOLUTE_MAX_TREE_FILE_BYTES = 1024 * 1024 * 1024;
+const ABSOLUTE_MAX_TREE_TOTAL_BYTES = 4 * 1024 * 1024 * 1024;
 const TRUSTED_CONTROL_PATH = "/usr/sbin:/usr/bin:/bin";
 const PROJECT_EXECUTION_PATH = "/usr/local/bin:/usr/bin:/bin";
 const TRUSTED_BASH = "/bin/bash";
@@ -55,6 +59,26 @@ export type E2BRemoteEntry = {
   size: number;
   mode: number;
   symlinkTarget?: string;
+};
+
+export type E2BRemoteTreeEntry = E2BRemoteEntry & {
+  sha256?: string;
+};
+
+export type E2BRemoteTreeManifest = {
+  root: E2BRemoteEntry | null;
+  entries: E2BRemoteTreeEntry[];
+};
+
+export type E2BRemoteTreeOptions = {
+  maxEntries: number;
+  maxOutputBytes: number;
+  maxDepth: number;
+  maxPathBytes: number;
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  excludedSegments: string[];
+  signal?: AbortSignal;
 };
 
 export type E2BCommandResult = {
@@ -97,6 +121,11 @@ export interface E2BSandboxHandle {
       signal?: AbortSignal;
     },
   ): Promise<E2BRemoteEntry[]>;
+  /**
+   * Return a freshly hashed, recursively bounded tree in one remote command.
+   * Optional so alternate adapters can fall back to bounded chunk reads.
+   */
+  scanTree?(path: string, options: E2BRemoteTreeOptions): Promise<E2BRemoteTreeManifest>;
   getInfo(path: string, signal?: AbortSignal): Promise<E2BRemoteEntry>;
   readFileChunk(
     path: string,
@@ -104,7 +133,10 @@ export interface E2BSandboxHandle {
     length: number,
     signal?: AbortSignal,
   ): Promise<Uint8Array>;
-  writeFiles(files: Array<{ path: string; data: Uint8Array }>, signal?: AbortSignal): Promise<void>;
+  writeFiles(
+    files: Array<{ path: string; data: Uint8Array; mode?: number }>,
+    signal?: AbortSignal,
+  ): Promise<void>;
   makeDir(path: string, signal?: AbortSignal): Promise<void>;
   exists(path: string, signal?: AbortSignal): Promise<boolean>;
   remove(path: string, signal?: AbortSignal): Promise<void>;
@@ -363,6 +395,166 @@ const BOUNDED_DIRECTORY_SCANNER = [
   ' emit({"ok":False,"error":"scan_failed"})',
 ].join("\n");
 
+export const BOUNDED_TREE_SCANNER = [
+  "import base64,hashlib,json,os,stat,sys",
+  "def emit(value):",
+  ' sys.stdout.write(json.dumps(value,separators=(",",":")))',
+  "def fail(error):",
+  ' emit({"ok":False,"error":error})',
+  " sys.exit(0)",
+  "def encoded(value):",
+  " return base64.b64encode(os.fsencode(value)).decode('ascii')",
+  "def metadata(info,link=None):",
+  " mode=info.st_mode",
+  " if stat.S_ISLNK(mode):",
+  '  kind="file"',
+  "  size=0",
+  " elif stat.S_ISDIR(mode):",
+  '  kind="dir"',
+  "  size=0",
+  " elif stat.S_ISREG(mode):",
+  '  kind="file"',
+  "  size=info.st_size",
+  " else:",
+  '  kind="special"',
+  "  size=0",
+  ' return {"t":kind,"s":size,"m":stat.S_IMODE(mode),"l":None if link is None else encoded(link)}',
+  "try:",
+  " root=sys.argv[1]",
+  " max_entries=int(sys.argv[2])",
+  " max_output_bytes=int(sys.argv[3])",
+  " max_depth=int(sys.argv[4])",
+  " max_path_bytes=int(sys.argv[5])",
+  " max_file_bytes=int(sys.argv[6])",
+  " max_total_bytes=int(sys.argv[7])",
+  " excluded=set(filter(None,sys.argv[8].split(',')))",
+  " def succeed(root_record,entries):",
+  "  serialized=json.dumps({'ok':True,'root':root_record,'entries':entries},separators=(',',':'))",
+  "  if len(serialized.encode('utf-8'))>max_output_bytes:",
+  "   fail('byte_limit')",
+  "  sys.stdout.write(serialized)",
+  "  sys.exit(0)",
+  " try:",
+  "  root_info=os.lstat(root)",
+  " except FileNotFoundError:",
+  "  succeed(None,[])",
+  " root_link=os.readlink(root) if stat.S_ISLNK(root_info.st_mode) else None",
+  " root_record=metadata(root_info,root_link)",
+  " if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):",
+  "  succeed(root_record,[])",
+  " entries=[]",
+  " encoded_bytes=96+len(json.dumps(root_record,separators=(',',':')).encode('utf-8'))",
+  " total_bytes=0",
+  " def append(record):",
+  "  global encoded_bytes",
+  "  if len(entries)>=max_entries:",
+  "   fail('entry_limit')",
+  "  record_bytes=len(json.dumps(record,separators=(',',':')).encode('utf-8'))+1",
+  "  encoded_bytes+=record_bytes",
+  "  if encoded_bytes>max_output_bytes:",
+  "   fail('byte_limit')",
+  "  entries.append(record)",
+  " def hash_file(parent_fd,name,expected):",
+  "  file_fd=os.open(name,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=parent_fd)",
+  "  try:",
+  "   opened=os.fstat(file_fd)",
+  "   if not stat.S_ISREG(opened.st_mode) or opened.st_dev!=expected.st_dev or opened.st_ino!=expected.st_ino or opened.st_size!=expected.st_size:",
+  "    raise RuntimeError('file changed during scan')",
+  "   digest=hashlib.sha256()",
+  "   remaining=opened.st_size",
+  "   while remaining:",
+  "    chunk=os.read(file_fd,min(262144,remaining))",
+  "    if not chunk:",
+  "     raise RuntimeError('short file read')",
+  "    digest.update(chunk)",
+  "    remaining-=len(chunk)",
+  "   final=os.fstat(file_fd)",
+  "   if final.st_dev!=opened.st_dev or final.st_ino!=opened.st_ino or final.st_size!=opened.st_size:",
+  "    raise RuntimeError('file changed during scan')",
+  "   return digest.hexdigest()",
+  "  finally:",
+  "   os.close(file_fd)",
+  " def walk(directory_fd,parent_parts):",
+  "  global total_bytes",
+  "  with os.scandir(directory_fd) as iterator:",
+  "   for entry in iterator:",
+  "    parts=parent_parts+[entry.name]",
+  "    if len(parts)>max_depth:",
+  "     fail('depth_limit')",
+  "    relative='/'.join(parts)",
+  "    if len(os.fsencode(relative))>max_path_bytes:",
+  "     fail('path_limit')",
+  "    info=entry.stat(follow_symlinks=False)",
+  "    link=os.readlink(entry.name,dir_fd=directory_fd) if stat.S_ISLNK(info.st_mode) else None",
+  "    record=metadata(info,link)",
+  "    record['p']=encoded(relative)",
+  "    record['h']=None",
+  "    is_excluded=entry.name in excluded",
+  "    if stat.S_ISREG(info.st_mode):",
+  "     if info.st_size>max_file_bytes:",
+  "      fail('file_limit')",
+  "     total_bytes+=info.st_size",
+  "     if total_bytes>max_total_bytes:",
+  "      fail('total_limit')",
+  "     if not is_excluded:",
+  "      record['h']=hash_file(directory_fd,entry.name,info)",
+  "    append(record)",
+  "    if stat.S_ISDIR(info.st_mode) and not is_excluded:",
+  "     child_fd=os.open(entry.name,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=directory_fd)",
+  "     try:",
+  "      opened=os.fstat(child_fd)",
+  "      if opened.st_dev!=info.st_dev or opened.st_ino!=info.st_ino:",
+  "       raise RuntimeError('directory changed during scan')",
+  "      walk(child_fd,parts)",
+  "     finally:",
+  "      os.close(child_fd)",
+  " root_fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+  " try:",
+  "  opened_root=os.fstat(root_fd)",
+  "  if opened_root.st_dev!=root_info.st_dev or opened_root.st_ino!=root_info.st_ino:",
+  "   raise RuntimeError('root changed during scan')",
+  "  walk(root_fd,[])",
+  " finally:",
+  "  os.close(root_fd)",
+  " succeed(root_record,entries)",
+  "except Exception:",
+  " emit({'ok':False,'error':'scan_failed'})",
+].join("\n");
+
+const APPLY_FILE_MODES_SCRIPT = [
+  "import base64,json,os,stat,sys",
+  "root=sys.argv[1]",
+  "payload=json.loads(base64.b64decode(sys.argv[2],validate=True))",
+  "root_fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+  "try:",
+  " for item in payload:",
+  "  relative=item[0]",
+  "  mode=item[1]",
+  "  if not isinstance(relative,str) or not isinstance(mode,int) or mode not in (0o644,0o755):",
+  "   raise RuntimeError('invalid mode request')",
+  "  parts=relative.split('/')",
+  "  if not parts or any(part in ('','.','..') or '\\x00' in part for part in parts):",
+  "   raise RuntimeError('invalid mode path')",
+  "  parent_fd=os.dup(root_fd)",
+  "  try:",
+  "   for component in parts[:-1]:",
+  "    next_fd=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=parent_fd)",
+  "    os.close(parent_fd)",
+  "    parent_fd=next_fd",
+  "   file_fd=os.open(parts[-1],os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=parent_fd)",
+  "   try:",
+  "    info=os.fstat(file_fd)",
+  "    if not stat.S_ISREG(info.st_mode):",
+  "     raise RuntimeError('mode target is not regular')",
+  "    os.fchmod(file_fd,mode)",
+  "   finally:",
+  "    os.close(file_fd)",
+  "  finally:",
+  "   os.close(parent_fd)",
+  "finally:",
+  " os.close(root_fd)",
+].join("\n");
+
 type DirectoryScannerResponse =
   | {
       ok: true;
@@ -377,6 +569,33 @@ type DirectoryScannerResponse =
   | {
       ok: false;
       error: "entry_limit" | "byte_limit" | "scan_failed";
+    };
+
+type TreeScannerRecord = {
+  p?: string;
+  t: "file" | "dir" | "special";
+  s: number;
+  m: number;
+  l: string | null;
+  h?: string | null;
+};
+
+type TreeScannerResponse =
+  | {
+      ok: true;
+      root: Omit<TreeScannerRecord, "p" | "h"> | null;
+      entries: TreeScannerRecord[];
+    }
+  | {
+      ok: false;
+      error:
+        | "entry_limit"
+        | "byte_limit"
+        | "depth_limit"
+        | "path_limit"
+        | "file_limit"
+        | "total_limit"
+        | "scan_failed";
     };
 
 function decodeFilesystemText(encoded: string, label: string): string {
@@ -417,6 +636,47 @@ function validateDirectoryListOptions(options: {
     options.maxOutputBytes > ABSOLUTE_MAX_DIRECTORY_OUTPUT_BYTES
   ) {
     throw new Error("Invalid bounded E2B directory byte limit.");
+  }
+}
+
+function validateTreeScanOptions(options: E2BRemoteTreeOptions): void {
+  validateDirectoryListOptions(options);
+  if (
+    !Number.isSafeInteger(options.maxDepth) ||
+    options.maxDepth < 1 ||
+    options.maxDepth > ABSOLUTE_MAX_TREE_DEPTH
+  ) {
+    throw new Error("Invalid bounded E2B tree depth limit.");
+  }
+  if (
+    !Number.isSafeInteger(options.maxPathBytes) ||
+    options.maxPathBytes < 1 ||
+    options.maxPathBytes > ABSOLUTE_MAX_TREE_PATH_BYTES
+  ) {
+    throw new Error("Invalid bounded E2B tree path limit.");
+  }
+  if (
+    !Number.isSafeInteger(options.maxFileBytes) ||
+    options.maxFileBytes < 0 ||
+    options.maxFileBytes > ABSOLUTE_MAX_TREE_FILE_BYTES
+  ) {
+    throw new Error("Invalid bounded E2B tree file limit.");
+  }
+  if (
+    !Number.isSafeInteger(options.maxTotalBytes) ||
+    options.maxTotalBytes < 0 ||
+    options.maxTotalBytes > ABSOLUTE_MAX_TREE_TOTAL_BYTES
+  ) {
+    throw new Error("Invalid bounded E2B tree total limit.");
+  }
+  if (
+    options.excludedSegments.length > 32 ||
+    options.excludedSegments.some(
+      (segment) =>
+        !segment || Buffer.byteLength(segment, "utf8") > 128 || !/^[A-Za-z0-9._-]+$/.test(segment),
+    )
+  ) {
+    throw new Error("Invalid bounded E2B tree exclusions.");
   }
 }
 
@@ -1232,6 +1492,175 @@ class SdkSandboxHandle implements E2BSandboxHandle {
     });
   }
 
+  async scanTree(treeRoot: string, options: E2BRemoteTreeOptions): Promise<E2BRemoteTreeManifest> {
+    validateTreeScanOptions(options);
+    const resolvedRoot = path.posix.resolve(treeRoot);
+    if (
+      treeRoot !== resolvedRoot ||
+      !resolvedRoot.startsWith(`${E2B_PROJECT_HOME}/`) ||
+      Buffer.byteLength(resolvedRoot, "utf8") > ABSOLUTE_MAX_TREE_PATH_BYTES ||
+      resolvedRoot.includes("\0")
+    ) {
+      throw new Error("Invalid bounded E2B tree root.");
+    }
+    const exclusions = [...new Set(options.excludedSegments)].sort().join(",");
+    const scanCommand = [
+      `${TRUSTED_PYTHON} -I -S -c ${shellQuote(BOUNDED_TREE_SCANNER)}`,
+      shellQuote(resolvedRoot),
+      options.maxEntries,
+      options.maxOutputBytes,
+      options.maxDepth,
+      options.maxPathBytes,
+      options.maxFileBytes,
+      options.maxTotalBytes,
+      shellQuote(exclusions),
+      "2>/dev/null",
+    ].join(" ");
+    const result = await this.sandbox.commands.run(
+      isolatedUserShell(E2B_PROJECT_USER, scanCommand),
+      {
+        user: "root",
+        timeoutMs: 30_000,
+        requestTimeoutMs: 30_000,
+        signal: options.signal,
+        envs: TRUSTED_LAUNCH_ENV,
+      },
+    );
+    if (Buffer.byteLength(result.stdout, "utf8") > options.maxOutputBytes) {
+      throw new Error("E2B tree manifest exceeded its hard byte limit.");
+    }
+    let payload: TreeScannerResponse;
+    try {
+      payload = JSON.parse(result.stdout) as TreeScannerResponse;
+    } catch {
+      throw new Error("E2B returned an invalid bounded tree manifest.");
+    }
+    if (typeof payload !== "object" || payload === null || typeof payload.ok !== "boolean") {
+      throw new Error("E2B returned an invalid bounded tree manifest.");
+    }
+    if (!payload.ok) {
+      const messages: Record<Extract<TreeScannerResponse, { ok: false }>["error"], string> = {
+        entry_limit: "E2B tree exceeds the workspace entry limit.",
+        byte_limit: "E2B tree manifest exceeds the hard byte limit.",
+        depth_limit: "E2B tree exceeds the workspace depth limit.",
+        path_limit: "E2B tree contains an oversized path.",
+        file_limit: "E2B tree contains an oversized file.",
+        total_limit: "E2B tree exceeds the total workspace byte limit.",
+        scan_failed: "E2B tree could not be inspected safely.",
+      };
+      if (!(payload.error in messages)) {
+        throw new Error("E2B returned an invalid bounded tree manifest.");
+      }
+      throw new Error(messages[payload.error]);
+    }
+    if (
+      !Array.isArray(payload.entries) ||
+      payload.entries.length > options.maxEntries ||
+      (payload.root !== null && (typeof payload.root !== "object" || payload.root === null))
+    ) {
+      throw new Error("E2B returned an invalid bounded tree manifest.");
+    }
+
+    const parseMetadata = (
+      record: Omit<TreeScannerRecord, "p">,
+      entryPath: string,
+      name: string,
+      isExcluded: boolean,
+      requiresHash = true,
+    ): E2BRemoteTreeEntry => {
+      if (
+        !["file", "dir", "special"].includes(record.t) ||
+        !Number.isSafeInteger(record.s) ||
+        record.s < 0 ||
+        record.s > options.maxFileBytes ||
+        !Number.isSafeInteger(record.m) ||
+        record.m < 0 ||
+        (record.l !== null && typeof record.l !== "string") ||
+        (record.h !== undefined &&
+          record.h !== null &&
+          (typeof record.h !== "string" || !/^[a-f0-9]{64}$/.test(record.h)))
+      ) {
+        throw new Error("E2B returned invalid tree entry metadata.");
+      }
+      const symlinkTarget =
+        record.l === null ? undefined : decodeFilesystemText(record.l, "symbolic-link target");
+      const isRegularFile = record.t === "file" && symlinkTarget === undefined && record.s >= 0;
+      if (
+        (record.t !== "file" && record.h != null) ||
+        (symlinkTarget !== undefined && record.h != null) ||
+        (isRegularFile && requiresHash && !isExcluded && record.h == null)
+      ) {
+        throw new Error("E2B returned invalid tree content metadata.");
+      }
+      return {
+        name,
+        path: entryPath,
+        type: record.t,
+        size: record.s,
+        mode: record.m,
+        symlinkTarget,
+        sha256: record.h ?? undefined,
+      };
+    };
+
+    let totalBytes = 0;
+    const seen = new Set<string>();
+    const entries = payload.entries.map((record) => {
+      if (!record || typeof record !== "object" || typeof record.p !== "string") {
+        throw new Error("E2B returned invalid tree entry metadata.");
+      }
+      const relativePath = decodeFilesystemText(record.p, "filesystem path");
+      const segments = relativePath.split("/");
+      if (
+        !relativePath ||
+        path.posix.isAbsolute(relativePath) ||
+        path.win32.isAbsolute(relativePath) ||
+        segments.length > options.maxDepth ||
+        Buffer.byteLength(relativePath, "utf8") > options.maxPathBytes ||
+        segments.some(
+          (segment) =>
+            !segment ||
+            segment === "." ||
+            segment === ".." ||
+            segment.includes("\\") ||
+            segment.includes("\0"),
+        )
+      ) {
+        throw new Error("E2B returned an unsafe tree path.");
+      }
+      const entryPath = path.posix.join(resolvedRoot, ...segments);
+      if (path.posix.relative(resolvedRoot, entryPath) !== relativePath || seen.has(relativePath)) {
+        throw new Error("E2B returned an unsafe tree path.");
+      }
+      seen.add(relativePath);
+      const entry = parseMetadata(
+        record,
+        entryPath,
+        segments.at(-1) ?? "",
+        segments.some((segment) => options.excludedSegments.includes(segment)),
+      );
+      if (entry.type === "file") {
+        totalBytes += entry.size;
+        if (!Number.isSafeInteger(totalBytes) || totalBytes > options.maxTotalBytes) {
+          throw new Error("E2B tree exceeds the total workspace byte limit.");
+        }
+      }
+      return entry;
+    });
+
+    const root =
+      payload.root === null
+        ? null
+        : parseMetadata(
+            payload.root,
+            resolvedRoot,
+            path.posix.basename(resolvedRoot),
+            false,
+            false,
+          );
+    return { root, entries };
+  }
+
   async getInfo(path: string, signal?: AbortSignal): Promise<E2BRemoteEntry> {
     return toRemoteEntry(
       await this.sandbox.files.getInfo(path, { user: E2B_PROJECT_USER, signal }),
@@ -1275,10 +1704,37 @@ class SdkSandboxHandle implements E2BSandboxHandle {
   }
 
   async writeFiles(
-    files: Array<{ path: string; data: Uint8Array }>,
+    files: Array<{ path: string; data: Uint8Array; mode?: number }>,
     signal?: AbortSignal,
   ): Promise<void> {
     if (files.length === 0) return;
+    const modeRequests = files.flatMap((file): Array<[string, number]> => {
+      if (file.mode === undefined) return [];
+      if (!Number.isSafeInteger(file.mode) || file.mode < 0) {
+        throw new Error("Invalid E2B file mode.");
+      }
+      const resolved = path.posix.resolve(file.path);
+      const relative = path.posix.relative(E2B_PROJECT_HOME, resolved);
+      if (
+        resolved !== file.path ||
+        !relative ||
+        relative.startsWith("../") ||
+        relative.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+        Buffer.byteLength(relative, "utf8") > ABSOLUTE_MAX_TREE_PATH_BYTES
+      ) {
+        throw new Error("Invalid E2B file mode path.");
+      }
+      return [[relative, file.mode & 0o111 ? 0o755 : 0o644]];
+    });
+    if (modeRequests.length > 256) {
+      throw new Error("Too many E2B file mode requests.");
+    }
+    const encodedModeRequests = Buffer.from(JSON.stringify(modeRequests), "utf8").toString(
+      "base64",
+    );
+    if (Buffer.byteLength(encodedModeRequests, "utf8") > 256 * 1024) {
+      throw new Error("E2B file mode request is too large.");
+    }
     await this.sandbox.files.write(
       files.map((file) => ({
         path: file.path,
@@ -1286,6 +1742,19 @@ class SdkSandboxHandle implements E2BSandboxHandle {
       })),
       { gzip: true, user: E2B_PROJECT_USER, signal },
     );
+    if (modeRequests.length > 0) {
+      const command = `${TRUSTED_PYTHON} -I -S -c ${shellQuote(APPLY_FILE_MODES_SCRIPT)} ${shellQuote(E2B_PROJECT_HOME)} ${shellQuote(encodedModeRequests)} >/dev/null 2>/dev/null`;
+      const result = await this.sandbox.commands.run(isolatedUserShell(E2B_PROJECT_USER, command), {
+        user: "root",
+        timeoutMs: 10_000,
+        requestTimeoutMs: 10_000,
+        signal,
+        envs: TRUSTED_LAUNCH_ENV,
+      });
+      if (result.exitCode !== 0) {
+        throw new Error("E2B could not apply a safe file mode.");
+      }
+    }
   }
 
   async makeDir(path: string, signal?: AbortSignal): Promise<void> {

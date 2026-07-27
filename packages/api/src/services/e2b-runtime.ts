@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { rawSqlite } from "../db/index.js";
 import {
   type E2BAdapter,
@@ -34,10 +35,27 @@ const MAX_OUTPUT_BYTES_PER_STREAM = 2 * 1024 * 1024;
 const NODE_RUNTIME_BOOTSTRAP_TIMEOUT_MS = 5 * 60_000;
 const NODE_RUNTIME_BOOTSTRAP_OUTPUT_BYTES = 32 * 1024;
 const NODE_RUNTIME_ERROR_DETAIL_BYTES = 4 * 1024;
+const SETUP_CACHE_VERSION = 1;
+const SETUP_CACHE_KEY_MAX_BYTES = 4 * 1024;
+const SETUP_CACHE_MARKER_NAME = `.quillra-setup-v${SETUP_CACHE_VERSION}`;
+const MIN_SANDBOX_HANDLE_CACHE_TTL_MS = 60_000;
+const MAX_SANDBOX_HANDLE_CACHE_TTL_MS = 5 * 60_000;
+const SANDBOX_HANDLE_TIMEOUT_SAFETY_MS = 30_000;
 
 export type E2BProjectFence = {
   projectId: string;
   githubBindingGeneration: number;
+};
+
+export type E2BPreviewAccess = {
+  origin: string;
+  headers: { "e2b-traffic-access-token": string };
+};
+
+export type E2BPreviewStartResult = {
+  pid: number;
+  port: number;
+  access: E2BPreviewAccess;
 };
 
 export type E2BRuntimeConfig = {
@@ -339,10 +357,255 @@ function truncateUtf8(value: string, maxBytes = MAX_OUTPUT_BYTES_PER_STREAM): st
   return `${encoded.subarray(0, maxBytes).toString("utf8")}\n[output truncated by Quillra]`;
 }
 
-function previewSetupFailure(result: E2BCommandResult): Error {
+function setupFailure(result: E2BCommandResult): Error {
   return new Error(
     `E2B preview setup failed with exit code ${result.exitCode}. Check the advanced preview logs for details.`,
   );
+}
+
+function validateSetupCacheKey(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!value || Buffer.byteLength(value, "utf8") > SETUP_CACHE_KEY_MAX_BYTES) {
+    throw new Error("The E2B preview setup cache key is invalid.");
+  }
+  return value;
+}
+
+function setupMarkerValue(
+  setupCommand: string,
+  setupCacheKey: string,
+  nodeRuntime: E2BNodeRuntimePlan | null,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: SETUP_CACHE_VERSION,
+        setupCommand,
+        setupCacheKey,
+        nodeRuntimeId: nodeRuntime?.runtimeId ?? null,
+      }),
+    )
+    .digest("hex");
+}
+
+function setupCacheMarkerPath(remoteRoot: string): string {
+  return `${remoteRoot}/node_modules/${SETUP_CACHE_MARKER_NAME}`;
+}
+
+function simpleShellTokens(command: string): string[] | null {
+  const tokens: string[] = [];
+  let token = "";
+  let quote: "'" | '"' | null = null;
+  let hasToken = false;
+
+  const finishToken = () => {
+    if (!hasToken) return;
+    tokens.push(token);
+    token = "";
+    hasToken = false;
+  };
+
+  for (const character of command) {
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      } else {
+        // Double-quoted shell expansion would make this parser's view differ
+        // from the executed command. Generated package-manager commands use
+        // inert single-quoted tokens.
+        if (quote === '"' && (character === "$" || character === "`" || character === "\\")) {
+          return null;
+        }
+        token += character;
+      }
+      hasToken = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      hasToken = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      finishToken();
+      continue;
+    }
+    // Only accept the simple argv shape emitted by packageInstallCommand().
+    // Shell operators or expansion make manager inference ambiguous, so the
+    // optimization fails closed and setup runs normally.
+    if (";&|<>$`\\".includes(character)) return null;
+    token += character;
+    hasToken = true;
+  }
+  if (quote) return null;
+  finishToken();
+  return tokens;
+}
+
+function setupPackageManager(setupCommand: string): "npm" | "pnpm" | null {
+  const tokens = simpleShellTokens(setupCommand);
+  if (!tokens) return null;
+  let index = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index] ?? "")) index += 1;
+  if (tokens[index] === "corepack") index += 1;
+  const manager = /^(npm|pnpm)(?:@[^@\s]+)?$/.exec(tokens[index] ?? "")?.[1];
+  if ((manager !== "npm" && manager !== "pnpm") || tokens[index + 1] !== "install") {
+    return null;
+  }
+  return manager;
+}
+
+function setupCacheArtifactPaths(remoteRoot: string, setupCommand: string): string[] | null {
+  const manager = setupPackageManager(setupCommand);
+  if (manager === "pnpm") {
+    return [`${remoteRoot}/node_modules/.modules.yaml`];
+  }
+  if (manager === "npm") {
+    return [`${remoteRoot}/node_modules/.package-lock.json`];
+  }
+  // Yarn/PnP and arbitrary setup commands can generate required state outside
+  // node_modules. A caller-supplied key alone cannot prove those artifacts
+  // survived workspace reconciliation.
+  return null;
+}
+
+async function setupCacheArtifactsExist(
+  sandbox: E2BSandboxHandle,
+  artifactPaths: string[],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    for (const artifactPath of artifactPaths) {
+      if (!(await sandbox.exists(artifactPath, signal))) return false;
+    }
+    return true;
+  } catch {
+    if (signal?.aborted) throw abortReason(signal);
+    return false;
+  }
+}
+
+/**
+ * The marker is project-owned and only skips repeat dependency setup inside
+ * this project's sandbox. It is never consulted for authorization, routing,
+ * sandbox selection, or any trusted relay decision.
+ */
+async function setupCacheMatches(
+  sandbox: E2BSandboxHandle,
+  markerPath: string,
+  markerValue: string,
+  artifactPaths: string[],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    if (!(await sandbox.exists(markerPath, signal))) return false;
+    if (!(await setupCacheArtifactsExist(sandbox, artifactPaths, signal))) return false;
+    const expected = Buffer.from(markerValue, "utf8");
+    const actual = await sandbox.readFileChunk(markerPath, 0, expected.byteLength + 1, signal);
+    return actual.byteLength === expected.byteLength && Buffer.from(actual).equals(expected);
+  } catch {
+    if (signal?.aborted) throw abortReason(signal);
+    return false;
+  }
+}
+
+async function writeSetupCacheMarker(
+  sandbox: E2BSandboxHandle,
+  markerPath: string,
+  markerValue: string,
+  artifactPaths: string[],
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    if (!(await setupCacheArtifactsExist(sandbox, artifactPaths, signal))) return;
+    await sandbox.remove(markerPath, signal).catch(() => undefined);
+    await sandbox.writeFiles(
+      [{ path: markerPath, data: Buffer.from(markerValue, "utf8") }],
+      signal,
+    );
+  } catch {
+    if (signal?.aborted) throw abortReason(signal);
+    // This cache is only a warm-start optimization. If its project-owned
+    // marker cannot be written, the next preview safely runs setup again.
+  }
+}
+
+async function removeSetupCacheMarker(
+  sandbox: E2BSandboxHandle,
+  markerPath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    await sandbox.remove(markerPath, signal);
+  } catch {
+    if (signal?.aborted) throw abortReason(signal);
+  }
+}
+
+async function runSetupCommand(
+  sandbox: E2BSandboxHandle,
+  options: {
+    remoteRoot: string;
+    setupCommand: string;
+    setupCacheKey?: string;
+    nodeRuntime: E2BNodeRuntimePlan | null;
+    timeoutMs: number;
+    signal?: AbortSignal;
+    onStdout?: (chunk: string) => void | Promise<void>;
+    onStderr?: (chunk: string) => void | Promise<void>;
+    onSetupStart?: () => void | Promise<void>;
+    onSetupComplete?: () => void | Promise<void>;
+  },
+): Promise<void> {
+  const artifactPaths =
+    options.setupCacheKey === undefined
+      ? null
+      : setupCacheArtifactPaths(options.remoteRoot, options.setupCommand);
+  const markerPath = setupCacheMarkerPath(options.remoteRoot);
+  const markerValue =
+    options.setupCacheKey === undefined || artifactPaths === null
+      ? undefined
+      : setupMarkerValue(options.setupCommand, options.setupCacheKey, options.nodeRuntime);
+  const cacheHit =
+    markerValue !== undefined &&
+    artifactPaths !== null &&
+    (await setupCacheMatches(sandbox, markerPath, markerValue, artifactPaths, options.signal));
+  if (!cacheHit) {
+    // An uncacheable setup (for example Yarn/PnP) can replace dependencies
+    // while leaving an older npm/pnpm marker and artifact behind. Always
+    // invalidate the prior proof before any setup run, regardless of whether
+    // this particular command is eligible to write a replacement marker.
+    await removeSetupCacheMarker(sandbox, markerPath, options.signal);
+    await options.onSetupStart?.();
+    const setupProcess = await sandbox.startCommand(options.setupCommand, {
+      cwd: options.remoteRoot,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
+      envs: options.nodeRuntime?.environment,
+      projectPathPrefix: options.nodeRuntime?.pathPrefix,
+      onStdout: cappedForwarder(options.onStdout),
+      onStderr: cappedForwarder(options.onStderr),
+    });
+    const setupResult = await waitForProcess(setupProcess, options.signal);
+    if (setupResult.exitCode !== 0) throw setupFailure(setupResult);
+    if (markerValue !== undefined && artifactPaths !== null) {
+      await writeSetupCacheMarker(sandbox, markerPath, markerValue, artifactPaths, options.signal);
+    }
+  }
+  await options.onSetupComplete?.();
+}
+
+function previewAccessForSandbox(sandbox: E2BSandboxHandle): E2BPreviewAccess {
+  if (!sandbox.trafficAccessToken) {
+    throw new Error("E2B did not return a protected public-traffic token.");
+  }
+  return {
+    origin: `https://${sandbox.getHost(E2B_PREVIEW_RELAY_PORT)}`,
+    headers: {
+      "e2b-traffic-access-token": sandbox.trafficAccessToken,
+    },
+  };
 }
 
 async function forwardNodeRuntimeFailure(
@@ -451,6 +714,38 @@ type RuntimeDependencies = {
   syncLimits?: E2BSyncLimits;
 };
 
+type CachedSandboxHandle = {
+  sandbox: E2BSandboxHandle;
+  sandboxId: string;
+  githubBindingGeneration: number;
+  templateId: string;
+  configFingerprint: string;
+  connectedAt: number;
+};
+
+function sandboxConnectionConfigFingerprint(config: E2BRuntimeConfig): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        apiKey: config.apiKey,
+        sandboxTimeoutMs: config.sandboxTimeoutMs,
+        requestTimeoutMs: config.requestTimeoutMs,
+      }),
+    )
+    .digest("hex");
+}
+
+function sandboxHandleCacheTtlMs(config: E2BRuntimeConfig): number {
+  const desiredTtl = Math.min(
+    MAX_SANDBOX_HANDLE_CACHE_TTL_MS,
+    Math.max(MIN_SANDBOX_HANDLE_CACHE_TTL_MS, Math.floor(config.sandboxTimeoutMs / 3)),
+  );
+  return Math.max(
+    0,
+    Math.min(desiredTtl, config.sandboxTimeoutMs - SANDBOX_HANDLE_TIMEOUT_SAFETY_MS),
+  );
+}
+
 /**
  * E2B execution boundary. Callers still hold Quillra's existing project lock;
  * this class adds its own project queue so an accidental direct caller cannot
@@ -463,6 +758,7 @@ export class E2BRuntime {
   private readonly gate: CredentialGate;
   private readonly syncLimits?: E2BSyncLimits;
   private readonly projectTails = new Map<string, Promise<unknown>>();
+  private readonly sandboxHandles = new Map<string, CachedSandboxHandle>();
   private readonly previewLaunches = new Map<
     string,
     { token: symbol; sandboxId: string; pid: number }
@@ -546,10 +842,17 @@ export class E2BRuntime {
       signal?: AbortSignal;
       onStdout?: (chunk: string) => void | Promise<void>;
       onStderr?: (chunk: string) => void | Promise<void>;
+      setupCommand?: string;
+      setupCacheKey?: string;
+      onSetupStart?: () => void | Promise<void>;
+      onSetupComplete?: () => void | Promise<void>;
     },
   ): Promise<E2BCommandResult> {
     return this.runProjectOperation(fence, async () => {
       const command = validateCommand(options.command);
+      const setupCommand =
+        options.setupCommand === undefined ? undefined : validateCommand(options.setupCommand);
+      const setupCacheKey = validateSetupCacheKey(options.setupCacheKey);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
       const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot);
       await this.assertNoActivePreview(fence);
@@ -576,6 +879,20 @@ export class E2BRuntime {
             signal: options.signal,
             onStdout: options.onStdout,
             onStderr: options.onStderr,
+          });
+        }
+        if (setupCommand) {
+          await runSetupCommand(sandbox, {
+            remoteRoot: E2B_WORKSPACE_ROOT,
+            setupCommand,
+            setupCacheKey,
+            nodeRuntime,
+            timeoutMs,
+            signal: options.signal,
+            onStdout: options.onStdout,
+            onStderr: options.onStderr,
+            onSetupStart: options.onSetupStart,
+            onSetupComplete: options.onSetupComplete,
           });
         }
         const process = await sandbox.startCommand(command, {
@@ -633,10 +950,12 @@ export class E2BRuntime {
       onStderr?: (chunk: string) => void | Promise<void>;
       onExit?: (result: E2BCommandResult) => void | Promise<void>;
       setupCommand?: string;
+      setupCacheKey?: string;
+      onSetupStart?: () => void | Promise<void>;
       onSetupComplete?: () => void | Promise<void>;
       defaultNodeRuntime?: boolean;
     },
-  ): Promise<{ pid: number; port: number }> {
+  ): Promise<E2BPreviewStartResult> {
     const pendingStart = {
       token: Symbol(fence.projectId),
       githubBindingGeneration: fence.githubBindingGeneration,
@@ -654,6 +973,7 @@ export class E2BRuntime {
       const command = validateCommand(options.command);
       const setupCommand =
         options.setupCommand === undefined ? undefined : validateCommand(options.setupCommand);
+      const setupCacheKey = validateSetupCacheKey(options.setupCacheKey);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
       const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot, {
         defaultWhenMissing: options.defaultNodeRuntime,
@@ -661,7 +981,9 @@ export class E2BRuntime {
       assertE2BPreviewTargetPort(options.port);
       const { sandbox, record } = await this.ensureConnected(fence, signal);
       let process: E2BProcess;
+      let access: E2BPreviewAccess;
       try {
+        access = previewAccessForSandbox(sandbox);
         this.previewLaunches.delete(fence.projectId);
         // Kill every process owned by project code, including descendants that
         // escaped the previously recorded process group, before any trusted
@@ -688,18 +1010,19 @@ export class E2BRuntime {
           });
         }
         if (setupCommand) {
-          const setupProcess = await sandbox.startCommand(setupCommand, {
-            cwd: E2B_PREVIEW_ROOT,
+          await runSetupCommand(sandbox, {
+            remoteRoot: E2B_PREVIEW_ROOT,
+            setupCommand,
+            setupCacheKey,
+            nodeRuntime,
             timeoutMs,
             signal,
-            maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
-            envs: nodeRuntime?.environment,
-            projectPathPrefix: nodeRuntime?.pathPrefix,
-            onStdout: cappedForwarder(options.onStdout),
-            onStderr: cappedForwarder(options.onStderr),
+            onStdout: options.onStdout,
+            onStderr: options.onStderr,
+            onSetupStart: options.onSetupStart,
+            onSetupComplete: options.onSetupComplete,
           });
-          const setupResult = await waitForProcess(setupProcess, signal);
-          if (setupResult.exitCode !== 0) throw previewSetupFailure(setupResult);
+        } else {
           await options.onSetupComplete?.();
         }
         await sandbox.startPreviewRelay(options.port, signal);
@@ -784,7 +1107,7 @@ export class E2BRuntime {
           }
         })
         .catch(() => undefined);
-      return { pid: process.pid, port: options.port };
+      return { pid: process.pid, port: options.port, access };
     }).finally(() => {
       const currentStarts = this.previewStartControllers.get(fence.projectId);
       currentStarts?.delete(pendingStart);
@@ -792,17 +1115,25 @@ export class E2BRuntime {
     });
   }
 
-  stopPreview(fence: E2BProjectFence, options: { signal?: AbortSignal } = {}): Promise<void> {
+  /**
+   * Synchronously supersede only starts for this exact repository binding.
+   * This intentionally performs no provider call and can therefore run before
+   * a replacement start enters the per-project queue.
+   */
+  cancelPendingPreviewStart(fence: E2BProjectFence): void {
     const pendingStarts = this.previewStartControllers.get(fence.projectId);
-    if (pendingStarts) {
-      for (const pendingStart of pendingStarts) {
-        if (pendingStart.githubBindingGeneration === fence.githubBindingGeneration) {
-          pendingStart.controller.abort(
-            new DOMException("The preview start was stopped.", "AbortError"),
-          );
-        }
+    if (!pendingStarts) return;
+    for (const pendingStart of pendingStarts) {
+      if (pendingStart.githubBindingGeneration === fence.githubBindingGeneration) {
+        pendingStart.controller.abort(
+          new DOMException("The preview start was stopped.", "AbortError"),
+        );
       }
     }
+  }
+
+  stopPreview(fence: E2BProjectFence, options: { signal?: AbortSignal } = {}): Promise<void> {
+    this.cancelPendingPreviewStart(fence);
     return this.runProjectOperation(fence, async () => {
       await this.store.assertFence(fence);
       // Invalidate only after the queued operation proves that this fence is
@@ -817,18 +1148,28 @@ export class E2BRuntime {
       const config = this.configProvider();
       let sandbox: E2BSandboxHandle;
       try {
-        sandbox = await this.adapter.connect(record.sandboxId, {
-          apiKey: config.apiKey,
-          timeoutMs: config.sandboxTimeoutMs,
-          requestTimeoutMs: config.requestTimeoutMs,
-          signal: options.signal,
-        });
+        const cached = this.getCachedSandboxHandle(record, config);
+        if (cached) {
+          sandbox = cached;
+        } else {
+          sandbox = await this.adapter.connect(record.sandboxId, {
+            apiKey: config.apiKey,
+            timeoutMs: config.sandboxTimeoutMs,
+            requestTimeoutMs: config.requestTimeoutMs,
+            signal: options.signal,
+          });
+          await this.ensureRemoteRoots(sandbox, options.signal);
+          await this.store.assertFence(fence);
+          this.rememberSandboxHandle(record, config, sandbox);
+        }
       } catch (error) {
         if (this.adapter.isNotFound(error)) {
+          this.forgetSandboxHandle(record.projectId, record);
           this.store.delete(record.projectId, record.sandboxId);
           return;
         }
         if (error instanceof E2BTrustedEnvironmentError) {
+          this.forgetSandboxHandle(record.projectId, record);
           if (error.cleanupStatus === "confirmed") {
             this.store.delete(record.projectId, record.sandboxId);
             return;
@@ -869,28 +1210,23 @@ export class E2BRuntime {
     fence: E2BProjectFence,
     port: number,
     options: { signal?: AbortSignal } = {},
-  ): Promise<{ origin: string; headers: { "e2b-traffic-access-token": string } }> {
+  ): Promise<E2BPreviewAccess> {
     return this.runProjectOperation(fence, async () => {
       assertE2BPreviewTargetPort(port);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
       if (record.previewPid === null || record.previewPort !== port) {
         throw new Error("The requested E2B preview is not active.");
       }
-      if (!sandbox.trafficAccessToken) {
-        throw new Error("E2B did not return a protected public-traffic token.");
-      }
-      return {
-        origin: `https://${sandbox.getHost(E2B_PREVIEW_RELAY_PORT)}`,
-        headers: {
-          "e2b-traffic-access-token": sandbox.trafficAccessToken,
-        },
-      };
+      return previewAccessForSandbox(sandbox);
     });
   }
 
   pauseProject(fence: E2BProjectFence, options: { signal?: AbortSignal } = {}): Promise<void> {
     return this.runProjectOperation(fence, async () => {
-      const { sandbox } = await this.ensureConnected(fence, options.signal);
+      const { sandbox, record } = await this.ensureConnected(fence, options.signal);
+      // A paused sandbox must reconnect so E2B can resume it and return fresh
+      // envd/public-traffic credentials.
+      this.forgetSandboxHandle(record.projectId, record);
       await sandbox.pause(options.signal);
     });
   }
@@ -901,7 +1237,13 @@ export class E2BRuntime {
       // Keep the same fence boundary as the persistent sandbox mutation.
       this.previewLaunches.delete(fence.projectId);
       const record = this.store.get(fence.projectId);
-      if (!record) return;
+      if (!record) {
+        this.forgetSandboxHandle(fence.projectId, {
+          githubBindingGeneration: fence.githubBindingGeneration,
+        });
+        return;
+      }
+      this.forgetSandboxHandle(record.projectId, record);
       unregisterPreviewUpstream(record.projectId);
       const config = this.configProvider();
       try {
@@ -922,6 +1264,7 @@ export class E2BRuntime {
     apiKey?: string;
     signal?: AbortSignal;
   }): Promise<void> {
+    this.sandboxHandles.clear();
     const records = this.store.list();
     if (records.length === 0) return;
     const apiKey = options.apiKey?.trim() || getInstanceSetting("E2B_API_KEY")?.trim();
@@ -963,14 +1306,22 @@ export class E2BRuntime {
    * back to the control-plane checkout.
    */
   withCredentialRotation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.gate.withRotation(operation, () => {
-      const reason = new DOMException("The E2B runtime is being reconfigured.", "AbortError");
-      for (const pendingStarts of this.previewStartControllers.values()) {
-        for (const pendingStart of pendingStarts) {
-          pendingStart.controller.abort(reason);
+    return this.gate.withRotation(
+      async () => {
+        // The gate has drained every operation at this point. Drop handles
+        // before old credentials or their sandboxes can be mutated.
+        this.sandboxHandles.clear();
+        return operation();
+      },
+      () => {
+        const reason = new DOMException("The E2B runtime is being reconfigured.", "AbortError");
+        for (const pendingStarts of this.previewStartControllers.values()) {
+          for (const pendingStart of pendingStarts) {
+            pendingStart.controller.abort(reason);
+          }
         }
-      }
-    });
+      },
+    );
   }
 
   private runProjectOperation<T>(fence: E2BProjectFence, operation: () => Promise<T>): Promise<T> {
@@ -991,6 +1342,78 @@ export class E2BRuntime {
     return result;
   }
 
+  /**
+   * Called only from inside the per-project queue. The persistent sandbox row
+   * remains authoritative; this cache merely avoids repeating E2B connect and
+   * trusted bootstrap for a short, bounded interval in this runtime process.
+   */
+  private getCachedSandboxHandle(
+    record: E2BProjectSandboxRecord,
+    config: E2BRuntimeConfig,
+  ): E2BSandboxHandle | null {
+    const cached = this.sandboxHandles.get(record.projectId);
+    if (!cached) return null;
+    const ageMs = Date.now() - cached.connectedAt;
+    const matches =
+      cached.sandboxId === record.sandboxId &&
+      cached.sandbox.sandboxId === record.sandboxId &&
+      cached.githubBindingGeneration === record.githubBindingGeneration &&
+      cached.templateId === record.templateId &&
+      cached.templateId === config.templateId &&
+      cached.configFingerprint === sandboxConnectionConfigFingerprint(config) &&
+      ageMs >= 0 &&
+      ageMs < sandboxHandleCacheTtlMs(config);
+    if (matches) return cached.sandbox;
+    this.sandboxHandles.delete(record.projectId);
+    return null;
+  }
+
+  private rememberSandboxHandle(
+    record: E2BProjectSandboxRecord,
+    config: E2BRuntimeConfig,
+    sandbox: E2BSandboxHandle,
+  ): void {
+    if (
+      sandbox.sandboxId !== record.sandboxId ||
+      record.templateId !== config.templateId ||
+      sandboxHandleCacheTtlMs(config) <= 0
+    ) {
+      return;
+    }
+    this.sandboxHandles.set(record.projectId, {
+      sandbox,
+      sandboxId: record.sandboxId,
+      githubBindingGeneration: record.githubBindingGeneration,
+      templateId: record.templateId,
+      configFingerprint: sandboxConnectionConfigFingerprint(config),
+      connectedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Conditional invalidation prevents an obsolete async cleanup from evicting
+   * a newer binding's handle. Omitting identity is reserved for the credential
+   * gate after all active operations have drained.
+   */
+  private forgetSandboxHandle(
+    projectId: string,
+    expected: {
+      sandboxId?: string;
+      githubBindingGeneration?: number;
+    },
+  ): void {
+    const cached = this.sandboxHandles.get(projectId);
+    if (!cached) return;
+    if (expected.sandboxId !== undefined && cached.sandboxId !== expected.sandboxId) return;
+    if (
+      expected.githubBindingGeneration !== undefined &&
+      cached.githubBindingGeneration !== expected.githubBindingGeneration
+    ) {
+      return;
+    }
+    this.sandboxHandles.delete(projectId);
+  }
+
   private async ensureConnected(
     fence: E2BProjectFence,
     signal?: AbortSignal,
@@ -1004,6 +1427,7 @@ export class E2BRuntime {
       (record.githubBindingGeneration !== fence.githubBindingGeneration ||
         record.templateId !== config.templateId)
     ) {
+      this.forgetSandboxHandle(record.projectId, record);
       unregisterPreviewUpstream(record.projectId);
       try {
         await this.adapter.destroy(record.sandboxId, {
@@ -1019,11 +1443,13 @@ export class E2BRuntime {
     }
 
     if (record) {
-      // `connect()` re-runs the trusted bootstrap and may wait for a failed
-      // sandbox cleanup. Remove the in-memory token route before entering that
-      // potentially blocking provider operation.
-      unregisterPreviewUpstream(record.projectId);
       try {
+        const cached = this.getCachedSandboxHandle(record, config);
+        if (cached) return { sandbox: cached, record };
+        // `connect()` re-runs the trusted bootstrap and may wait for a failed
+        // sandbox cleanup. Remove the in-memory token route only when entering
+        // that provider operation; a healthy cached preview must stay routed.
+        unregisterPreviewUpstream(record.projectId);
         const sandbox = await this.adapter.connect(record.sandboxId, {
           apiKey: config.apiKey,
           timeoutMs: config.sandboxTimeoutMs,
@@ -1031,9 +1457,12 @@ export class E2BRuntime {
           signal,
         });
         await this.ensureRemoteRoots(sandbox, signal);
+        await this.store.assertFence(fence);
+        this.rememberSandboxHandle(record, config, sandbox);
         return { sandbox, record };
       } catch (error) {
         if (error instanceof E2BTrustedEnvironmentError) {
+          this.forgetSandboxHandle(record.projectId, record);
           if (error.cleanupStatus === "confirmed") {
             this.store.delete(record.projectId, record.sandboxId);
             if (signal?.aborted) throw abortReason(signal);
@@ -1045,6 +1474,7 @@ export class E2BRuntime {
           throw error;
         }
         if (!this.adapter.isNotFound(error)) throw error;
+        this.forgetSandboxHandle(record.projectId, record);
         this.store.delete(record.projectId, record.sandboxId);
       }
     }
@@ -1131,8 +1561,10 @@ export class E2BRuntime {
       await this.store.assertFence(fence);
       await this.ensureRemoteRoots(sandbox, signal);
       this.store.save(createdRecord);
+      this.rememberSandboxHandle(createdRecord, config, sandbox);
       return { sandbox, record: createdRecord };
     } catch (error) {
+      this.forgetSandboxHandle(createdRecord.projectId, createdRecord);
       try {
         await sandbox.kill();
         this.store.delete(createdRecord.projectId, createdRecord.sandboxId);
@@ -1235,6 +1667,7 @@ export class E2BRuntime {
     sandbox: E2BSandboxHandle,
   ): Promise<"confirmed" | "failed"> {
     this.previewLaunches.delete(record.projectId);
+    this.forgetSandboxHandle(record.projectId, record);
     // This must happen before `kill()`: provider cleanup can time out or reject,
     // but no request may continue carrying the sandbox traffic token.
     unregisterPreviewUpstream(record.projectId);

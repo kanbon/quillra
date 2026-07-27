@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import type { E2BRemoteEntry, E2BSandboxHandle } from "./e2b-adapter.js";
+import type { E2BRemoteEntry, E2BRemoteTreeEntry, E2BSandboxHandle } from "./e2b-adapter.js";
 import { E2B_PROJECT_HOME } from "./e2b-preview-relay.js";
 
 export const E2B_WORKSPACE_ROOT = `${E2B_PROJECT_HOME}/quillra-workspace`;
@@ -29,6 +29,7 @@ const WRITE_BATCH_FILE_LIMIT = 64;
 const WRITE_BATCH_BYTE_LIMIT = 8 * 1024 * 1024;
 const READ_CHUNK_BYTES = 256 * 1024;
 const DIRECTORY_LIST_OUTPUT_BYTES = 2 * 1024 * 1024;
+const TREE_MANIFEST_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 type SnapshotDirectory = {
   relativePath: string;
@@ -40,6 +41,7 @@ type LocalSnapshotFile = {
   absolutePath: string;
   size: number;
   mode: number;
+  sha256: string;
 };
 
 type LocalSnapshot = {
@@ -49,13 +51,14 @@ type LocalSnapshot = {
   protectedAncestors: Set<string>;
 };
 
-type RemoteInventoryEntry = E2BRemoteEntry & {
+type RemoteInventoryEntry = E2BRemoteTreeEntry & {
   relativePath: string;
 };
 
 type RemoteInventory = {
   entries: RemoteInventoryEntry[];
   protectedAncestors: Set<string>;
+  rootExists: boolean;
 };
 
 type RemoteSnapshotFile = {
@@ -218,6 +221,7 @@ async function collectLocalSnapshot(
           absolutePath,
           size: info.size,
           mode: info.mode,
+          sha256: "",
         });
       }
     } finally {
@@ -226,7 +230,45 @@ async function collectLocalSnapshot(
   };
 
   await visit(localRoot, []);
+  for (const file of files) {
+    file.sha256 = await hashLocalFile(file, limits, signal);
+  }
   return { directories, files, protectedAncestors };
+}
+
+async function hashLocalFile(
+  file: LocalSnapshotFile,
+  limits: E2BSyncLimits,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(signal);
+  const handle = await fs.open(file.absolutePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size !== file.size || info.size > limits.maxFileBytes) {
+      throw new E2BWorkspaceSyncError(`Workspace file changed during sync: ${file.relativePath}`);
+    }
+    const hash = createHash("sha256");
+    let offset = 0;
+    while (offset < file.size) {
+      throwIfAborted(signal);
+      const length = Math.min(READ_CHUNK_BYTES, file.size - offset);
+      const buffer = Buffer.allocUnsafe(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, offset);
+      if (bytesRead !== length) {
+        throw new E2BWorkspaceSyncError(`Workspace file changed during sync: ${file.relativePath}`);
+      }
+      hash.update(buffer);
+      offset += bytesRead;
+    }
+    const finalInfo = await handle.stat();
+    if (!finalInfo.isFile() || finalInfo.size !== info.size) {
+      throw new E2BWorkspaceSyncError(`Workspace file changed during sync: ${file.relativePath}`);
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
+  }
 }
 
 async function safelyReadLocalFile(
@@ -244,6 +286,9 @@ async function safelyReadLocalFile(
     const data = await handle.readFile();
     throwIfAborted(signal);
     if (data.byteLength !== file.size) {
+      throw new E2BWorkspaceSyncError(`Workspace file changed during sync: ${file.relativePath}`);
+    }
+    if (createHash("sha256").update(data).digest("hex") !== file.sha256) {
       throw new E2BWorkspaceSyncError(`Workspace file changed during sync: ${file.relativePath}`);
     }
     return data;
@@ -277,6 +322,49 @@ async function collectRemoteInventory(options: {
   const entries: RemoteInventoryEntry[] = [];
   const protectedAncestors = new Set<string>();
   const budget = { entries: 0, totalBytes: 0 };
+
+  if (options.sandbox.scanTree) {
+    throwIfAborted(options.signal);
+    const manifest = await options.sandbox.scanTree(options.remoteRoot, {
+      maxEntries: options.limits.maxEntries,
+      maxOutputBytes: TREE_MANIFEST_OUTPUT_BYTES,
+      maxDepth: options.limits.maxDepth,
+      maxPathBytes: options.limits.maxPathBytes,
+      maxFileBytes: options.limits.maxFileBytes,
+      maxTotalBytes: options.limits.maxTotalBytes,
+      excludedSegments: [...EXCLUDED_SEGMENTS],
+      signal: options.signal,
+    });
+    if (manifest.root === null) return { entries, protectedAncestors, rootExists: false };
+    if (manifest.root.type !== "dir" || manifest.root.symlinkTarget !== undefined) {
+      throw new E2BWorkspaceSyncError("The E2B workspace root must be a real directory.");
+    }
+    for (const child of manifest.entries) {
+      const { relativePath, segments } = remoteRelativePath(
+        options.remoteRoot,
+        child,
+        options.limits,
+      );
+      assertEntryBudget(
+        budget,
+        relativePath,
+        child.type === "file" ? child.size : 0,
+        options.limits,
+      );
+      if (isExcluded(segments)) {
+        addAncestorPaths(protectedAncestors, segments);
+        continue;
+      }
+      if (child.symlinkTarget !== undefined && options.rejectSymlinks) {
+        throw new E2BWorkspaceSyncError(
+          `Workspace sync refuses an E2B symbolic link: ${relativePath}`,
+        );
+      }
+      entries.push({ ...child, relativePath });
+    }
+    await fillMissingRemoteHashes(options.sandbox, entries, options.signal);
+    return { entries, protectedAncestors, rootExists: true };
+  }
 
   const visit = async (remoteDirectory: string): Promise<void> => {
     throwIfAborted(options.signal);
@@ -314,14 +402,41 @@ async function collectRemoteInventory(options: {
     }
   };
 
-  if (await options.sandbox.exists(options.remoteRoot, options.signal)) {
+  const rootExists = await options.sandbox.exists(options.remoteRoot, options.signal);
+  if (rootExists) {
     const rootInfo = await options.sandbox.getInfo(options.remoteRoot, options.signal);
     if (rootInfo.type !== "dir" || rootInfo.symlinkTarget !== undefined) {
       throw new E2BWorkspaceSyncError("The E2B workspace root must be a real directory.");
     }
     await visit(options.remoteRoot);
   }
-  return { entries, protectedAncestors };
+  await fillMissingRemoteHashes(options.sandbox, entries, options.signal);
+  return { entries, protectedAncestors, rootExists };
+}
+
+async function fillMissingRemoteHashes(
+  sandbox: E2BSandboxHandle,
+  entries: RemoteInventoryEntry[],
+  signal?: AbortSignal,
+): Promise<void> {
+  for (const entry of entries) {
+    if (entry.type !== "file" || entry.symlinkTarget !== undefined || entry.sha256 !== undefined) {
+      continue;
+    }
+    const hash = createHash("sha256");
+    let offset = 0;
+    while (offset < entry.size) {
+      throwIfAborted(signal);
+      const expected = Math.min(READ_CHUNK_BYTES, entry.size - offset);
+      const chunk = await sandbox.readFileChunk(entry.path, offset, expected, signal);
+      if (chunk.byteLength !== expected) {
+        throw new E2BWorkspaceSyncError(`E2B file changed during sync: ${entry.relativePath}`);
+      }
+      hash.update(chunk);
+      offset += chunk.byteLength;
+    }
+    entry.sha256 = hash.digest("hex");
+  }
 }
 
 function remoteSnapshotFromInventory(inventory: RemoteInventory): RemoteSnapshot {
@@ -367,6 +482,10 @@ function desiredTypes(snapshot: {
   ]);
 }
 
+function normalizedFileMode(mode: number): number {
+  return mode & 0o111 ? 0o755 : 0o644;
+}
+
 async function reconcileRemoteWorkspace(options: {
   sandbox: E2BSandboxHandle;
   snapshot: LocalSnapshot;
@@ -399,7 +518,9 @@ async function reconcileRemoteWorkspace(options: {
     existing.delete(entry.relativePath);
   }
 
-  await options.sandbox.makeDir(options.remoteRoot, options.signal);
+  if (!options.inventory.rootExists) {
+    await options.sandbox.makeDir(options.remoteRoot, options.signal);
+  }
   for (const directory of options.snapshot.directories) {
     const entry = existing.get(directory.relativePath);
     if (entry?.type === "dir" && entry.symlinkTarget === undefined) continue;
@@ -410,7 +531,7 @@ async function reconcileRemoteWorkspace(options: {
   }
 
   let uploadedBytes = 0;
-  let batch: Array<{ path: string; data: Uint8Array }> = [];
+  let batch: Array<{ path: string; data: Uint8Array; mode: number }> = [];
   let batchBytes = 0;
   const flush = async () => {
     if (batch.length === 0) return;
@@ -419,6 +540,15 @@ async function reconcileRemoteWorkspace(options: {
     batchBytes = 0;
   };
   for (const file of options.snapshot.files) {
+    const entry = existing.get(file.relativePath);
+    if (
+      entry?.type === "file" &&
+      entry.symlinkTarget === undefined &&
+      entry.sha256 === file.sha256 &&
+      normalizedFileMode(entry.mode) === normalizedFileMode(file.mode)
+    ) {
+      continue;
+    }
     const data = await safelyReadLocalFile(file, options.limits, options.signal);
     if (
       batch.length >= WRITE_BATCH_FILE_LIMIT ||
@@ -429,6 +559,7 @@ async function reconcileRemoteWorkspace(options: {
     batch.push({
       path: path.posix.join(options.remoteRoot, file.relativePath),
       data,
+      mode: file.mode,
     });
     batchBytes += data.byteLength;
     uploadedBytes += data.byteLength;
