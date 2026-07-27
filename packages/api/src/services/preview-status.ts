@@ -51,6 +51,17 @@ export function markPreviewPortActive(projectId: string, port: number): boolean 
   return true;
 }
 
+/**
+ * Stop proxying project traffic while retaining the reserved project/port
+ * association used by the authenticated boot page. This lets the browser read
+ * a terminal lifecycle error without leaving any route to project code open.
+ */
+export function deactivatePreviewPort(projectId: string, expectedPort?: number): void {
+  const port = portByProject.get(projectId);
+  if (expectedPort !== undefined && port !== expectedPort) return;
+  activeProjects.delete(projectId);
+}
+
 export function getActiveProjectByPort(port: number): string | undefined {
   const projectId = portToProject.get(port);
   return projectId && activeProjects.has(projectId) ? projectId : undefined;

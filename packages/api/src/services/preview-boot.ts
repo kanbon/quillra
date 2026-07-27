@@ -4,6 +4,7 @@ export function previewBootHtml(
   capability: string,
   statusUrl = `/api/preview-status?port=${port}&cap=${encodeURIComponent(capability)}`,
   credentials: "omit" | "include" = "omit",
+  editorUrl = "",
 ): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -69,7 +70,7 @@ export function previewBootHtml(
       </li>
     </ul>
     <p class="detail" id="detail">Getting things ready…</p>
-    <button id="retry" class="retry hidden" onclick="window.location.reload()">Retry</button>
+    <button id="retry" class="retry hidden">Retry</button>
   </div>
 </div>
 <script>
@@ -81,6 +82,13 @@ export function previewBootHtml(
   var pollTimer = 0;
   var stopped = false;
   var errored = false;
+  var failedPolls = 0;
+  var maxFailedPolls = 5;
+  var editorUrl = ${JSON.stringify(editorUrl)};
+  var retryNonce = '';
+  try {
+    retryNonce = new URL(window.location.href).searchParams.get('__quillra_parent') || '';
+  } catch (_) {}
 
   function setStage(stage) {
     if (errored) return;
@@ -100,7 +108,9 @@ export function previewBootHtml(
     stopPolling();
     document.getElementById('label').textContent = label || 'Preview unavailable';
     document.getElementById('detail').textContent = detail || 'Something went wrong while starting your preview.';
-    document.getElementById('retry').classList.remove('hidden');
+    var retry = document.getElementById('retry');
+    retry.textContent = window.parent === window && editorUrl ? 'Return to Quillra' : 'Retry';
+    retry.classList.remove('hidden');
     var active = document.querySelector('.step.active');
     if (active) {
       active.classList.remove('active');
@@ -110,12 +120,48 @@ export function previewBootHtml(
     }
   }
 
-  function showSlow(stage) {
+  function showSlow(stage, detail) {
     if (errored) return;
     document.getElementById('label').textContent =
       stage === 'installing' ? 'Still setting things up' : 'Still starting your preview';
     document.getElementById('detail').textContent =
-      'The first setup can take a few minutes. This page will open automatically when it is ready.';
+      detail || 'The first setup can take a few minutes. This page will open automatically when it is ready.';
+  }
+
+  function recordPollFailure() {
+    if (stopped || errored) return;
+    failedPolls++;
+    if (failedPolls >= maxFailedPolls) {
+      showError(
+        'Preview status unavailable',
+        'Quillra could not check the preview status. Check your connection and try again.'
+      );
+    }
+  }
+
+  function retryPreview() {
+    if (!errored) return;
+    if (!window.parent || window.parent === window || typeof window.parent.postMessage !== 'function') {
+      if (editorUrl) {
+        window.location.assign(editorUrl);
+        return;
+      }
+      window.location.reload();
+      return;
+    }
+    errored = false;
+    stopped = false;
+    failedPolls = 0;
+    stagePolls = 0;
+    document.getElementById('retry').classList.add('hidden');
+    document.getElementById('label').textContent = 'Retrying your preview';
+    document.getElementById('detail').textContent = 'Asking Quillra to start a fresh preview…';
+    setStage(currentStage || 'cloning');
+    window.parent.postMessage({ type: 'quillra:retry-preview', nonce: retryNonce }, '*');
+    pollTimer = setTimeout(function() {
+      pollTimer = 0;
+      tick();
+    }, 750);
   }
 
   function stopPolling() {
@@ -135,9 +181,13 @@ export function previewBootHtml(
   function tick() {
     if (stopped) return;
     fetch(${JSON.stringify(statusUrl)}, { credentials: ${JSON.stringify(credentials)} })
-      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(r) {
+        if (!r.ok) throw new Error('Preview status request failed');
+        return r.json();
+      })
       .then(function(data) {
-        if (stopped || !data) return;
+        if (stopped) return;
+        failedPolls = 0;
         if (data.stage === 'error') {
           showError(data.label, data.detail);
           return;
@@ -151,19 +201,28 @@ export function previewBootHtml(
         if (data.stage === 'ready') {
           stopPolling();
           steps.forEach(function(s) { s.classList.remove('active', 'failed'); s.classList.add('done'); });
-          setTimeout(function() { window.location.reload(); }, 400);
+          setTimeout(function() {
+            try {
+              var nextUrl = new URL(window.location.href);
+              nextUrl.searchParams.delete('__quillra_parent');
+              window.location.replace(nextUrl.toString());
+            } catch (_) {
+              window.location.reload();
+            }
+          }, 400);
         } else if (stagePolls >= 30) {
           // A slow package install is not a failure. The backend lifecycle is
           // authoritative, so keep polling until it reports ready or error.
-          showSlow(data.stage);
+          showSlow(data.stage, data.detail);
         } else {
           if (data.label) document.getElementById('label').textContent = data.label;
           if (data.detail) document.getElementById('detail').textContent = data.detail;
         }
       })
-      .catch(function() {})
+      .catch(recordPollFailure)
       .then(scheduleNextPoll);
   }
+  document.getElementById('retry').onclick = retryPreview;
   tick();
 })();
 </script>

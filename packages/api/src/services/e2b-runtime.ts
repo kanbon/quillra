@@ -269,17 +269,21 @@ class CredentialGate {
     }
   }
 
-  withRotation<T>(operation: () => Promise<T>): Promise<T> {
+  withRotation<T>(operation: () => Promise<T>, beforeDrain?: () => void): Promise<T> {
     const run = async () => {
       this.barrier = new Promise<void>((resolve) => {
         this.releaseBarrier = resolve;
       });
-      if (this.activeOperations > 0) {
-        await new Promise<void>((resolve) => {
-          this.activeOperationsDrained = resolve;
-        });
-      }
       try {
+        // The barrier must be installed before cancelling work. Otherwise a
+        // new preview start can enter between cancellation and the exclusive
+        // credential mutation, leaving rotation waiting on another long setup.
+        beforeDrain?.();
+        if (this.activeOperations > 0) {
+          await new Promise<void>((resolve) => {
+            this.activeOperationsDrained = resolve;
+          });
+        }
         return await operation();
       } finally {
         const release = this.releaseBarrier;
@@ -333,6 +337,12 @@ function truncateUtf8(value: string, maxBytes = MAX_OUTPUT_BYTES_PER_STREAM): st
   const encoded = Buffer.from(value, "utf8");
   if (encoded.byteLength <= maxBytes) return value;
   return `${encoded.subarray(0, maxBytes).toString("utf8")}\n[output truncated by Quillra]`;
+}
+
+function previewSetupFailure(result: E2BCommandResult): Error {
+  return new Error(
+    `E2B preview setup failed with exit code ${result.exitCode}. Check the advanced preview logs for details.`,
+  );
 }
 
 async function forwardNodeRuntimeFailure(
@@ -456,6 +466,14 @@ export class E2BRuntime {
   private readonly previewLaunches = new Map<
     string,
     { token: symbol; sandboxId: string; pid: number }
+  >();
+  private readonly previewStartControllers = new Map<
+    string,
+    Set<{
+      token: symbol;
+      githubBindingGeneration: number;
+      controller: AbortController;
+    }>
   >();
 
   constructor(dependencies: RuntimeDependencies = {}) {
@@ -614,24 +632,41 @@ export class E2BRuntime {
       onStdout?: (chunk: string) => void | Promise<void>;
       onStderr?: (chunk: string) => void | Promise<void>;
       onExit?: (result: E2BCommandResult) => void | Promise<void>;
+      setupCommand?: string;
+      onSetupComplete?: () => void | Promise<void>;
       defaultNodeRuntime?: boolean;
     },
   ): Promise<{ pid: number; port: number }> {
+    const pendingStart = {
+      token: Symbol(fence.projectId),
+      githubBindingGeneration: fence.githubBindingGeneration,
+      controller: new AbortController(),
+    };
+    const projectStarts = this.previewStartControllers.get(fence.projectId) ?? new Set();
+    projectStarts.add(pendingStart);
+    this.previewStartControllers.set(fence.projectId, projectStarts);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, pendingStart.controller.signal])
+      : pendingStart.controller.signal;
+
     return this.runProjectOperation(fence, async () => {
+      if (signal.aborted) throw abortReason(signal);
       const command = validateCommand(options.command);
+      const setupCommand =
+        options.setupCommand === undefined ? undefined : validateCommand(options.setupCommand);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
       const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot, {
         defaultWhenMissing: options.defaultNodeRuntime,
       });
       assertE2BPreviewTargetPort(options.port);
-      const { sandbox, record } = await this.ensureConnected(fence, options.signal);
+      const { sandbox, record } = await this.ensureConnected(fence, signal);
       let process: E2BProcess;
       try {
         this.previewLaunches.delete(fence.projectId);
         // Kill every process owned by project code, including descendants that
         // escaped the previously recorded process group, before any trusted
         // public port is rebound.
-        await sandbox.quiesceProjectProcesses(options.signal);
+        await sandbox.quiesceProjectProcesses(signal);
         if (record.previewPid !== null) {
           this.store.setPreview(fence.projectId, sandbox.sandboxId, null);
         }
@@ -643,20 +678,35 @@ export class E2BRuntime {
           localRoot: options.localRoot,
           remoteRoot: E2B_PREVIEW_ROOT,
           limits: this.syncLimits,
-          signal: options.signal,
+          signal,
         });
         if (nodeRuntime) {
           await bootstrapNodeRuntime(sandbox, nodeRuntime, {
-            signal: options.signal,
+            signal,
             onStdout: options.onStdout,
             onStderr: options.onStderr,
           });
         }
-        await sandbox.startPreviewRelay(options.port, options.signal);
+        if (setupCommand) {
+          const setupProcess = await sandbox.startCommand(setupCommand, {
+            cwd: E2B_PREVIEW_ROOT,
+            timeoutMs,
+            signal,
+            maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
+            envs: nodeRuntime?.environment,
+            projectPathPrefix: nodeRuntime?.pathPrefix,
+            onStdout: cappedForwarder(options.onStdout),
+            onStderr: cappedForwarder(options.onStderr),
+          });
+          const setupResult = await waitForProcess(setupProcess, signal);
+          if (setupResult.exitCode !== 0) throw previewSetupFailure(setupResult);
+          await options.onSetupComplete?.();
+        }
+        await sandbox.startPreviewRelay(options.port, signal);
         process = await sandbox.startCommand(command, {
           cwd: E2B_PREVIEW_ROOT,
           timeoutMs,
-          signal: options.signal,
+          signal,
           maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
           envs: {
             ...nodeRuntime?.environment,
@@ -735,10 +785,24 @@ export class E2BRuntime {
         })
         .catch(() => undefined);
       return { pid: process.pid, port: options.port };
+    }).finally(() => {
+      const currentStarts = this.previewStartControllers.get(fence.projectId);
+      currentStarts?.delete(pendingStart);
+      if (currentStarts?.size === 0) this.previewStartControllers.delete(fence.projectId);
     });
   }
 
   stopPreview(fence: E2BProjectFence, options: { signal?: AbortSignal } = {}): Promise<void> {
+    const pendingStarts = this.previewStartControllers.get(fence.projectId);
+    if (pendingStarts) {
+      for (const pendingStart of pendingStarts) {
+        if (pendingStart.githubBindingGeneration === fence.githubBindingGeneration) {
+          pendingStart.controller.abort(
+            new DOMException("The preview start was stopped.", "AbortError"),
+          );
+        }
+      }
+    }
     return this.runProjectOperation(fence, async () => {
       await this.store.assertFence(fence);
       // Invalidate only after the queued operation proves that this fence is
@@ -890,6 +954,23 @@ export class E2BRuntime {
     if (failures.length > 0) {
       throw new AggregateError(failures, "One or more E2B project sandboxes could not be removed.");
     }
+  }
+
+  /**
+   * Run an exclusive credential mutation after cancelling preview starts that
+   * are still syncing, bootstrapping, or installing. Finite project commands
+   * retain their existing drain semantics because they may be writing changes
+   * back to the control-plane checkout.
+   */
+  withCredentialRotation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.gate.withRotation(operation, () => {
+      const reason = new DOMException("The E2B runtime is being reconfigured.", "AbortError");
+      for (const pendingStarts of this.previewStartControllers.values()) {
+        for (const pendingStart of pendingStarts) {
+          pendingStart.controller.abort(reason);
+        }
+      }
+    });
   }
 
   private runProjectOperation<T>(fence: E2BProjectFence, operation: () => Promise<T>): Promise<T> {
@@ -1180,7 +1261,7 @@ export function getDefaultE2BRuntime(): E2BRuntime {
 export function destroyAllE2BProjectSandboxes(
   options: { apiKey?: string; signal?: AbortSignal } = {},
 ): Promise<void> {
-  return defaultCredentialGate.withRotation(() => defaultRuntime.destroyAllWithApiKey(options));
+  return defaultRuntime.withCredentialRotation(() => defaultRuntime.destroyAllWithApiKey(options));
 }
 
 /**
@@ -1193,7 +1274,7 @@ export function rotateE2BRuntimeCredentials(options: {
   signal?: AbortSignal;
   commit: () => void | Promise<void>;
 }): Promise<void> {
-  return defaultCredentialGate.withRotation(async () => {
+  return defaultRuntime.withCredentialRotation(async () => {
     await defaultRuntime.destroyAllWithApiKey({
       apiKey: options.oldApiKey,
       signal: options.signal,

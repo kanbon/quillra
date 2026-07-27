@@ -20,6 +20,7 @@ import {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const ABSOLUTE_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS = 60_000;
 const PROCESS_LOG_ROOT = `${E2B_PROJECT_HOME}/.quillra-processes`;
 const MAX_FILE_CHUNK_BYTES = 256 * 1024;
 const ABSOLUTE_MAX_DIRECTORY_ENTRIES = 20_000;
@@ -1340,7 +1341,7 @@ class SdkSandboxHandle implements E2BSandboxHandle {
         user: "root",
         cwd: options.cwd,
         timeoutMs: options.timeoutMs,
-        requestTimeoutMs: options.timeoutMs,
+        requestTimeoutMs: Math.min(options.timeoutMs, BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS),
         signal: options.signal,
         envs: TRUSTED_LAUNCH_ENV,
         // Deliberately no stdout/stderr callbacks. The wrapped command redirects

@@ -4,7 +4,7 @@ import { PreviewDebugModal } from "@/components/organisms/PreviewDebugModal";
 import { useT } from "@/i18n/i18n";
 import { cn } from "@/lib/cn";
 import { type PreviewStatus, isPreviewErrored, usePreviewStatus } from "@/lib/use-preview-status";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Props = {
   projectId: string;
@@ -41,6 +41,7 @@ export function PreviewPane({
   const { t } = useT();
   const hasFrame = Boolean(src);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const retryNonce = useRef(window.crypto.randomUUID()).current;
   const [debugOpen, setDebugOpen] = useState(false);
   // Poll the preview status only while the iframe is actually shown.
   // Saves a request/5s on the empty state where the user hasn't clicked
@@ -60,7 +61,38 @@ export function PreviewPane({
     }
   }, []);
   const ready = hasFrame; // The iframe handles its own loading state via the proxy boot page
-  const basePreviewPath = src?.split("?")[0] ?? "";
+  const iframeSrc = useMemo(() => {
+    if (!src) return null;
+    const url = new URL(src, window.location.href);
+    url.searchParams.set("__quillra_parent", retryNonce);
+    return url.toString();
+  }, [retryNonce, src]);
+  const basePreviewPath = iframeSrc?.split("?")[0] ?? "";
+
+  // Only the exact iframe window may request a retry. Path-mode previews have
+  // an intentionally opaque `null` origin, so the per-frame nonce closes the
+  // gap that an origin-only check would leave there.
+  useEffect(() => {
+    if (!iframeSrc || !previewMode) return;
+    const previewOrigin = new URL(iframeSrc, window.location.href).origin;
+    const handler = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; nonce?: unknown } | null;
+      const expectedOrigin = previewMode === "path" ? "null" : previewOrigin;
+      if (
+        event.source !== iframeRef.current?.contentWindow ||
+        event.origin !== expectedOrigin ||
+        typeof data !== "object" ||
+        data === null ||
+        data.type !== "quillra:retry-preview" ||
+        data.nonce !== retryNonce
+      ) {
+        return;
+      }
+      onRefresh();
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [iframeSrc, onRefresh, previewMode, retryNonce]);
 
   const handleIframeLoad = useCallback(() => {
     try {
@@ -68,12 +100,12 @@ export function PreviewPane({
       if (!frame || !basePreviewPath) return;
       const currentSrc = frame.contentWindow?.location.href;
       if (currentSrc && !currentSrc.includes("/__preview/")) {
-        frame.src = src!;
+        frame.src = iframeSrc!;
       }
     } catch {
       /* cross-origin */
     }
-  }, [src, basePreviewPath]);
+  }, [iframeSrc, basePreviewPath]);
 
   return (
     <div
@@ -203,7 +235,7 @@ export function PreviewPane({
             <iframe
               ref={iframeRef}
               title={t("preview.iframeTitle")}
-              src={src!}
+              src={iframeSrc!}
               sandbox={`allow-scripts allow-forms allow-modals allow-downloads${
                 previewMode === "host" ? " allow-same-origin" : ""
               }`}

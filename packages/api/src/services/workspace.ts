@@ -32,6 +32,7 @@ import {
   previewHostAuthorityForProject,
 } from "./preview-origin.js";
 import {
+  deactivatePreviewPort,
   getPortByProject,
   markPreviewPortActive,
   registerPreviewPort,
@@ -66,7 +67,8 @@ const lastPreviewExits = new Map<
   string,
   { launchToken: symbol; pid: number | null; exitCode: number }
 >();
-const previewStartQueues = new Map<string, Promise<void>>();
+type PreviewStartResult = { port: number; label: string };
+const previewStartQueues = new Map<string, Promise<PreviewStartResult>>();
 const previewReservationQueues = new Map<string, Promise<void>>();
 const previewTerminationQueues = new Map<string, Promise<void>>();
 const resettingProjects = new Map<string, number>();
@@ -682,8 +684,10 @@ function finalizeUnexpectedPreviewExit(
     exitCode: result.exitCode,
   });
   unregisterPreviewUpstream(projectId, port);
-  revokePreviewCapability(projectId);
-  unregisterPreviewPort(projectId, port);
+  // Keep only the authenticated status reservation alive. The active route
+  // and E2B upstream are already gone, so project HTTP/WebSocket traffic stays
+  // fail-closed while the boot document can still display the real error.
+  deactivatePreviewPort(projectId, port);
   setPreviewStatus(projectId, "error", `Dev server exited with code ${result.exitCode}`);
   return true;
 }
@@ -1122,11 +1126,13 @@ export async function ensureRepoCloned(
   opts: {
     /** Monotonic binding epoch captured with the caller's project row. */
     expectedBindingGeneration: number;
-    /** Skip running npm/yarn/pnpm install on the cloned repo. Set when the
-     *  caller installs in a separate E2B preview copy or is about to rewrite
-     *  package.json (migration), so we don't waste minutes installing a dep
-     *  tree that is immediately replaced. */
-    skipInstall?: boolean;
+    /**
+     * Install dependencies in the project's isolated E2B workspace after the
+     * Git refresh. This is intentionally opt-in: file, framework, sync, commit,
+     * and publish-status reads only need the credential-free checkout and must
+     * never stop a running preview just to refresh node_modules.
+     */
+    installDependencies?: boolean;
     /** Called when the install step fails (missing version, ETARGET,
      *  peer-dep conflict, OOM, etc). Called INSTEAD of throwing so the
      *  chat turn can still run and the agent can see + fix the cause.
@@ -1140,7 +1146,7 @@ export async function ensureRepoCloned(
   const gitDir = path.join(dir, ".git");
 
   const runInstall = async () => {
-    if (opts.skipInstall) return;
+    if (!opts.installDependencies) return;
     try {
       await installDependenciesIfNeeded(dir, projectId, opts.expectedBindingGeneration);
     } catch (e) {
@@ -1208,6 +1214,7 @@ export async function ensureRepoCloned(
 async function stopPreviewAndWait(
   projectId: string,
   expectedBindingGeneration?: number,
+  options: { preserveStatusReservation?: boolean } = {},
 ): Promise<void> {
   if (expectedBindingGeneration !== undefined) {
     assertCurrentProjectFence({
@@ -1219,10 +1226,20 @@ async function stopPreviewAndWait(
   activePreviewLaunches.delete(projectId);
   previewProcesses.delete(projectId);
   lastPreviewExits.delete(projectId);
-  revokePreviewCapability(projectId);
-  unregisterPreviewPort(projectId);
+  if (options.preserveStatusReservation) {
+    deactivatePreviewPort(projectId);
+  } else {
+    revokePreviewCapability(projectId);
+    unregisterPreviewPort(projectId);
+  }
   unregisterPreviewUpstream(projectId);
-  setPreviewStatus(projectId, "idle", "Preview stopped while project files are being updated");
+  setPreviewStatus(
+    projectId,
+    options.preserveStatusReservation ? "starting" : "idle",
+    options.preserveStatusReservation
+      ? "Preparing the isolated preview"
+      : "Preview stopped while project files are being updated",
+  );
 
   const existingTermination = previewTerminationQueues.get(projectId);
   if (existingTermination) {
@@ -1281,6 +1298,7 @@ async function startDevPreviewNow(
   await stopPreviewAndWait(
     projectId,
     expectedBindingGeneration ?? previous?.githubBindingGeneration,
+    { preserveStatusReservation: true },
   );
   assertProjectWorkspaceAvailable(projectId);
   const port = await reserveAvailablePreviewPort(projectId, true);
@@ -1302,7 +1320,7 @@ async function startDevPreviewNow(
     "export NODE_ENV=development",
     "export FORCE_COLOR=0",
     "export BROWSER=none",
-    install ? `${install} && ${launch}` : launch,
+    launch,
   ].join("; ");
 
   clearPreviewLogs(projectId);
@@ -1314,12 +1332,18 @@ async function startDevPreviewNow(
   try {
     const remote = await getDefaultE2BRuntime().startPreview(fence, {
       localRoot: repoPath,
+      setupCommand: install ?? undefined,
       command,
       port,
       timeoutMs: 30 * 60_000,
       defaultNodeRuntime: true,
       onStdout: (chunk) => appendLog(projectId, "stdout", chunk),
       onStderr: (chunk) => appendLog(projectId, "stderr", chunk),
+      onSetupComplete: () => {
+        if (activePreviewLaunches.get(projectId) === launchToken) {
+          setPreviewStatus(projectId, "starting", `Launching ${dev.label}`);
+        }
+      },
       onExit: (result) => {
         exitResult = result;
         finalizeUnexpectedPreviewExit(projectId, launchToken, port, startedPid, result);
@@ -1336,6 +1360,7 @@ async function startDevPreviewNow(
     if (activePreviewLaunches.get(projectId) !== launchToken) {
       throw new Error("The preview start was stopped.");
     }
+    setPreviewStatus(projectId, "starting", `Waiting for ${dev.label} to respond`);
     previewProcesses.set(projectId, {
       launchToken,
       pid: remote.pid,
@@ -1363,8 +1388,10 @@ async function startDevPreviewNow(
         error instanceof Error ? error.message : "Failed to start preview",
       );
     }
-    revokePreviewCapability(projectId);
-    unregisterPreviewPort(projectId);
+    // Preserve only the authenticated status surface so the existing boot
+    // page can render this error. Project traffic remains unroutable because
+    // the port is inactive and the E2B upstream is removed.
+    deactivatePreviewPort(projectId, port);
     unregisterPreviewUpstream(projectId, port);
     await getDefaultE2BRuntime()
       .stopPreview(fence)
@@ -1407,16 +1434,18 @@ async function startDevPreviewNow(
   return { port, label: dev.label };
 }
 
-/** Serialize restarts so two editor tabs cannot spawn competing servers. */
+/** Share an in-flight launch so two editor tabs cannot trigger serial restarts. */
 export function startDevPreview(
   projectId: string,
   repoPath: string,
   previewCommandOverride: string | null | undefined,
   expectedBindingGeneration?: number,
-): Promise<{ port: number; label: string }> {
+): Promise<PreviewStartResult> {
   assertProjectWorkspaceAvailable(projectId);
-  const previous = previewStartQueues.get(projectId) ?? Promise.resolve();
-  const next = previous.then(() => {
+  const existing = previewStartQueues.get(projectId);
+  if (existing) return existing;
+
+  const start = Promise.resolve().then(() => {
     assertProjectWorkspaceAvailable(projectId);
     return startDevPreviewNow(
       projectId,
@@ -1425,15 +1454,16 @@ export function startDevPreview(
       expectedBindingGeneration,
     );
   });
-  const drained = next.then(
-    () => undefined,
-    () => undefined,
+  previewStartQueues.set(projectId, start);
+  void start.then(
+    () => {
+      if (previewStartQueues.get(projectId) === start) previewStartQueues.delete(projectId);
+    },
+    () => {
+      if (previewStartQueues.get(projectId) === start) previewStartQueues.delete(projectId);
+    },
   );
-  const tracked = drained.finally(() => {
-    if (previewStartQueues.get(projectId) === tracked) previewStartQueues.delete(projectId);
-  });
-  previewStartQueues.set(projectId, tracked);
-  return next;
+  return start;
 }
 
 export type PreviewAddress = { url: string; mode: "host" | "path" };

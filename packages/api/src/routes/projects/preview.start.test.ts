@@ -145,7 +145,6 @@ describe("preview start", () => {
       "main",
       {
         expectedBindingGeneration: 1,
-        skipInstall: true,
       },
     );
     expect(workspaceMocks.startDevPreview).toHaveBeenCalledWith(
@@ -157,21 +156,61 @@ describe("preview start", () => {
     expect(workspaceMocks.stopPreview).not.toHaveBeenCalled();
   });
 
-  it("reports an in-progress preview so reopening the editor does not restart it", async () => {
+  it("shares one complete preview start across concurrent editor requests", async () => {
     const { app } = await createPreviewApp();
+    let finishStart: ((result: { port: number; label: string }) => void) | undefined;
+    workspaceMocks.startDevPreview.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishStart = resolve;
+      }),
+    );
 
-    const response = await app.request("/projects/project-1/preview-meta");
+    const first = app.request("/projects/project-1/preview", { method: "POST" });
+    await vi.waitFor(() => expect(workspaceMocks.startDevPreview).toHaveBeenCalledOnce());
+    const second = app.request("/projects/project-1/preview", { method: "POST" });
+    // Let the second request finish its independent auth/database checks and
+    // reach the in-flight start before completing the shared E2B operation.
+    await new Promise((resolve) => setTimeout(resolve, 25));
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      url: "https://preview.example.test",
-      previewMode: "host",
-      previewActive: false,
-      previewStarting: true,
-      port: 4_321,
-      previewLabel: "-",
-    });
+    expect(workspaceMocks.runInProjectLock).toHaveBeenCalledOnce();
+    expect(workspaceMocks.ensureRepoCloned).toHaveBeenCalledOnce();
+    expect(workspaceMocks.startDevPreview).toHaveBeenCalledOnce();
+
+    finishStart?.({ port: 4_321, label: "Vite" });
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(workspaceMocks.runInProjectLock).toHaveBeenCalledOnce();
+    expect(workspaceMocks.ensureRepoCloned).toHaveBeenCalledOnce();
+    expect(workspaceMocks.startDevPreview).toHaveBeenCalledOnce();
   });
+
+  it.each(["cloning", "installing", "starting"] as const)(
+    "reports the %s lifecycle stage as in progress before the child process starts",
+    async (stage) => {
+      const { app, previewStatus } = await createPreviewApp();
+      workspaceMocks.getPreviewProcessInfo.mockReturnValue({
+        running: false,
+        pid: null,
+        exitCode: null,
+        signalCode: null,
+      });
+      previewStatus.setPreviewStatus("project-1", stage, "Preparing the secure preview");
+
+      const response = await app.request("/projects/project-1/preview-meta");
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        url: "https://preview.example.test",
+        previewMode: "host",
+        previewActive: false,
+        previewStarting: true,
+        port: 4_321,
+        previewLabel: "-",
+      });
+    },
+  );
 
   it("preserves a terminal preview error reported by the lifecycle owner", async () => {
     const { app, previewStatus } = await createPreviewApp();

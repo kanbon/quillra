@@ -491,7 +491,7 @@ describe("E2B runtime", () => {
     );
     expect(sync.from).not.toHaveBeenCalled();
     expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
-    expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(4_321, undefined);
+    expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(4_321, expect.any(AbortSignal));
     expect(vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(sandbox.startPreviewRelay).mock.invocationCallOrder[0] ?? 0,
     );
@@ -511,6 +511,255 @@ describe("E2B runtime", () => {
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(result));
     await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
     expect(sync.from).not.toHaveBeenCalled();
+  });
+
+  it("finishes preview setup before opening the relay and starting the dev server", async () => {
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox();
+    const setupProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(async () => ({ exitCode: 0, stdout: "installed", stderr: "" })),
+      kill: vi.fn(async () => true),
+    };
+    const previewProcess: E2BProcess = {
+      pid: 42,
+      wait: vi.fn(() => previewDone.promise),
+      kill: vi.fn(async () => true),
+    };
+    vi.mocked(sandbox.startCommand)
+      .mockResolvedValueOnce(setupProcess)
+      .mockResolvedValueOnce(previewProcess);
+    const { runtime } = runtimeFixture(sandbox);
+    const onSetupComplete = vi.fn();
+
+    await runtime.startPreview(
+      { projectId: "project-a", githubBindingGeneration: 1 },
+      {
+        localRoot,
+        setupCommand: "npm install --include=dev",
+        command: "npm run dev",
+        port: 4_321,
+        onSetupComplete,
+      },
+    );
+
+    expect(sandbox.startCommand).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sandbox.startCommand).mock.calls[0]).toEqual([
+      "npm install --include=dev",
+      expect.objectContaining({
+        cwd: "/home/quillra-project/quillra-preview",
+      }),
+    ]);
+    expect(vi.mocked(sandbox.startCommand).mock.calls[1]).toEqual([
+      "npm run dev",
+      expect.objectContaining({
+        cwd: "/home/quillra-project/quillra-preview",
+        envs: { HOST: "127.0.0.1", PORT: "4321" },
+      }),
+    ]);
+    expect(setupProcess.wait).toHaveBeenCalledOnce();
+    expect(vi.mocked(setupProcess.wait).mock.invocationCallOrder[0]).toBeLessThan(
+      onSetupComplete.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(onSetupComplete.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.startPreviewRelay).mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(vi.mocked(sandbox.startPreviewRelay).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.startCommand).mock.invocationCallOrder[1] ?? 0,
+    );
+
+    previewDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+  });
+
+  it("fails bounded preview setup before opening ingress or starting project code", async () => {
+    const sandbox = fakeSandbox();
+    const setupProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(async () => ({
+        exitCode: 1,
+        stdout: "x".repeat(8_000),
+        stderr: "dependency resolution failed",
+      })),
+      kill: vi.fn(async () => true),
+    };
+    vi.mocked(sandbox.startCommand).mockImplementationOnce(async (_command, options) => ({
+      ...setupProcess,
+      wait: async () => {
+        const result = await setupProcess.wait();
+        if (result.stdout) await options.onStdout?.(result.stdout);
+        if (result.stderr) await options.onStderr?.(result.stderr);
+        return result;
+      },
+    }));
+    const { runtime } = runtimeFixture(sandbox);
+    const onSetupComplete = vi.fn();
+    const onStdout = vi.fn();
+    const onStderr = vi.fn();
+
+    const start = runtime.startPreview(
+      { projectId: "project-a", githubBindingGeneration: 1 },
+      {
+        localRoot,
+        setupCommand: "npm install --include=dev",
+        command: "npm run dev",
+        port: 4_321,
+        onSetupComplete,
+        onStdout,
+        onStderr,
+      },
+    );
+
+    await expect(start).rejects.toThrow(
+      "E2B preview setup failed with exit code 1. Check the advanced preview logs for details.",
+    );
+    await expect(start).rejects.not.toThrow("dependency resolution failed");
+    await expect(start).rejects.not.toThrow("x".repeat(100));
+    expect(onStdout).toHaveBeenCalledWith("x".repeat(8_000));
+    expect(onStderr).toHaveBeenCalledWith("dependency resolution failed");
+    expect(onSetupComplete).not.toHaveBeenCalled();
+    expect(sandbox.startPreviewRelay).not.toHaveBeenCalled();
+    expect(sandbox.startCommand).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an in-progress preview setup before the queued stop waits for it", async () => {
+    const setupWaitStarted = deferred<void>();
+    const setupDone = deferred<E2BCommandResult>();
+    const setupProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(() => {
+        setupWaitStarted.resolve();
+        return setupDone.promise;
+      }),
+      kill: vi.fn(async () => true),
+    };
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.startCommand).mockResolvedValueOnce(setupProcess);
+    const { runtime } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+
+    const start = runtime.startPreview(fence, {
+      localRoot,
+      setupCommand: "npm install --include=dev",
+      command: "npm run dev",
+      port: 4_321,
+    });
+    const startFailure = start.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await setupWaitStarted.promise;
+
+    const stop = runtime.stopPreview(fence);
+    expect(setupProcess.kill).toHaveBeenCalledOnce();
+
+    await expect(startFailure).resolves.toMatchObject({
+      name: "AbortError",
+      message: "The preview start was stopped.",
+    });
+    await expect(stop).resolves.toBeUndefined();
+    expect(sandbox.startPreviewRelay).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-progress preview setup before credential rotation drains and tears down", async () => {
+    const setupWaitStarted = deferred<void>();
+    const setupDone = deferred<E2BCommandResult>();
+    const setupProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(() => {
+        setupWaitStarted.resolve();
+        return setupDone.promise;
+      }),
+      kill: vi.fn(async () => true),
+    };
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.startCommand).mockResolvedValueOnce(setupProcess);
+    const { runtime, adapter, store } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    const commit = vi.fn(async () => undefined);
+
+    const start = runtime.startPreview(fence, {
+      localRoot,
+      setupCommand: "npm install --include=dev",
+      command: "npm run dev",
+      port: 4_321,
+    });
+    const startFailure = start.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await setupWaitStarted.promise;
+
+    const rotation = runtime.withCredentialRotation(async () => {
+      await runtime.destroyAllWithApiKey({ apiKey: "e2b_control_plane_key" });
+      await commit();
+    });
+
+    await vi.waitFor(() => expect(setupProcess.kill).toHaveBeenCalledOnce());
+    await expect(startFailure).resolves.toMatchObject({
+      name: "AbortError",
+      message: "The E2B runtime is being reconfigured.",
+    });
+    await expect(rotation).resolves.toBeUndefined();
+
+    expect(adapter.destroy).toHaveBeenCalledWith(
+      "sandbox-a",
+      expect.objectContaining({ apiKey: "e2b_control_plane_key" }),
+    );
+    expect(commit).toHaveBeenCalledOnce();
+    expect(store.get(fence.projectId)).toBeNull();
+    expect(sandbox.startPreviewRelay).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale-fence stop abort a newer preview setup", async () => {
+    const setupWaitStarted = deferred<void>();
+    const setupDone = deferred<E2BCommandResult>();
+    const previewDone = deferred<E2BCommandResult>();
+    const setupProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(() => {
+        setupWaitStarted.resolve();
+        return setupDone.promise;
+      }),
+      kill: vi.fn(async () => true),
+    };
+    const previewProcess: E2BProcess = {
+      pid: 42,
+      wait: vi.fn(() => previewDone.promise),
+      kill: vi.fn(async () => true),
+    };
+    const sandbox = fakeSandbox();
+    vi.mocked(sandbox.startCommand)
+      .mockResolvedValueOnce(setupProcess)
+      .mockResolvedValueOnce(previewProcess);
+    const { runtime, store } = runtimeFixture(sandbox);
+    store.generation = 2;
+    const currentFence = { projectId: "project-a", githubBindingGeneration: 2 };
+
+    const start = runtime.startPreview(currentFence, {
+      localRoot,
+      setupCommand: "npm install --include=dev",
+      command: "npm run dev",
+      port: 4_321,
+    });
+    await setupWaitStarted.promise;
+
+    const staleStop = runtime.stopPreview({
+      projectId: "project-a",
+      githubBindingGeneration: 1,
+    });
+    expect(setupProcess.kill).not.toHaveBeenCalled();
+
+    setupDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await expect(start).resolves.toEqual({ pid: 42, port: 4_321 });
+    await expect(staleStop).rejects.toBeInstanceOf(E2BProjectFenceError);
+    expect(setupProcess.kill).not.toHaveBeenCalled();
+    await expect(runtime.getPreviewAccess(currentFence, 4_321)).resolves.toMatchObject({
+      headers: { "e2b-traffic-access-token": "traffic-a" },
+    });
+
+    previewDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
   });
 
   it("prepares the project Node runtime before opening the sealed preview relay", async () => {
@@ -550,7 +799,7 @@ describe("E2B runtime", () => {
     const projectStart = vi.mocked(sandbox.startCommand).mock.invocationCallOrder[1] ?? 0;
     expect(bootstrapStart).toBeLessThan(relayStart);
     expect(relayStart).toBeLessThan(projectStart);
-    expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(4_321, undefined);
+    expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(4_321, expect.any(AbortSignal));
     expect(vi.mocked(sandbox.startCommand).mock.calls[1]).toEqual([
       "npm run dev",
       expect.objectContaining({

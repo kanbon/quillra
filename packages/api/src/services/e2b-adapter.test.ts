@@ -606,6 +606,39 @@ describe("E2B SDK adapter", () => {
     ).toBe(true);
   });
 
+  it("caps only the background start request while preserving the command timeout", async () => {
+    const sandbox = fakeSdkSandbox();
+    const commandHandle = {
+      pid: 77,
+      wait: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+      kill: vi.fn(async () => true),
+    };
+    sdk.create.mockResolvedValue(sandbox);
+    const handle = await new E2BSdkAdapter().create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    sandbox.commands.run.mockResolvedValueOnce(commandHandle);
+
+    await handle.startCommand("npm install", {
+      cwd: `${E2B_PROJECT_HOME}/quillra-preview`,
+      timeoutMs: 30 * 60_000,
+    });
+
+    expect(sandbox.commands.run).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        background: true,
+        timeoutMs: 30 * 60_000,
+        requestTimeoutMs: 60_000,
+      }),
+    );
+  });
+
   it("rejects an output cap that is too large before starting the command", async () => {
     const sandbox = fakeSdkSandbox();
     sdk.create.mockResolvedValue(sandbox);

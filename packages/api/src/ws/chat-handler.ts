@@ -308,7 +308,7 @@ export async function chatWsHandler(c: Context<{ Variables: ChatVariables }>) {
           const isMigrating = p.migrationTarget === "astro" && m.role === "admin";
           repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
             expectedBindingGeneration: p.githubBindingGeneration,
-            skipInstall: isMigrating,
+            installDependencies: !isMigrating,
             onInstallFailed: (err: string) => {
               installFailureContext = err;
             },

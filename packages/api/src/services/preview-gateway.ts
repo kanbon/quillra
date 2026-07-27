@@ -386,8 +386,14 @@ export function createPreviewGateway<RawWebSocket>(
         return c.text("Preview is starting", 503);
       }
       const statusUrl = "/.quillra/preview-status";
+      const editorUrl = new URL(
+        `/p/${encodeURIComponent(reserved.projectId)}`,
+        config.controlOrigins[0],
+      ).toString();
       const boot = new Response(
-        c.req.method === "HEAD" ? null : previewBootHtml(reserved.port, "", statusUrl, "include"),
+        c.req.method === "HEAD"
+          ? null
+          : previewBootHtml(reserved.port, "", statusUrl, "include", editorUrl),
         { status: 200, headers: { "content-type": "text/html; charset=UTF-8" } },
       );
       return secureHostPreviewResponse(
@@ -454,8 +460,12 @@ export function createPreviewGateway<RawWebSocket>(
           (c.req.header("accept") ?? "").includes("text/html"));
       if (!isNavigation) return c.text("Preview upstream unavailable", 502);
       const statusUrl = "/.quillra/preview-status";
+      const editorUrl = new URL(
+        `/p/${encodeURIComponent(active.projectId)}`,
+        config.controlOrigins[0],
+      ).toString();
       return secureHostPreviewResponse(
-        new Response(previewBootHtml(active.port, "", statusUrl, "include"), {
+        new Response(previewBootHtml(active.port, "", statusUrl, "include", editorUrl), {
           status: 200,
           headers: { "content-type": "text/html; charset=UTF-8" },
         }),

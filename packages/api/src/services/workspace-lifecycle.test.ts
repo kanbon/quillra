@@ -10,9 +10,11 @@ type PreviewExitResult = {
 };
 
 type PreviewStartOptions = {
+  setupCommand?: string;
   command: string;
   port: number;
   defaultNodeRuntime?: boolean;
+  onSetupComplete?: () => void | Promise<void>;
   onExit?: (result: PreviewExitResult) => void | Promise<void>;
 };
 
@@ -67,9 +69,10 @@ vi.mock("./e2b-runtime.js", () => ({
 import { rawSqlite } from "../db/index.js";
 import {
   issuePreviewCapability,
+  resolveActivePreviewCapabilityToken,
   resolveReservedPreviewCapabilityToken,
 } from "./preview-capability.js";
-import { getPreviewStatus } from "./preview-status.js";
+import { getPreviewStatus, markPreviewPortActive } from "./preview-status.js";
 import { getPreviewUpstream } from "./preview-upstream.js";
 import {
   beginProjectWriterAuthorizationChange,
@@ -161,7 +164,6 @@ describe("project workspace lifecycle", () => {
     await expect(
       ensureRepoCloned(projectId, "example/site", "main", {
         expectedBindingGeneration: 1,
-        skipInstall: true,
       }),
     ).resolves.toBe(repoPath);
 
@@ -197,7 +199,6 @@ describe("project workspace lifecycle", () => {
     await expect(
       ensureRepoCloned(projectId, "example/site", "main", {
         expectedBindingGeneration: 1,
-        skipInstall: true,
       }),
     ).rejects.toThrow("Project is being deleted");
     expect(() => startDevPreview(projectId, repoPath, null)).toThrow("Project is being deleted");
@@ -629,20 +630,52 @@ describe("project workspace lifecycle", () => {
         devDependencies: { vite: "latest" },
       }),
     );
+    const lifecycleStages: string[] = [];
+    e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
+      lifecycleStages.push(getPreviewStatus(projectId).stage);
+      await options.onSetupComplete?.();
+      lifecycleStages.push(getPreviewStatus(projectId).stage);
+      return { pid: 42, port: options.port };
+    });
 
     await startDevPreview(projectId, repoPath, null, 1);
 
     expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
     expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
+    expect(lifecycleStages).toEqual(["installing", "starting"]);
     const options = e2bRuntimeMock.startPreview.mock.calls[0]?.[1];
     expect(options?.defaultNodeRuntime).toBe(true);
-    expect(options?.command).toContain("--include=dev");
-    expect(options?.command).toContain(" && exec ");
-    expect(options?.command.indexOf("--include=dev")).toBeLessThan(
-      options?.command.indexOf(" && exec ") ?? -1,
-    );
+    expect(options?.setupCommand).toContain("--include=dev");
+    expect(options?.command).not.toContain("--include=dev");
+    expect(options?.command).toContain("exec ");
 
     await clearProjectRepoClone(projectId);
+  });
+
+  it("coalesces concurrent preview starts instead of restarting the same project twice", async () => {
+    const projectId = "coalesced-preview-start";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+    const started = deferred<{ pid: number; port: number }>();
+    e2bRuntimeMock.startPreview.mockReturnValueOnce(started.promise);
+
+    const first = startDevPreview(projectId, repoPath, "npm run dev", 1);
+    const second = startDevPreview(projectId, repoPath, "npm run dev", 1);
+
+    expect(second).toBe(first);
+    await vi.waitFor(() => expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce());
+    const port = e2bRuntimeMock.startPreview.mock.calls[0]?.[1].port ?? 4_321;
+    started.resolve({ pid: 42, port });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { port, label: "Custom" },
+      { port, label: "Custom" },
+    ]);
+    expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
+    expect(e2bRuntimeMock.stopPreview).toHaveBeenCalledOnce();
   });
 
   it("clears a failed preview before a finite workspace install", async () => {
@@ -870,6 +903,9 @@ describe("project workspace lifecycle", () => {
     try {
       const { port } = await startDevPreview(projectId, repoPath, "npm run dev", 1);
       expect(getPreviewUpstream(projectId, port)).not.toBeNull();
+      const capability = issuePreviewCapability(projectId, port);
+      expect(markPreviewPortActive(projectId, port)).toBe(true);
+      expect(resolveActivePreviewCapabilityToken(capability.token).ok).toBe(true);
 
       await onExit?.({ exitCode: 0, stdout: "", stderr: "" });
 
@@ -884,6 +920,8 @@ describe("project workspace lifecycle", () => {
         message: "Dev server exited with code 0",
       });
       expect(getPreviewUpstream(projectId, port)).toBeNull();
+      expect(resolveActivePreviewCapabilityToken(capability.token).ok).toBe(false);
+      expect(resolveReservedPreviewCapabilityToken(capability.token).ok).toBe(true);
     } finally {
       fetchSpy.mockRestore();
     }

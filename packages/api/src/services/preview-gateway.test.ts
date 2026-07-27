@@ -26,8 +26,10 @@ import {
   previewHostnameForProject,
 } from "./preview-origin.js";
 import {
+  deactivatePreviewPort,
   markPreviewPortActive,
   registerPreviewPort,
+  setPreviewStatus,
   unregisterPreviewPort,
 } from "./preview-status.js";
 import {
@@ -283,6 +285,7 @@ afterEach(() => {
   revokePreviewCapability(PROJECT_ID);
   unregisterPreviewPort(PROJECT_ID, upstreamPort);
   unregisterPreviewUpstream(PROJECT_ID, upstreamPort);
+  setPreviewStatus(PROJECT_ID, "idle");
 });
 
 afterAll(async () => {
@@ -318,6 +321,34 @@ describe("host preview gateway integration", () => {
     expect(upstreamRequests).toHaveLength(1);
     expect(requestFor("/").headers.cookie).toBeUndefined();
     expect(requestFor("/").headers[E2B_TRAFFIC_ACCESS_HEADER]).toBe(TRAFFIC_ACCESS_TOKEN);
+  });
+
+  it("keeps terminal status visible while denying all project traffic after an exit", async () => {
+    const cookie = await acquireAccessCookie();
+    deactivatePreviewPort(PROJECT_ID, upstreamPort);
+    unregisterPreviewUpstream(PROJECT_ID, upstreamPort);
+    setPreviewStatus(PROJECT_ID, "error", "Dev server exited with code 1");
+
+    const status = await gatewayFetch("/.quillra/preview-status", {
+      headers: { cookie },
+    });
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toEqual({
+      stage: "error",
+      label: "Something went wrong",
+      detail: "Dev server exited with code 1",
+    });
+
+    const navigation = await gatewayFetch("/", { headers: { cookie } });
+    expect(navigation.status).toBe(200);
+    expect(await navigation.text()).toContain("Starting your preview");
+    const write = await gatewayFetch("/submit", {
+      method: "POST",
+      headers: { cookie },
+      body: "blocked",
+    });
+    expect(write.status).toBe(503);
+    expect(upstreamRequests).toHaveLength(0);
   });
 
   it("never accepts a handoff or path capability as the host session cookie", async () => {

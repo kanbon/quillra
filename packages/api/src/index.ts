@@ -296,6 +296,11 @@ app.get("/api/preview-status", async (c) => {
   return c.json(await readPreviewStatus(projectId, port));
 });
 
+function previewEditorUrl(projectId: string): string {
+  const base = process.env.BETTER_AUTH_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
+  return new URL(`/p/${encodeURIComponent(projectId)}`, base).toString();
+}
+
 app.get("/api/session", async (c) => {
   const sessionUser = c.get("user");
   if (!sessionUser) return c.json({ user: null, kind: "none" as const, projectId: null });
@@ -374,10 +379,13 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
   const { port } = access;
   if (!resolveActivePreviewCapability(rawPort, capability).ok) {
     return securePreviewResponse(
-      new Response(previewBootHtml(port, capability), {
-        status: 200,
-        headers: { "content-type": "text/html; charset=UTF-8" },
-      }),
+      new Response(
+        previewBootHtml(port, capability, undefined, undefined, previewEditorUrl(access.projectId)),
+        {
+          status: 200,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        },
+      ),
       externalPreviewRequestUrl(c),
       port,
       capability,
@@ -388,10 +396,13 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
   const upstreamAccess = previewUpstreamUrl(access.projectId, port, rest, requestUrl.search);
   if (!upstreamAccess) {
     return securePreviewResponse(
-      new Response(previewBootHtml(port, capability), {
-        status: 200,
-        headers: { "content-type": "text/html; charset=UTF-8" },
-      }),
+      new Response(
+        previewBootHtml(port, capability, undefined, undefined, previewEditorUrl(access.projectId)),
+        {
+          status: 200,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        },
+      ),
       externalPreviewRequestUrl(c),
       port,
       capability,
@@ -426,13 +437,16 @@ app.all("/__preview/:port{[0-9]+}/:cap/*", async (c) => {
     );
   } catch {
     return securePreviewResponse(
-      new Response(previewBootHtml(port, capability), {
-        // The boot page was served successfully. It polls the protected
-        // preview-status endpoint for the actual startup result, so a 502
-        // here only produces a misleading browser-console error.
-        status: 200,
-        headers: { "content-type": "text/html; charset=UTF-8" },
-      }),
+      new Response(
+        previewBootHtml(port, capability, undefined, undefined, previewEditorUrl(access.projectId)),
+        {
+          // The boot page was served successfully. It polls the protected
+          // preview-status endpoint for the actual startup result, so a 502
+          // here only produces a misleading browser-console error.
+          status: 200,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        },
+      ),
       externalPreviewRequestUrl(c),
       port,
       capability,

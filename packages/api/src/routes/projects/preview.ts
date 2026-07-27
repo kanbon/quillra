@@ -27,6 +27,31 @@ import {
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
 
+type PreviewStartResult = { port: number; label: string };
+const previewStartRequests = new Map<string, Promise<PreviewStartResult>>();
+
+function coalescePreviewStart(
+  projectId: string,
+  githubBindingGeneration: number,
+  start: () => Promise<PreviewStartResult>,
+): Promise<PreviewStartResult> {
+  const key = `${projectId}:${githubBindingGeneration}`;
+  const existing = previewStartRequests.get(key);
+  if (existing) return existing;
+
+  const request = Promise.resolve().then(start);
+  previewStartRequests.set(key, request);
+  void request.then(
+    () => {
+      if (previewStartRequests.get(key) === request) previewStartRequests.delete(key);
+    },
+    () => {
+      if (previewStartRequests.get(key) === request) previewStartRequests.delete(key);
+    },
+  );
+  return request;
+}
+
 export const previewRouter = new Hono<{ Variables: Variables }>()
   .post("/:id/preview", async (c) => {
     const r = await requireUser(c);
@@ -37,33 +62,31 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const { port, label } = await runInProjectLock(
-        projectId,
-        async () => {
-          setPreviewStatus(projectId, "cloning", `Fetching ${p.githubRepoFullName}`);
-          try {
-            const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
-              expectedBindingGeneration: p.githubBindingGeneration,
-              // The isolated preview copy installs its own dependencies immediately
-              // before launching the dev server. Installing here would do the same
-              // work twice in two separate E2B roots and block this request.
-              skipInstall: true,
-            });
-            return await startDevPreview(
-              projectId,
-              repoPath,
-              p.previewDevCommand,
-              p.githubBindingGeneration,
-            );
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "Failed to start preview";
-            if (getPreviewStatus(projectId).stage !== "error") {
-              setPreviewStatus(projectId, "error", message);
+      const { port, label } = await coalescePreviewStart(projectId, p.githubBindingGeneration, () =>
+        runInProjectLock(
+          projectId,
+          async () => {
+            setPreviewStatus(projectId, "cloning", `Fetching ${p.githubRepoFullName}`);
+            try {
+              const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+                expectedBindingGeneration: p.githubBindingGeneration,
+              });
+              return await startDevPreview(
+                projectId,
+                repoPath,
+                p.previewDevCommand,
+                p.githubBindingGeneration,
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : "Failed to start preview";
+              if (getPreviewStatus(projectId).stage !== "error") {
+                setPreviewStatus(projectId, "error", message);
+              }
+              throw error;
             }
-            throw error;
-          }
-        },
-        p,
+          },
+          p,
+        ),
       );
       const preview = getPreviewAddress(projectId, port);
       return c.json({ url: preview.url, previewMode: preview.mode, port, previewLabel: label });
@@ -179,11 +202,18 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
     }
     const previewActive = isPreviewRoutable(projectId, port);
+    const previewStage = getPreviewStatus(projectId).stage;
+    const previewStarting =
+      !previewActive &&
+      (getPreviewProcessInfo(projectId).running ||
+        previewStage === "cloning" ||
+        previewStage === "installing" ||
+        previewStage === "starting");
     return c.json({
       url: preview.url,
       previewMode: preview.mode,
       previewActive,
-      previewStarting: !previewActive && getPreviewProcessInfo(projectId).running,
+      previewStarting,
       port,
       previewLabel,
     });
