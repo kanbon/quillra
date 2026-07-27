@@ -820,11 +820,10 @@ export async function ensureRepoCloned(
   opts: {
     /** Monotonic binding epoch captured with the caller's project row. */
     expectedBindingGeneration: number;
-    /** Skip running npm/yarn/pnpm install on the cloned repo. Set
-     *  when the caller is about to rewrite package.json (migration)
-     *  so we don't waste minutes installing a dep tree the agent
-     *  will just throw away, or worse, OOM the container on an
-     *  ancient CRA / Gatsby dep graph before the agent even runs. */
+    /** Skip running npm/yarn/pnpm install on the cloned repo. Set when the
+     *  caller installs in a separate E2B preview copy or is about to rewrite
+     *  package.json (migration), so we don't waste minutes installing a dep
+     *  tree that is immediately replaced. */
     skipInstall?: boolean;
     /** Called when the install step fails (missing version, ETARGET,
      *  peer-dep conflict, OOM, etc). Called INSTEAD of throwing so the
@@ -967,21 +966,25 @@ async function startDevPreviewNow(
   assertProjectWorkspaceAvailable(projectId);
   const port = await reserveAvailablePreviewPort(projectId, true);
   assertProjectWorkspaceAvailable(projectId);
-  setPreviewStatus(projectId, "starting", "Launching dev server");
   const fence = projectFence(projectId, expectedBindingGeneration);
   const dev = resolveDevCommand(repoPath, port, previewCommandOverride);
   const install = packageInstallCommand(repoPath);
+  setPreviewStatus(
+    projectId,
+    install ? "installing" : "starting",
+    install
+      ? `Running ${getPackageManager(repoPath)} install in the E2B preview`
+      : "Launching dev server",
+  );
+  const launch = `exec ${shellCommand(dev.command, dev.args)}`;
   const command = [
     "export HOST=127.0.0.1",
     `export PORT=${port}`,
     "export NODE_ENV=development",
     "export FORCE_COLOR=0",
     "export BROWSER=none",
-    install,
-    `exec ${shellCommand(dev.command, dev.args)}`,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join("; ");
+    install ? `${install} && ${launch}` : launch,
+  ].join("; ");
 
   clearPreviewLogs(projectId);
   let exited = false;
@@ -1034,7 +1037,7 @@ async function startDevPreviewNow(
   // Probe through the same authenticated E2B route used by the gateway. No
   // loopback request or project process ever runs inside Quillra's container.
   void (async () => {
-    for (let attempt = 0; attempt < 120; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       if (previewProcesses.get(projectId)?.pid !== startedPid) return;
       const upstream = previewUpstreamUrl(projectId, port, "/");
       if (!upstream) return;
@@ -1051,7 +1054,11 @@ async function startDevPreviewNow(
       } catch {
         // Still booting.
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      // Package installation can legitimately take several minutes. Keep the
+      // readiness probe alive for the lifetime of this exact preview process,
+      // but back off after the first minute to avoid needless provider traffic.
+      const delayMs = attempt < 120 ? 500 : 5_000;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
     }
   })();
   return { port, label: dev.label };

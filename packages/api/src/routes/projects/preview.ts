@@ -36,6 +36,10 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     try {
       const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
         expectedBindingGeneration: p.githubBindingGeneration,
+        // The isolated preview copy installs its own dependencies immediately
+        // before launching the dev server. Installing here would do the same
+        // work twice in two separate E2B roots and block this request.
+        skipInstall: true,
       });
       const { port, label } = await runInProjectLock(
         projectId,
@@ -155,10 +159,12 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     if (fs.existsSync(path.join(repo, "package.json"))) {
       previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
     }
+    const previewActive = isPreviewRoutable(projectId, port);
     return c.json({
       url: preview.url,
       previewMode: preview.mode,
-      previewActive: isPreviewRoutable(projectId, port),
+      previewActive,
+      previewStarting: !previewActive && getPreviewProcessInfo(projectId).running,
       port,
       previewLabel,
     });

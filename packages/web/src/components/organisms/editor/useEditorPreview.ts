@@ -26,6 +26,7 @@ type PreviewMeta = {
   previewLabel: string;
   previewMode: "host" | "path";
   previewActive?: boolean;
+  previewStarting?: boolean;
 };
 
 export function useEditorPreview(projectId: string, autoStart = true) {
@@ -60,7 +61,7 @@ export function useEditorPreview(projectId: string, autoStart = true) {
         setPreviewSrc(url.toString());
         setPreviewLabel(meta.previewLabel);
         setPreviewMode(meta.previewMode);
-        if (!meta.previewActive && !previewStarting) startPreview();
+        if (!meta.previewActive && !meta.previewStarting && !previewStarting) startPreview();
       })
       .catch(() => {
         setPreviewSrc((value) => {
@@ -89,15 +90,17 @@ export function useEditorPreview(projectId: string, autoStart = true) {
     if (!id || !autoStart || previewStarted.current) return;
     previewStarted.current = true;
     void (async () => {
+      let shouldStart = true;
       try {
         const meta = await apiJson<PreviewMeta>(`/api/projects/${id}/preview-meta`);
         setPreviewLabel(meta.previewLabel);
         setPreviewSrc(meta.url);
         setPreviewMode(meta.previewMode);
+        shouldStart = !meta.previewActive && !meta.previewStarting;
       } catch {
         /* not critical */
       }
-      startPreview();
+      if (shouldStart) startPreview();
     })();
   }, [autoStart, id, startPreview]);
 
