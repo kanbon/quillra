@@ -146,6 +146,36 @@ describe("project Git security", () => {
     expect(config).not.toContain("x-access-token");
   });
 
+  it("preserves the sanitized origin across guarded Git commands", async () => {
+    const repo = createRepo();
+    const git = simpleGit(repo);
+    await git.init();
+    await git.addRemote(
+      "origin",
+      "https://x-access-token:github-installation-secret@github.com/example/site.git",
+    );
+
+    await scrubGitRemoteCredentials(repo, "example/site");
+
+    const projectGit = simpleGitForProject(repo);
+    await projectGit.status();
+    const remotes = await projectGit.getRemotes(true);
+    const config = fs.readFileSync(path.join(repo, ".git", "config"), "utf8");
+
+    expect(remotes).toEqual([
+      {
+        name: "origin",
+        refs: {
+          fetch: "https://github.com/example/site.git",
+          push: "https://github.com/example/site.git",
+        },
+      },
+    ]);
+    expect(config).toContain("url = https://github.com/example/site.git");
+    expect(config).not.toContain("github-installation-secret");
+    expect(config).not.toContain("x-access-token");
+  });
+
   it("does not execute repository-installed Git hooks", async () => {
     const repo = createRepo();
     const git = simpleGitForProject(repo, {

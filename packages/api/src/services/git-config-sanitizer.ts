@@ -142,9 +142,12 @@ function safeConfig(origin: string | null, branch: string | null): string {
     "\tlogallrefupdates = true",
   ];
   if (origin) {
+    // The canonical parser intentionally accepts only this unquoted GitHub
+    // representation. Keep the writer round-trippable through the same narrow
+    // validation on every guarded Git command.
     lines.push(
       '[remote "origin"]',
-      `\turl = ${quotedConfigValue(origin)}`,
+      `\turl = ${origin}`,
       "\tfetch = +refs/heads/*:refs/remotes/origin/*",
     );
     if (branch) {
