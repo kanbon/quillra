@@ -102,11 +102,13 @@ let tempDirectory: string;
 beforeEach(() => {
   tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "quillra-workspace-lifecycle-"));
   process.env.WORKSPACE_DIR = path.join(tempDirectory, "workspaces");
+  vi.stubEnv("BETTER_AUTH_SECRET", "workspace-lifecycle-test-secret");
   cloneMock.mockReset();
   for (const mock of Object.values(e2bRuntimeMock)) mock.mockClear();
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const projectId of cleanupProjectIds) {
     beginProjectDeletion(projectId);
     await removeDeletedProjectWorkspace(projectId).catch(() => undefined);
@@ -631,6 +633,9 @@ describe("project workspace lifecycle", () => {
       }),
     );
     const lifecycleStages: string[] = [];
+    vi.stubEnv("BETTER_AUTH_URL", "https://cms.example.test");
+    vi.stubEnv("BETTER_AUTH_SECRET", "workspace-lifecycle-preview-secret");
+    vi.stubEnv("PREVIEW_DOMAIN", "preview.example.test");
     e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
       lifecycleStages.push(getPreviewStatus(projectId).stage);
       await options.onSetupComplete?.();
@@ -647,6 +652,9 @@ describe("project workspace lifecycle", () => {
     expect(options?.defaultNodeRuntime).toBe(true);
     expect(options?.setupCommand).toContain("--include=dev");
     expect(options?.command).not.toContain("--include=dev");
+    expect(options?.command).toMatch(
+      /export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS='p-[a-f0-9]{40}\.preview\.example\.test'/,
+    );
     expect(options?.command).toContain("exec ");
 
     await clearProjectRepoClone(projectId);

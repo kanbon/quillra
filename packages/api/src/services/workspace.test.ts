@@ -15,6 +15,7 @@ import {
   getPackageManager,
   getPreviewUrl,
   packageInstallCommand,
+  previewBrowserHostname,
   reserveAvailablePreviewPort,
   resolveDevCommand,
   resolvePackageManager,
@@ -94,6 +95,29 @@ describe("getPreviewUrl", () => {
       projectId: "project-preview-url",
       port: 4_321,
     });
+  });
+});
+
+describe("previewBrowserHostname", () => {
+  it("returns the exact stable project host for Vite's sandbox allowlist", () => {
+    const environment = {
+      BETTER_AUTH_SECRET: "preview-host-test-secret",
+      BETTER_AUTH_URL: "https://cms.example.com",
+      PREVIEW_DOMAIN: "preview.example.com",
+    };
+
+    const hostname = previewBrowserHostname("project-vite-host", environment);
+
+    expect(hostname).toMatch(/^p-[a-f0-9]{40}\.preview\.example\.com$/);
+    expect(hostname).not.toContain("*");
+  });
+
+  it("uses the control-plane hostname for path-mode previews", () => {
+    expect(
+      previewBrowserHostname("project-path-host", {
+        BETTER_AUTH_URL: "https://cms.example.com",
+      }),
+    ).toBe("cms.example.com");
   });
 });
 

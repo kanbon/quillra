@@ -30,6 +30,7 @@ import {
   buildHostPreviewUrl,
   getPreviewOriginConfig,
   previewHostAuthorityForProject,
+  previewHostnameForProject,
 } from "./preview-origin.js";
 import {
   deactivatePreviewPort,
@@ -1306,6 +1307,7 @@ async function startDevPreviewNow(
   const fence = projectFence(projectId, expectedBindingGeneration);
   const dev = resolveDevCommand(repoPath, port, previewCommandOverride);
   const install = packageInstallCommand(repoPath);
+  const additionalAllowedHost = previewBrowserHostname(projectId);
   setPreviewStatus(
     projectId,
     install ? "installing" : "starting",
@@ -1320,6 +1322,7 @@ async function startDevPreviewNow(
     "export NODE_ENV=development",
     "export FORCE_COLOR=0",
     "export BROWSER=none",
+    `export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=${shellQuote(additionalAllowedHost)}`,
     launch,
   ].join("; ");
 
@@ -1467,6 +1470,23 @@ export function startDevPreview(
 }
 
 export type PreviewAddress = { url: string; mode: "host" | "path" };
+
+/**
+ * Return the exact browser-facing hostname for framework dev servers that
+ * implement their own Host allowlist. Vite consumes this through its official
+ * __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS sandbox integration.
+ */
+export function previewBrowserHostname(
+  projectId: string,
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  const hostConfig = getPreviewOriginConfig(environment);
+  if (hostConfig) return previewHostnameForProject(projectId, hostConfig, environment);
+  const controlUrl = new URL(
+    environment.BETTER_AUTH_URL ?? `http://localhost:${environment.PORT ?? "3000"}`,
+  );
+  return controlUrl.hostname.toLowerCase().replace(/\.$/, "");
+}
 
 export function getPreviewAddress(projectId: string, port: number): PreviewAddress {
   const base = (
