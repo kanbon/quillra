@@ -125,7 +125,7 @@ server: E2B supplies one isolated execution sandbox per project.
 | `TRUSTED_ORIGINS` | Browser origins allowed to call the API with cookies |
 | `PREVIEW_DOMAIN` | Dedicated wildcard parent domain for router-correct live previews |
 | `E2B_API_KEY` | A standard E2B API key for isolated project execution; normally entered in first-run setup |
-| `E2B_TEMPLATE_ID` | Optional custom E2B template with the runtimes your projects need |
+| `E2B_TEMPLATE_ID` | Optional custom E2B base template for extra system tools |
 | `ANTHROPIC_API_KEY` | Powers the Claude Agent SDK in the control plane; normally entered in first-run setup |
 | `EMAIL_PROVIDER` | `none` (default), `resend`, or `smtp`; configured in first-run setup |
 
@@ -198,14 +198,18 @@ supplied as project environment variables.
 editor, and curl for the health check. Caddy or another TLS reverse proxy is
 optional but recommended for an internet-facing install. A source installation
 additionally needs Node.js 22.13 or newer and Corepack on `PATH`. The
-control-plane image includes the runtime needed for Quillra itself. Project
-runtimes belong in the E2B template, not in the application container. Use
-`E2B_TEMPLATE_ID` when the default E2B environment does not include a framework
-or generator your projects require.
+control-plane image includes the runtime needed for Quillra itself. Quillra
+selects and installs the project's Node.js runtime inside its E2B sandbox from
+Volta, `.nvmrc`, `.node-version`, `.tool-versions`, `devEngines`, or
+`engines.node`, with a pinned maintained default when the project does not
+declare one. Use `E2B_TEMPLATE_ID` only when a project needs additional system
+tools that the verified base template does not provide.
 
 The Docker image builds Quillra with its pinned pnpm 10 release. Inside E2B,
-Corepack honors a project's explicit `packageManager`; older pnpm projects
-without that field use pnpm 9 so dependency lifecycle scripts keep working.
+Corepack honors exact npm, pnpm, and Yarn versions from `packageManager` and
+compatible ranges or alternatives from `devEngines`. Without a declaration,
+Quillra selects Yarn or pnpm from its lockfile and otherwise uses npm. Runtime
+and dependency downloads happen from inside the project sandbox.
 
 For the repository-side Railway configuration and the small external checklist
 needed to publish a Railway Marketplace Template, see

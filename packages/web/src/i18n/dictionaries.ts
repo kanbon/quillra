@@ -358,7 +358,7 @@ const enDict = {
     secureExecution: {
       title: "Secure code execution",
       intro:
-        "E2B runs project dependencies, builds, and preview processes in isolated cloud sandboxes instead of inside the Quillra container.",
+        "E2B runs project dependencies, builds, and preview processes in one isolated cloud sandbox per project instead of inside the Quillra container. Public ingress is protected, while outbound access remains enabled for runtime and dependency downloads.",
       appLabel: "Application",
       codeLabel: "Project code",
       sandboxLabel: "E2B sandbox",
@@ -385,7 +385,7 @@ const enDict = {
       checkCredentialsBody: "Connect to E2B and resolve the selected sandbox template.",
       checkSandbox: "Isolated sandbox",
       checkSandboxBody:
-        "Create a short-lived sandbox with protected public ingress and outbound access disabled.",
+        "Verify an isolated sandbox with protected public ingress. Project sandboxes keep outbound access for runtime and dependency downloads.",
       checkRuntime: "Runtime prerequisites",
       checkRuntimeBody: "Confirm the fixed tools Quillra needs for builds and previews.",
       checkPrivateAccess: "Private preview route",
@@ -1217,7 +1217,7 @@ export const de: Mirror<Dictionary> = {
     secureExecution: {
       title: "Sichere Code-Ausführung",
       intro:
-        "E2B führt Projektabhängigkeiten, Builds und Vorschauprozesse in isolierten Cloud-Sandboxes statt im Quillra-Container aus.",
+        "E2B führt Projektabhängigkeiten, Builds und Vorschauprozesse in einer eigenen isolierten Cloud-Sandbox pro Projekt statt im Quillra-Container aus. Der öffentliche Zugriff ist geschützt; ausgehender Netzwerkzugriff bleibt für Laufzeit- und Abhängigkeits-Downloads aktiviert.",
       appLabel: "Anwendung",
       codeLabel: "Projektcode",
       sandboxLabel: "E2B-Sandbox",
@@ -1246,7 +1246,7 @@ export const de: Mirror<Dictionary> = {
         "Verbindung zu E2B herstellen und das gewählte Sandbox-Template auflösen.",
       checkSandbox: "Isolierte Sandbox",
       checkSandboxBody:
-        "Eine kurzlebige Sandbox mit geschütztem öffentlichem Zugriff und deaktiviertem ausgehendem Netzwerkzugriff erstellen.",
+        "Eine isolierte Sandbox mit geschütztem öffentlichem Zugriff prüfen. Projekt-Sandboxes behalten ausgehenden Netzwerkzugriff für Laufzeit- und Abhängigkeits-Downloads.",
       checkRuntime: "Laufzeitvoraussetzungen",
       checkRuntimeBody:
         "Prüfen, ob die fest vorgegebenen Werkzeuge für Builds und Vorschauen verfügbar sind.",

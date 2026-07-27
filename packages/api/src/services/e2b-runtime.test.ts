@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -161,6 +161,7 @@ describe("E2B runtime", () => {
     expect(adapter.create).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "e2b_control_plane_key",
+        allowInternetAccess: true,
         projectId: "project-a",
       }),
     );
@@ -182,6 +183,51 @@ describe("E2B runtime", () => {
 
     await expect(execution).rejects.toBeInstanceOf(E2BProjectFenceError);
     expect(sync.from).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps a project-selected Node runtime before running a finite command", async () => {
+    await writeFile(
+      path.join(localRoot, "package.json"),
+      JSON.stringify({ volta: { node: "22.23.1" } }),
+    );
+    const sandbox = fakeSandbox();
+    const { runtime } = runtimeFixture(sandbox);
+
+    await expect(
+      runtime.runCommand(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        { localRoot, command: "npm run build" },
+      ),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    expect(sandbox.startCommand).toHaveBeenCalledTimes(2);
+    const [bootstrapCommand, bootstrapOptions] =
+      vi.mocked(sandbox.startCommand).mock.calls[0] ?? [];
+    const [projectCommand, projectOptions] = vi.mocked(sandbox.startCommand).mock.calls[1] ?? [];
+    expect(bootstrapCommand).toContain("https://nodejs.org/dist/v${resolved}");
+    expect(bootstrapCommand).toContain("SHASUMS256.txt");
+    expect(bootstrapOptions).toMatchObject({
+      cwd: "/home/quillra-project",
+      maxOutputBytes: 32 * 1024,
+    });
+    expect(bootstrapOptions).not.toHaveProperty("projectPathPrefix");
+    expect(projectCommand).toBe("npm run build");
+    expect(projectOptions).toMatchObject({
+      cwd: "/home/quillra-project/quillra-workspace",
+      envs: {
+        COREPACK_DEFAULT_TO_LATEST: "0",
+        COREPACK_ENABLE_AUTO_PIN: "0",
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        COREPACK_ENV_FILE: "0",
+        COREPACK_ENABLE_PROJECT_SPEC: "0",
+        COREPACK_HOME: expect.stringMatching(
+          /^\/home\/quillra-project\/\.quillra\/node-runtimes\/[0-9a-f]{32}\/corepack-cache$/,
+        ),
+      },
+      projectPathPrefix: expect.stringMatching(
+        /^\/home\/quillra-project\/\.quillra\/node-runtimes\/[0-9a-f]{32}\/bin$/,
+      ),
+    });
   });
 
   it("quiesces daemons and disables preview ingress before sync and again before writeback", async () => {
@@ -441,6 +487,248 @@ describe("E2B runtime", () => {
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(result));
     await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
     expect(sync.from).not.toHaveBeenCalled();
+  });
+
+  it("prepares the project Node runtime before opening the sealed preview relay", async () => {
+    await writeFile(
+      path.join(localRoot, "package.json"),
+      JSON.stringify({ engines: { node: ">=22.11 <23" } }),
+    );
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox();
+    const bootstrapProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+      kill: vi.fn(async () => true),
+    };
+    const previewProcess: E2BProcess = {
+      pid: 42,
+      wait: () => previewDone.promise,
+      kill: vi.fn(async () => true),
+    };
+    vi.mocked(sandbox.startCommand)
+      .mockResolvedValueOnce(bootstrapProcess)
+      .mockResolvedValueOnce(previewProcess);
+    const { runtime } = runtimeFixture(sandbox);
+
+    await runtime.startPreview(
+      { projectId: "project-a", githubBindingGeneration: 1 },
+      {
+        localRoot,
+        command: "npm run dev",
+        port: 4_321,
+      },
+    );
+
+    expect(sandbox.startCommand).toHaveBeenCalledTimes(2);
+    const bootstrapStart = vi.mocked(sandbox.startCommand).mock.invocationCallOrder[0] ?? 0;
+    const relayStart = vi.mocked(sandbox.startPreviewRelay).mock.invocationCallOrder[0] ?? 0;
+    const projectStart = vi.mocked(sandbox.startCommand).mock.invocationCallOrder[1] ?? 0;
+    expect(bootstrapStart).toBeLessThan(relayStart);
+    expect(relayStart).toBeLessThan(projectStart);
+    expect(sandbox.startPreviewRelay).toHaveBeenCalledWith(4_321, undefined);
+    expect(vi.mocked(sandbox.startCommand).mock.calls[1]).toEqual([
+      "npm run dev",
+      expect.objectContaining({
+        envs: expect.objectContaining({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+          COREPACK_HOME: expect.stringContaining("/.quillra/node-runtimes/"),
+          HOST: "127.0.0.1",
+          PORT: "4321",
+        }),
+        projectPathPrefix: expect.stringMatching(
+          /^\/home\/quillra-project\/\.quillra\/node-runtimes\/[0-9a-f]{32}\/bin$/,
+        ),
+      }),
+    ]);
+
+    previewDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+  });
+
+  it("uses the pinned Node runtime for a static preview without package.json", async () => {
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox();
+    const bootstrapProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+      kill: vi.fn(async () => true),
+    };
+    const previewProcess: E2BProcess = {
+      pid: 42,
+      wait: () => previewDone.promise,
+      kill: vi.fn(async () => true),
+    };
+    vi.mocked(sandbox.startCommand)
+      .mockResolvedValueOnce(bootstrapProcess)
+      .mockResolvedValueOnce(previewProcess);
+    const { runtime } = runtimeFixture(sandbox);
+
+    await runtime.startPreview(
+      { projectId: "project-a", githubBindingGeneration: 1 },
+      {
+        localRoot,
+        command: "npx vite --host 127.0.0.1",
+        port: 4_321,
+        defaultNodeRuntime: true,
+      },
+    );
+
+    expect(sandbox.startCommand).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sandbox.startCommand).mock.calls[1]?.[1]).toMatchObject({
+      projectPathPrefix: expect.stringContaining("/.quillra/node-runtimes/"),
+    });
+
+    previewDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+  });
+
+  it("ignores a late exit from a superseded preview when E2B reuses its PID", async () => {
+    const firstDone = deferred<E2BCommandResult>();
+    const secondDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox();
+    const firstProcess: E2BProcess = {
+      pid: 42,
+      wait: vi.fn(() => firstDone.promise),
+      kill: vi.fn(async () => true),
+    };
+    const secondProcess: E2BProcess = {
+      pid: 42,
+      wait: vi.fn(() => secondDone.promise),
+      kill: vi.fn(async () => true),
+    };
+    vi.mocked(sandbox.startCommand)
+      .mockResolvedValueOnce(firstProcess)
+      .mockResolvedValueOnce(secondProcess);
+    const { runtime } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    const firstExit = vi.fn();
+    const secondExit = vi.fn();
+
+    await runtime.startPreview(fence, {
+      localRoot,
+      command: "npm run dev",
+      port: 4_321,
+      onExit: firstExit,
+    });
+    await runtime.startPreview(fence, {
+      localRoot,
+      command: "npm run dev",
+      port: 4_321,
+      onExit: secondExit,
+    });
+    vi.mocked(sandbox.quiesceProjectProcesses).mockClear();
+    vi.mocked(sandbox.stopPreviewRelay).mockClear();
+
+    firstDone.resolve({ exitCode: 1, stdout: "", stderr: "old preview" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(firstExit).not.toHaveBeenCalled();
+    expect(secondExit).not.toHaveBeenCalled();
+    expect(sandbox.quiesceProjectProcesses).not.toHaveBeenCalled();
+    expect(sandbox.stopPreviewRelay).not.toHaveBeenCalled();
+    await expect(runtime.getPreviewAccess(fence, 4_321)).resolves.toMatchObject({
+      headers: { "e2b-traffic-access-token": "traffic-a" },
+    });
+
+    secondDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await vi.waitFor(() => expect(secondExit).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+  });
+
+  it("keeps active-preview cleanup armed when stale stop and destroy fences are rejected", async () => {
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox(previewDone.promise);
+    const { runtime, store } = runtimeFixture(sandbox);
+    const staleFence = { projectId: "project-a", githubBindingGeneration: 1 };
+    const onExit = vi.fn();
+
+    await runtime.startPreview(staleFence, {
+      localRoot,
+      command: "npm run dev",
+      port: 4_321,
+      onExit,
+    });
+    store.generation = 2;
+
+    await expect(runtime.stopPreview(staleFence)).rejects.toBeInstanceOf(E2BProjectFenceError);
+    await expect(runtime.destroyProject(staleFence)).rejects.toBeInstanceOf(E2BProjectFenceError);
+
+    const result = { exitCode: 1, stdout: "", stderr: "preview exited" };
+    previewDone.resolve(result);
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(result));
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+  });
+
+  it("invalidates a preview token when stop queues behind an in-progress start", async () => {
+    const syncEntered = deferred<void>();
+    const allowSync = deferred<void>();
+    sync.to.mockImplementationOnce(async () => {
+      syncEntered.resolve();
+      await allowSync.promise;
+      return { entries: 1, bytes: 1 };
+    });
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox(previewDone.promise);
+    const { runtime } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    const onExit = vi.fn();
+
+    const start = runtime.startPreview(fence, {
+      localRoot,
+      command: "npm run dev",
+      port: 4_321,
+      onExit,
+    });
+    await syncEntered.promise;
+    const stop = runtime.stopPreview(fence);
+    allowSync.resolve();
+
+    await expect(start).resolves.toEqual({ pid: 42, port: 4_321 });
+    await expect(stop).resolves.toBeUndefined();
+    previewDone.resolve({ exitCode: 0, stdout: "", stderr: "" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(onExit).not.toHaveBeenCalled();
+    expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces bounded Node bootstrap logs and never opens preview ingress on failure", async () => {
+    await writeFile(path.join(localRoot, "package.json"), "{}");
+    const sandbox = fakeSandbox();
+    const bootstrapProcess: E2BProcess = {
+      pid: 41,
+      wait: vi.fn(async () => ({
+        exitCode: 1,
+        stdout: "runtime stdout",
+        stderr: "official archive checksum failed",
+      })),
+      kill: vi.fn(async () => true),
+    };
+    vi.mocked(sandbox.startCommand).mockResolvedValueOnce(bootstrapProcess);
+    const { runtime } = runtimeFixture(sandbox);
+    const onStdout = vi.fn();
+    const onStderr = vi.fn();
+
+    await expect(
+      runtime.startPreview(
+        { projectId: "project-a", githubBindingGeneration: 1 },
+        {
+          localRoot,
+          command: "npm run dev",
+          port: 4_321,
+          onStdout,
+          onStderr,
+        },
+      ),
+    ).rejects.toThrow(
+      "Quillra could not prepare the project's Node.js runtime.\nstdout:\nruntime stdout\nstderr:\nofficial archive checksum failed",
+    );
+
+    expect(onStdout).toHaveBeenCalledWith("runtime stdout");
+    expect(onStderr).toHaveBeenCalledWith("official archive checksum failed");
+    expect(sandbox.startPreviewRelay).not.toHaveBeenCalled();
+    expect(sandbox.startCommand).toHaveBeenCalledOnce();
   });
 
   it("returns only the protected E2B credential for the fixed trusted relay", async () => {

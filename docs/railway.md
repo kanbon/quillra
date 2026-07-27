@@ -50,9 +50,13 @@ state to an ephemeral filesystem.
    - the initial owner account.
 
    A standard API key created in E2B is sufficient. Setup creates a temporary
-   outbound-disabled sandbox with protected ingress, bootstraps separate locked
-   OS users for project code and Quillra's trusted ingress relay, and probes a
-   private HTTP endpoint.
+   isolated sandbox with protected ingress, bootstraps separate locked OS users
+   for project code and Quillra's trusted ingress relay, and probes a private
+   HTTP endpoint. During normal operation, every project has its own sandbox.
+   Those sandboxes require outbound network access to download the selected
+   Node.js runtime and project dependencies. Treat project code as having
+   network egress: Quillra does not rely on an outbound allow-list as a security
+   boundary.
    E2B must validate its traffic token; the relay then strips it before
    forwarding the request to project code. Quillra writes its internal
    `E2B_ENABLED` flag only after that live check succeeds and the sandbox is
@@ -157,8 +161,10 @@ repository execution host. E2B receives project files and the minimum
 command-specific environment only. Quillra does not send Anthropic, GitHub,
 auth, mail, encryption, or E2B secrets into project environments. Project
 commands run under a locked OS user separate from Quillra's trusted relay.
-Quillra has neither a direct-to-project ingress fallback nor a local execution
-fallback.
+Each project's sandbox has outbound network access because runtime and
+dependency downloads happen inside it, but it receives no control-plane
+credentials. Quillra has neither a direct-to-project ingress fallback nor a
+local execution fallback.
 
 Back up the whole Railway Volume with the service stopped and keep all three
 generated control-plane secrets stable. The backup contains SQLite, uploaded

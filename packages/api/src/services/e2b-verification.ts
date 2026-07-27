@@ -15,7 +15,7 @@ import {
 } from "./e2b-preview-relay.js";
 
 const PROBE_OUTPUT = "quillra-e2b-ok";
-const NETWORK_PROBE_OUTPUT = "quillra-e2b-egress-blocked";
+const DOWNLOAD_PROBE_OUTPUT = "quillra-e2b-downloads-reachable";
 const TRAFFIC_ACCESS_HEADER = "e2b-traffic-access-token";
 const TRAFFIC_PROBE_PORT = 6_317;
 const PROBE_SANDBOX_TIMEOUT_MS = 60_000;
@@ -30,14 +30,22 @@ const REQUIRED_RUNTIME_TOOLS = [
   "/bin/bash",
   "/bin/rm",
   "/usr/bin/base64",
+  "/usr/bin/awk",
   "/usr/bin/cat",
+  "/usr/bin/curl",
   "/usr/bin/dd",
   "/usr/bin/head",
   "/usr/bin/id",
   "/usr/bin/kill",
+  "/usr/bin/mkdir",
   "/usr/bin/mkfifo",
+  "/usr/bin/mv",
   "/usr/bin/python3",
   "/usr/bin/setsid",
+  "/usr/bin/sha256sum",
+  "/usr/bin/tar",
+  "/usr/bin/uname",
+  "/usr/bin/xz",
 ] as const;
 const REQUIRED_PROJECT_TOOLS = ["node", "npm", "git"] as const;
 
@@ -60,33 +68,18 @@ const PREREQUISITE_PROBE_SCRIPT = [
   `/usr/bin/python3 -I -S -c 'import base64,http.server,json,os,stat,sys;sys.stdout.write("${PROBE_OUTPUT}")'`,
 ].join("\n");
 const PREREQUISITE_PROBE_COMMAND = `/bin/bash -c ${shellQuote(PREREQUISITE_PROBE_SCRIPT)}`;
-const NETWORK_PROBE_SCRIPT = [
-  "import socket,sys",
-  "targets=(",
-  ' (socket.AF_INET,"1.1.1.1",80,"one.one.one.one"),',
-  ' (socket.AF_INET,"8.8.8.8",80,"dns.google"),',
-  ' (socket.AF_INET6,"2606:4700:4700::1111",80,"one.one.one.one"),',
-  ' (socket.AF_INET6,"2001:4860:4860::8888",80,"dns.google"),',
-  ")",
-  "for family,host,port,http_host in targets:",
-  " sock=None",
-  " try:",
-  "  sock=socket.socket(family,socket.SOCK_STREAM)",
-  "  sock.settimeout(1.25)",
-  "  address=(host,port) if family==socket.AF_INET else (host,port,0,0)",
-  "  sock.connect(address)",
-  '  request=("GET / HTTP/1.0\\r\\nHost: "+http_host+"\\r\\nConnection: close\\r\\n\\r\\n").encode("ascii")',
-  "  sock.sendall(request)",
-  "  if sock.recv(1):",
-  "   sys.exit(41)",
-  " except OSError:",
-  "  continue",
-  " finally:",
-  "  if sock is not None:",
-  "   sock.close()",
-  `sys.stdout.write("${NETWORK_PROBE_OUTPUT}")`,
+const DOWNLOAD_PROBE_URLS = [
+  "https://nodejs.org/dist/index.json",
+  "https://registry.npmjs.org/corepack",
+] as const;
+const DOWNLOAD_PROBE_SCRIPT = [
+  "set -eu",
+  `for quillra_url in ${DOWNLOAD_PROBE_URLS.map(shellQuote).join(" ")}; do`,
+  '  /usr/bin/curl --fail --silent --show-error --location --head --connect-timeout 3 --max-time 4 --max-redirs 2 --proto "=https" --proto-redir "=https" --output /dev/null "$quillra_url"',
+  "done",
+  `printf "%s" "${DOWNLOAD_PROBE_OUTPUT}"`,
 ].join("\n");
-const NETWORK_PROBE_COMMAND = `/usr/bin/python3 -I -S -c ${shellQuote(NETWORK_PROBE_SCRIPT)}`;
+const DOWNLOAD_PROBE_COMMAND = `/bin/bash -c ${shellQuote(DOWNLOAD_PROBE_SCRIPT)}`;
 const TRAFFIC_PROBE_SCRIPT = [
   "import http.server,json,os",
   "class Handler(http.server.BaseHTTPRequestHandler):",
@@ -141,7 +134,7 @@ export type E2bVerificationReport = {
 
 const VERIFICATION_STAGE_DEFINITIONS = [
   { id: "provider", message: "Connect to E2B" },
-  { id: "sandbox", message: "Create an isolated sandbox" },
+  { id: "sandbox", message: "Create a sandbox and check required downloads" },
   { id: "prerequisite", message: "Check the secure runtime" },
   { id: "relay", message: "Start the private preview relay" },
   { id: "traffic-server", message: "Start the isolated test service" },
@@ -278,7 +271,7 @@ const createVerificationSandbox: E2bSandboxFactory = async ({ apiKey, templateId
     timeoutMs: PROBE_SANDBOX_TIMEOUT_MS,
     requestTimeoutMs: PROBE_REQUEST_TIMEOUT_MS,
     lifecycle: { onTimeout: "kill" },
-    allowInternetAccess: false,
+    allowInternetAccess: true,
   });
 
 function trustedEnvironmentStage(error: E2BTrustedEnvironmentError): VerificationStageId {
@@ -579,10 +572,12 @@ async function fetchProtectedTrafficProbe(
 }
 
 /**
- * Prove the key and optional template by creating an isolated, network-closed
- * sandbox and exercising the same trusted relay used by project previews.
- * E2B validates the public traffic credential; Quillra's separate relay user
- * removes it before forwarding to non-root project code on loopback.
+ * Prove the key and optional template by creating the same network-enabled,
+ * ingress-protected sandbox used for projects. The bounded download probe
+ * checks only the fixed Node.js distribution and npm registry endpoints that
+ * runtime bootstrap needs. E2B validates the public traffic credential;
+ * Quillra's separate relay user removes it before forwarding to non-root
+ * project code on loopback.
  */
 export async function verifyE2bConfiguration(
   input: E2bVerificationInput,
@@ -606,16 +601,16 @@ export async function verifyE2bConfiguration(
     report.pass("provider", "The API key and template were accepted.");
 
     report.start("sandbox");
-    const networkProcess = await sandbox.startCommand(NETWORK_PROBE_COMMAND, {
+    const downloadProcess = await sandbox.startCommand(DOWNLOAD_PROBE_COMMAND, {
       cwd: E2B_PROJECT_HOME,
       timeoutMs: PROBE_COMMAND_TIMEOUT_MS,
       maxOutputBytes: 1_024,
     });
-    const networkResult = await networkProcess.wait();
-    assertProbeCommandResult(networkResult, "sandbox", NETWORK_PROBE_OUTPUT);
+    const downloadResult = await downloadProcess.wait();
+    assertProbeCommandResult(downloadResult, "sandbox", DOWNLOAD_PROBE_OUTPUT);
     report.pass(
       "sandbox",
-      "The isolated test sandbox started and external IPv4/IPv6 data exchange was blocked.",
+      "The isolated test sandbox reached the required Node.js and npm HTTPS download endpoints.",
     );
 
     report.start("prerequisite");
@@ -668,7 +663,8 @@ export async function verifyE2bConfiguration(
         // This sanitized adapter error is only emitted after E2B created the
         // sandbox and attempted trusted bootstrapping. The adapter removes it
         // before propagating the error. Provider acceptance is known, but the
-        // active egress probe has not run, so the sandbox stage must not pass.
+        // active download-reachability probe has not run, so the sandbox stage
+        // must not pass.
         report.pass("provider", "The API key and template were accepted.");
         adapterCleanupStatus = error.cleanupStatus;
       }

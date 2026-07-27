@@ -532,6 +532,8 @@ describe("E2B SDK adapter", () => {
       cwd: `${E2B_PROJECT_HOME}/quillra-workspace`,
       timeoutMs: 30_000,
       maxOutputBytes: 1_024,
+      envs: { PATH: "/attacker-controlled" },
+      projectPathPrefix: `${E2B_PROJECT_HOME}/.quillra/node-runtimes/runtime-a/bin`,
       onStdout,
     });
     await expect(process.wait()).resolves.toMatchObject({
@@ -563,6 +565,10 @@ describe("E2B SDK adapter", () => {
     expect(wrapped).toContain("--bounding-set=-all");
     expect(wrapped).toContain("/usr/bin/env -i");
     expect(wrapped).toContain(`'HOME=${E2B_PROJECT_HOME}'`);
+    expect(wrapped).toContain(
+      `'PATH=${E2B_PROJECT_HOME}/.quillra/node-runtimes/runtime-a/bin:/usr/local/bin:/usr/bin:/bin'`,
+    );
+    expect(wrapped).not.toContain("/attacker-controlled");
     expect(onStdout).toHaveBeenCalledWith("hello");
     expect(sandbox.files.makeDir.mock.calls.slice(0, 2)).toEqual([
       [
@@ -582,6 +588,11 @@ describe("E2B SDK adapter", () => {
       .filter((command) => command.includes("/usr/bin/head -c"));
     expect(retrievals).toHaveLength(2);
     expect(retrievals.every((command) => command.includes("/usr/bin/head -c 1024 -- "))).toBe(true);
+    expect(
+      sandbox.commands.run.mock.calls
+        .slice(1)
+        .some(([command]) => command.includes("/usr/bin/kill -KILL -- -77")),
+    ).toBe(false);
     const controlOptions = sandbox.commands.run.mock.calls
       .slice(1)
       .map(([, options]) => options)
@@ -616,6 +627,37 @@ describe("E2B SDK adapter", () => {
       }),
     ).rejects.toThrow("output limit");
     expect(sandbox.commands.run).not.toHaveBeenCalled();
+  });
+
+  it("accepts only a normalized project-owned command PATH prefix", async () => {
+    const sandbox = fakeSdkSandbox();
+    sdk.create.mockResolvedValue(sandbox);
+    const handle = await new E2BSdkAdapter().create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    sandbox.files.makeDir.mockClear();
+
+    for (const projectPathPrefix of [
+      "/usr/local/bin",
+      `${E2B_PROJECT_HOME}/../quillra-relay`,
+      `${E2B_PROJECT_HOME}/runtime:/usr/bin`,
+      "relative/bin",
+    ]) {
+      await expect(
+        handle.startCommand("echo ok", {
+          cwd: `${E2B_PROJECT_HOME}/quillra-workspace`,
+          timeoutMs: 30_000,
+          projectPathPrefix,
+        }),
+      ).rejects.toThrow("project PATH prefix");
+    }
+    expect(sandbox.commands.run).not.toHaveBeenCalled();
+    expect(sandbox.files.makeDir).not.toHaveBeenCalled();
   });
 
   it("reads workspace files through fixed-size binary chunks, never files.read", async () => {

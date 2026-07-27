@@ -74,6 +74,7 @@ export type E2BCommandOptions = {
   timeoutMs: number;
   signal?: AbortSignal;
   envs?: Record<string, string>;
+  projectPathPrefix?: string;
   maxOutputBytes?: number;
   onStdout?: (chunk: string) => void | Promise<void>;
   onStderr?: (chunk: string) => void | Promise<void>;
@@ -197,12 +198,37 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
 }
 
+function validateProjectPathPrefix(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    Buffer.byteLength(value, "utf8") > 1_024 ||
+    !value.startsWith(`${E2B_PROJECT_HOME}/`) ||
+    !/^[A-Za-z0-9._/-]+$/.test(value) ||
+    value.includes(":") ||
+    value.includes("\0") ||
+    path.posix.normalize(value) !== value
+  ) {
+    throw new Error("Invalid E2B project PATH prefix.");
+  }
+  const relative = path.posix.relative(E2B_PROJECT_HOME, value);
+  if (!relative || relative.startsWith("../") || relative.split("/").includes("..")) {
+    throw new Error("Invalid E2B project PATH prefix.");
+  }
+  return value;
+}
+
 function isolatedUserShell(
   user: typeof E2B_PROJECT_USER | typeof E2B_RELAY_USER,
   command: string,
   envs: Record<string, string> = {},
   newSession = false,
+  projectPathPrefix?: string,
 ): string {
+  if (user !== E2B_PROJECT_USER && projectPathPrefix !== undefined) {
+    throw new Error("A project PATH prefix cannot enter a trusted relay command.");
+  }
+  const normalizedProjectPathPrefix =
+    user === E2B_PROJECT_USER ? validateProjectPathPrefix(projectPathPrefix) : undefined;
   for (const key of Object.keys(envs)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error("Invalid E2B command environment variable name.");
@@ -212,13 +238,19 @@ function isolatedUserShell(
     }
   }
   const home = user === E2B_PROJECT_USER ? E2B_PROJECT_HOME : "/nonexistent";
+  const executionPath =
+    user === E2B_PROJECT_USER && normalizedProjectPathPrefix
+      ? `${normalizedProjectPathPrefix}:${PROJECT_EXECUTION_PATH}`
+      : user === E2B_PROJECT_USER
+        ? PROJECT_EXECUTION_PATH
+        : TRUSTED_CONTROL_PATH;
   const environment = {
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
     ...envs,
     HOME: home,
     LOGNAME: user,
-    PATH: user === E2B_PROJECT_USER ? PROJECT_EXECUTION_PATH : TRUSTED_CONTROL_PATH,
+    PATH: executionPath,
     USER: user,
   };
   const environmentArgs = Object.entries(environment)
@@ -405,6 +437,7 @@ export function boundedCommandWrapper(input: {
   logDirectory: string;
   maxOutputBytes: number;
   envs?: Record<string, string>;
+  projectPathPrefix?: string;
 }): string {
   const stdoutFile = `${input.logDirectory}/stdout`;
   const stderrFile = `${input.logDirectory}/stderr`;
@@ -427,7 +460,13 @@ export function boundedCommandWrapper(input: {
   ].join("\n");
   // The outer redirect is the memory-safety boundary: even setup failures do
   // not reach CommandHandle's unbounded internal stdout/stderr strings.
-  return `${isolatedUserShell(E2B_PROJECT_USER, script, input.envs, true)} >/dev/null 2>/dev/null`;
+  return `${isolatedUserShell(
+    E2B_PROJECT_USER,
+    script,
+    input.envs,
+    true,
+    input.projectPathPrefix,
+  )} >/dev/null 2>/dev/null`;
 }
 
 /**
@@ -1266,6 +1305,7 @@ class SdkSandboxHandle implements E2BSandboxHandle {
 
   async startCommand(command: string, options: E2BCommandOptions): Promise<E2BProcess> {
     const maxOutputBytes = validateOutputLimit(options.maxOutputBytes);
+    const projectPathPrefix = validateProjectPathPrefix(options.projectPathPrefix);
     const logDirectory = `${PROCESS_LOG_ROOT}/${randomUUID()}`;
     const stdoutFile = `${logDirectory}/stdout`;
     const stderrFile = `${logDirectory}/stderr`;
@@ -1293,6 +1333,7 @@ class SdkSandboxHandle implements E2BSandboxHandle {
         logDirectory,
         maxOutputBytes,
         envs: options.envs,
+        projectPathPrefix,
       }),
       {
         background: true,
@@ -1345,11 +1386,11 @@ class SdkSandboxHandle implements E2BSandboxHandle {
             const normalized = normalizeCommandFailure(error);
             if (!normalized) throw error;
             commandResult = normalized;
-          } finally {
-            // Foreground shells can leave background descendants behind.
-            // Quiesce the process group before source inventory/writeback.
-            await killGroup();
           }
+          // Never signal the numeric process group after wait has observed its
+          // leader exit: Linux may already have reused that PID for a newer
+          // preview. Runtime callers quiesce the whole project UID before
+          // writeback, restart, or relay teardown.
           const stdout = await readBoundedLog(stdoutFile);
           const stderr = await readBoundedLog(stderrFile);
           if (options.onStdout && stdout) await options.onStdout(stdout);

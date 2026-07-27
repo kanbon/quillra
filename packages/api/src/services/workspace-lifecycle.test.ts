@@ -3,6 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+type PreviewExitResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+type PreviewStartOptions = {
+  command: string;
+  port: number;
+  defaultNodeRuntime?: boolean;
+  onExit?: (result: PreviewExitResult) => void | Promise<void>;
+};
+
 const cloneMock = vi.hoisted(() => vi.fn());
 const e2bRuntimeMock = vi.hoisted(() => ({
   destroyProject: vi.fn(async () => undefined),
@@ -11,7 +24,7 @@ const e2bRuntimeMock = vi.hoisted(() => ({
     headers: { "e2b-traffic-access-token": "test-preview-token" },
   })),
   runCommand: vi.fn(),
-  startPreview: vi.fn(async (_fence: unknown, _options: { command: string }) => ({
+  startPreview: vi.fn(async (_fence: unknown, _options: PreviewStartOptions) => ({
     pid: 42,
     port: 4321,
   })),
@@ -47,6 +60,7 @@ vi.mock("./e2b-runtime.js", () => ({
 
 import { rawSqlite } from "../db/index.js";
 import { getPreviewStatus } from "./preview-status.js";
+import { getPreviewUpstream } from "./preview-upstream.js";
 import {
   beginProjectWriterAuthorizationChange,
   cancelAndWaitForProjectWriters,
@@ -103,6 +117,14 @@ function ensureProjectRow(projectId: string): void {
        VALUES (?, ?, 'example/site', 1, 'main')`,
     )
     .run(projectId, projectId);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("project workspace lifecycle", () => {
@@ -601,13 +623,138 @@ describe("project workspace lifecycle", () => {
     expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
     expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
     const options = e2bRuntimeMock.startPreview.mock.calls[0]?.[1];
-    expect(options?.command).toContain("npm install --include=dev");
+    expect(options?.defaultNodeRuntime).toBe(true);
+    expect(options?.command).toContain("--include=dev");
     expect(options?.command).toContain(" && exec ");
-    expect(options?.command.indexOf("npm install --include=dev")).toBeLessThan(
+    expect(options?.command.indexOf("--include=dev")).toBeLessThan(
       options?.command.indexOf(" && exec ") ?? -1,
     );
 
     await clearProjectRepoClone(projectId);
+  });
+
+  it("does not publish stale process state when the preview exits while access is resolving", async () => {
+    const projectId = "preview-exits-during-access";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+
+    const access = deferred<{
+      origin: string;
+      headers: { "e2b-traffic-access-token": string };
+    }>();
+    let onExit: PreviewStartOptions["onExit"];
+    let port = 0;
+    e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
+      onExit = options.onExit;
+      port = options.port;
+      return { pid: 42, port: options.port };
+    });
+    e2bRuntimeMock.getPreviewAccess.mockImplementationOnce(() => access.promise);
+
+    const starting = startDevPreview(projectId, repoPath, "npm run dev", 1);
+    await vi.waitFor(() => expect(e2bRuntimeMock.getPreviewAccess).toHaveBeenCalledOnce());
+
+    await onExit?.({ exitCode: 1, stdout: "", stderr: "Vite crashed" });
+    access.resolve({
+      origin: "https://preview.example.test",
+      headers: { "e2b-traffic-access-token": "test-preview-token" },
+    });
+
+    await expect(starting).rejects.toThrow("exited during startup with code 1");
+    expect(getPreviewProcessInfo(projectId)).toEqual({
+      running: false,
+      pid: 42,
+      exitCode: 1,
+      signalCode: null,
+    });
+    expect(getPreviewStatus(projectId)).toMatchObject({
+      stage: "error",
+      message: "Dev server exited with code 1",
+    });
+    expect(getPreviewUpstream(projectId, port)).toBeNull();
+  });
+
+  it("treats an unexpected zero exit as a failed preview", async () => {
+    const projectId = "preview-zero-exit";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+
+    let onExit: PreviewStartOptions["onExit"];
+    e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
+      onExit = options.onExit;
+      return { pid: 42, port: options.port };
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Preview is still starting"));
+
+    try {
+      const { port } = await startDevPreview(projectId, repoPath, "npm run dev", 1);
+      expect(getPreviewUpstream(projectId, port)).not.toBeNull();
+
+      await onExit?.({ exitCode: 0, stdout: "", stderr: "" });
+
+      expect(getPreviewProcessInfo(projectId)).toEqual({
+        running: false,
+        pid: 42,
+        exitCode: 0,
+        signalCode: null,
+      });
+      expect(getPreviewStatus(projectId)).toMatchObject({
+        stage: "error",
+        message: "Dev server exited with code 0",
+      });
+      expect(getPreviewUpstream(projectId, port)).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("ignores a late exit callback from a superseded launch even when its PID is reused", async () => {
+    const projectId = "preview-reused-pid";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+
+    const exits: Array<NonNullable<PreviewStartOptions["onExit"]>> = [];
+    e2bRuntimeMock.startPreview
+      .mockImplementationOnce(async (_fence, options) => {
+        if (options.onExit) exits.push(options.onExit);
+        return { pid: 42, port: options.port };
+      })
+      .mockImplementationOnce(async (_fence, options) => {
+        if (options.onExit) exits.push(options.onExit);
+        return { pid: 42, port: options.port };
+      });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Preview is still starting"));
+
+    try {
+      await startDevPreview(projectId, repoPath, "npm run dev", 1);
+      const second = await startDevPreview(projectId, repoPath, "npm run dev", 1);
+
+      await exits[0]?.({ exitCode: 1, stdout: "", stderr: "old preview exited" });
+
+      expect(getPreviewProcessInfo(projectId)).toEqual({
+        running: true,
+        pid: 42,
+        exitCode: null,
+        signalCode: null,
+      });
+      expect(getPreviewStatus(projectId).stage).toBe("starting");
+      expect(getPreviewUpstream(projectId, second.port)).not.toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("keeps probing a slow preview until the running process becomes ready", async () => {

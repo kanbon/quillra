@@ -117,4 +117,8 @@ describe("framework-registry", () => {
       expect(getFrameworkById(id)?.devCommand.args).toContain("--strictPort");
     }
   });
+
+  it("uses Eleventy's installed binary name across package managers", () => {
+    expect(getFrameworkById("eleventy")?.devCommand.args[0]).toBe("eleventy");
+  });
 });
