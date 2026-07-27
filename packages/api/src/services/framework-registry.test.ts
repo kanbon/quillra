@@ -27,6 +27,48 @@ describe("framework-registry", () => {
       expect(def?.id).toBe("next");
     });
 
+    it("detects a plain Vite project", () => {
+      const def = detectFromManifest({
+        packageJson: { devDependencies: { vite: "^7" } },
+      });
+      expect(def?.id).toBe("vite");
+    });
+
+    it("prefers Qwik over its generic Vite dependency", () => {
+      const def = detectFromManifest({
+        packageJson: {
+          devDependencies: {
+            "@builder.io/qwik": "^1.15",
+            vite: "^7",
+          },
+        },
+      });
+      expect(def?.id).toBe("qwik");
+    });
+
+    it("prefers SolidStart over its generic Vite dependency", () => {
+      const def = detectFromManifest({
+        packageJson: {
+          dependencies: { "@solidjs/start": "^1" },
+          devDependencies: { vite: "^7" },
+        },
+      });
+      expect(def?.id).toBe("solidstart");
+    });
+
+    it("prefers every specific Vite-based registry match over generic Vite", () => {
+      for (const [dependency, expected] of [
+        ["@sveltejs/kit", "sveltekit"],
+        ["@remix-run/dev", "remix"],
+        ["vitepress", "vitepress"],
+      ] as const) {
+        const def = detectFromManifest({
+          packageJson: { devDependencies: { [dependency]: "latest", vite: "^7" } },
+        });
+        expect(def?.id).toBe(expected);
+      }
+    });
+
     it("uses package dependencies as the detection source", () => {
       const def = detectFromManifest({
         packageJson: { dependencies: { next: "^14" } },

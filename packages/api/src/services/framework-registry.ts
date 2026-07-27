@@ -231,10 +231,20 @@ export function detectFromManifest(opts: {
   const deps = pkg ? { ...pkg.dependencies, ...pkg.devDependencies } : null;
 
   if (deps) {
+    let genericVite: FrameworkDef | null = null;
     for (const f of FRAMEWORKS) {
       if (!f.packageDeps) continue;
-      if (f.packageDeps.some((d) => d in deps)) return f;
+      if (!f.packageDeps.some((d) => d in deps)) continue;
+      // Vite is also a build dependency of more specific frameworks. Keep it
+      // as the fallback so registry order cannot hide Qwik, SolidStart,
+      // VitePress, or another framework with its own detection marker.
+      if (f.id === "vite") {
+        genericVite = f;
+        continue;
+      }
+      return f;
     }
+    return genericVite;
   }
 
   return null;

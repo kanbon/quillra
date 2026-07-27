@@ -83,6 +83,11 @@ function stubGithub() {
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       expect(init?.headers).toMatchObject({ Authorization: "Bearer user-token" });
       const url = new URL(String(input));
+      if (url.pathname === "/user/installations") {
+        return Response.json({
+          installations: [{ id: 11, permissions: { contents: "write" } }],
+        });
+      }
       if (url.pathname === "/user/installations/11/repositories") {
         return Response.json({
           repositories: [
@@ -106,9 +111,6 @@ function stubGithub() {
             },
           ],
         });
-      }
-      if (url.pathname === "/user/installations/11") {
-        return Response.json({ id: 11, permissions: { contents: "write" } });
       }
       if (
         url.pathname === "/repos/alice/canonical-site/branches" ||
@@ -202,6 +204,34 @@ describe("project GitHub bindings", () => {
     expect(
       rawSqlite.prepare("SELECT github_repo_full_name FROM projects WHERE id = ?").get("project-1"),
     ).toEqual({ github_repo_full_name: "alice/canonical-site" });
+  });
+
+  it("reports GitHub provider failures without claiming the user lacks write access", async () => {
+    const { app, rawSqlite } = await createApp();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ message: "unavailable" }, { status: 503 })),
+    );
+
+    const response = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Provider unavailable",
+        githubInstallationId: "11",
+        githubRepositoryId: "101",
+        defaultBranch: "main",
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "github_provider_error",
+      error: "GitHub is temporarily unavailable. Try again.",
+    });
+    expect(rawSqlite.prepare("SELECT count(*) AS count FROM projects").get()).toEqual({
+      count: 0,
+    });
   });
 
   it("increments the binding generation across an A to B to A rebind", async () => {

@@ -125,8 +125,8 @@ describe("GitHub App user connections", () => {
             ],
           });
         }
-        if (url.pathname === "/user/installations/11") {
-          return Response.json({ id: 11, permissions: { contents: "write" } });
+        if (url.pathname === "/repos/alice/writeable/contents/package.json") {
+          return new Response('{"devDependencies":{"vite":"^7"}}');
         }
         return Response.json({ message: "not found" }, { status: 404 });
       },
@@ -141,13 +141,260 @@ describe("GitHub App user connections", () => {
         defaultBranch: "main",
       },
     ]);
+    await expect(service.getGithubRepositoryForUser("user-a", "11", "101")).resolves.toEqual({
+      repositoryId: "101",
+      installationId: "11",
+      fullName: "alice/writeable",
+      defaultBranch: "main",
+    });
+    await expect(
+      service.githubTextForUserRepository(
+        "user-a",
+        {
+          repositoryId: "101",
+          installationId: "11",
+          fullName: "alice/writeable",
+          defaultBranch: "main",
+        },
+        "/repos/alice/writeable/contents/package.json?ref=main",
+        1024 * 1024,
+      ),
+    ).resolves.toContain('"vite"');
     await expect(service.getGithubRepositoryForUser("user-a", "11", "102")).rejects.toBeInstanceOf(
       service.GithubRepositoryAccessError,
     );
 
     for (const call of fetchMock.mock.calls) {
       expect(call[1]?.headers).toMatchObject({ Authorization: "Bearer user-token" });
+      expect(new URL(String(call[0])).pathname).not.toBe("/user/installations/11");
     }
+    const packageCall = fetchMock.mock.calls.find(
+      ([input]) =>
+        new URL(String(input)).pathname === "/repos/alice/writeable/contents/package.json",
+    );
+    expect(packageCall?.[1]?.headers).toMatchObject({
+      Accept: "application/vnd.github.raw+json",
+    });
+  });
+
+  it("does not misreport GitHub provider failures as missing write access", async () => {
+    const { service, rawSqlite, encryptSecret } = await loadRuntime();
+    insertUser(rawSqlite, "user-a", "a@example.com");
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("user-a", "1", "alice", encryptSecret("user-token"), now, now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ message: "unavailable" }, { status: 503 })),
+    );
+
+    await expect(service.getGithubRepositoryForUser("user-a", "11", "101")).rejects.toMatchObject({
+      name: "GithubProviderError",
+      code: "github_provider_error",
+      upstreamStatus: 503,
+    });
+  });
+
+  it("continues installation and repository pagination beyond the first page", async () => {
+    const { service, rawSqlite, encryptSecret } = await loadRuntime();
+    insertUser(rawSqlite, "user-a", "a@example.com");
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("user-a", "1", "alice", encryptSecret("user-token"), now, now);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        const page = url.searchParams.get("page");
+        if (url.pathname === "/user/installations") {
+          return Response.json({
+            installations:
+              page === "1"
+                ? Array.from({ length: 100 }, (_, index) => ({
+                    id: index + 1,
+                    permissions: { contents: "read" },
+                  }))
+                : [{ id: 101, permissions: { contents: "write" } }],
+          });
+        }
+        if (url.pathname === "/user/installations/101/repositories") {
+          return Response.json({
+            repositories:
+              page === "1"
+                ? Array.from({ length: 100 }, (_, index) => ({
+                    id: index + 1,
+                    full_name: `alice/read-only-${index + 1}`,
+                    default_branch: "main",
+                    permissions: { push: false, pull: true },
+                  }))
+                : [
+                    {
+                      id: 999,
+                      full_name: "alice/page-two",
+                      default_branch: "main",
+                      permissions: { push: true, pull: true },
+                    },
+                  ],
+          });
+        }
+        return Response.json({ message: "not found" }, { status: 404 });
+      }),
+    );
+
+    await expect(service.getGithubRepositoryForUser("user-a", "101", "999")).resolves.toEqual({
+      repositoryId: "999",
+      installationId: "101",
+      fullName: "alice/page-two",
+      defaultBranch: "main",
+    });
+  });
+
+  it("reports the pagination safety ceiling as a provider error, not missing access", async () => {
+    const { service, rawSqlite, encryptSecret } = await loadRuntime();
+    insertUser(rawSqlite, "user-a", "a@example.com");
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("user-a", "1", "alice", encryptSecret("user-token"), now, now);
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        installations: Array.from({ length: 100 }, (_, index) => ({
+          id: index + 1,
+          permissions: { contents: "read" },
+        })),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(service.getGithubRepositoryForUser("user-a", "999", "999")).rejects.toMatchObject({
+      name: "GithubProviderError",
+      code: "github_provider_error",
+      message: "GitHub returned too many installation pages to inspect safely.",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(50);
+  });
+
+  it.each(["declared", "streamed"] as const)(
+    "rejects an oversized %s raw repository response before buffering it",
+    async (kind) => {
+      const { service, rawSqlite, encryptSecret } = await loadRuntime();
+      insertUser(rawSqlite, "user-a", "a@example.com");
+      const now = Date.now();
+      rawSqlite
+        .prepare(
+          `INSERT INTO github_user_connections
+            (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run("user-a", "1", "alice", encryptSecret("user-token"), now, now);
+
+      const cancelBody = vi.fn();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = new URL(String(input));
+          if (url.pathname === "/user/installations") {
+            return Response.json({
+              installations: [{ id: 11, permissions: { contents: "write" } }],
+            });
+          }
+          if (url.pathname === "/user/installations/11/repositories") {
+            return Response.json({
+              repositories: [
+                {
+                  id: 101,
+                  full_name: "alice/writeable",
+                  default_branch: "main",
+                  permissions: { push: true, pull: true },
+                },
+              ],
+            });
+          }
+          if (url.pathname === "/repos/alice/writeable/contents/package.json") {
+            if (kind === "declared") {
+              return new Response(
+                new ReadableStream<Uint8Array>({
+                  cancel: cancelBody,
+                }),
+                { headers: { "Content-Length": "1025" } },
+              );
+            }
+            let pulls = 0;
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  controller.enqueue(new Uint8Array(700));
+                  pulls++;
+                  if (pulls > 2) controller.close();
+                },
+                cancel: cancelBody,
+              }),
+            );
+          }
+          return Response.json({ message: "not found" }, { status: 404 });
+        }),
+      );
+
+      await expect(
+        service.githubTextForUserRepository(
+          "user-a",
+          {
+            repositoryId: "101",
+            installationId: "11",
+            fullName: "alice/writeable",
+            defaultBranch: "main",
+          },
+          "/repos/alice/writeable/contents/package.json?ref=main",
+          1024,
+        ),
+      ).rejects.toBeInstanceOf(service.GithubResponseTooLargeError);
+      expect(cancelBody).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("classifies GitHub's HTTP 403 rate-limit response as temporary", async () => {
+    const { service, rawSqlite, encryptSecret } = await loadRuntime();
+    insertUser(rawSqlite, "user-a", "a@example.com");
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO github_user_connections
+          (user_id, github_user_id, github_login, access_token, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("user-a", "1", "alice", encryptSecret("user-token"), now, now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { message: "rate limit exceeded" },
+          { status: 403, headers: { "X-RateLimit-Remaining": "0" } },
+        ),
+      ),
+    );
+
+    await expect(service.getGithubRepositoryForUser("user-a", "11", "101")).rejects.toMatchObject({
+      name: "GithubProviderError",
+      code: "github_provider_error",
+      upstreamStatus: 403,
+      rateLimited: true,
+      message: "GitHub's API rate limit has been reached. Try again later.",
+    });
   });
 
   it("revokes the complete GitHub grant before deleting the local connection", async () => {
