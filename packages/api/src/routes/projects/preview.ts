@@ -4,7 +4,11 @@ import { Hono } from "hono";
 import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
-import { getPreviewStatus, isPreviewRoutable } from "../../services/preview-status.js";
+import {
+  getPreviewStatus,
+  isPreviewRoutable,
+  setPreviewStatus,
+} from "../../services/preview-status.js";
 import { previewUpstreamUrl } from "../../services/preview-upstream.js";
 import { readProjectPackageJson } from "../../services/project-manifest.js";
 import {
@@ -20,7 +24,6 @@ import {
   runInProjectLock,
   simpleGitForProject,
   startDevPreview,
-  stopPreview,
 } from "../../services/workspace.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
 
@@ -34,23 +37,39 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
-      const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
-        expectedBindingGeneration: p.githubBindingGeneration,
-        // The isolated preview copy installs its own dependencies immediately
-        // before launching the dev server. Installing here would do the same
-        // work twice in two separate E2B roots and block this request.
-        skipInstall: true,
-      });
       const { port, label } = await runInProjectLock(
         projectId,
-        () => startDevPreview(projectId, repoPath, p.previewDevCommand, p.githubBindingGeneration),
+        async () => {
+          setPreviewStatus(projectId, "cloning", `Fetching ${p.githubRepoFullName}`);
+          try {
+            const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
+              expectedBindingGeneration: p.githubBindingGeneration,
+              // The isolated preview copy installs its own dependencies immediately
+              // before launching the dev server. Installing here would do the same
+              // work twice in two separate E2B roots and block this request.
+              skipInstall: true,
+            });
+            return await startDevPreview(
+              projectId,
+              repoPath,
+              p.previewDevCommand,
+              p.githubBindingGeneration,
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to start preview";
+            if (getPreviewStatus(projectId).stage !== "error") {
+              setPreviewStatus(projectId, "error", message);
+            }
+            throw error;
+          }
+        },
         p,
       );
       const preview = getPreviewAddress(projectId, port);
       return c.json({ url: preview.url, previewMode: preview.mode, port, previewLabel: label });
     } catch (e) {
-      stopPreview(projectId);
-      return c.json({ error: e instanceof Error ? e.message : "Failed to start preview" }, 500);
+      const message = e instanceof Error ? e.message : "Failed to start preview";
+      return c.json({ error: message }, 500);
     }
   })
   /**

@@ -55,10 +55,20 @@ vi.mock("./project-github-token.js", () => ({
 }));
 
 vi.mock("./e2b-runtime.js", () => ({
+  E2BProjectFenceError: class E2BProjectFenceError extends Error {
+    constructor() {
+      super("The project repository binding changed during E2B execution.");
+      this.name = "E2BProjectFenceError";
+    }
+  },
   getDefaultE2BRuntime: () => e2bRuntimeMock,
 }));
 
 import { rawSqlite } from "../db/index.js";
+import {
+  issuePreviewCapability,
+  resolveReservedPreviewCapabilityToken,
+} from "./preview-capability.js";
 import { getPreviewStatus } from "./preview-status.js";
 import { getPreviewUpstream } from "./preview-upstream.js";
 import {
@@ -72,7 +82,9 @@ import {
   clearProjectRepoClone,
   ensureRepoCloned,
   getPreviewProcessInfo,
+  installDependenciesIfNeeded,
   projectRepoPath,
+  reinstallProjectDependencies,
   removeDeletedProjectWorkspace,
   runInProjectLock,
   scheduleDeletedProjectWorkspaceCleanup,
@@ -631,6 +643,167 @@ describe("project workspace lifecycle", () => {
     );
 
     await clearProjectRepoClone(projectId);
+  });
+
+  it("clears a failed preview before a finite workspace install", async () => {
+    const projectId = "failed-preview-workspace-install";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoPath, "package.json"),
+      JSON.stringify({
+        scripts: { dev: "vite --host 0.0.0.0" },
+        devDependencies: { vite: "latest" },
+      }),
+    );
+
+    let onExit: PreviewStartOptions["onExit"];
+    e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
+      onExit = options.onExit;
+      return { pid: 42, port: options.port };
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Preview is still starting"));
+
+    try {
+      await startDevPreview(projectId, repoPath, null, 1);
+      await onExit?.({ exitCode: 1, stdout: "", stderr: "Previous preview failed" });
+      expect(getPreviewStatus(projectId)).toMatchObject({
+        stage: "error",
+        message: "Dev server exited with code 1",
+      });
+
+      e2bRuntimeMock.runCommand.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: "installed",
+        stderr: "",
+      });
+      await installDependenciesIfNeeded(repoPath, projectId, 1);
+
+      expect(getPreviewProcessInfo(projectId)).toEqual({
+        running: false,
+        pid: null,
+        exitCode: null,
+        signalCode: null,
+      });
+      expect(getPreviewStatus(projectId)).toMatchObject({
+        stage: "idle",
+        message: "Project dependencies are ready",
+      });
+      expect(e2bRuntimeMock.stopPreview).toHaveBeenCalled();
+      expect(e2bRuntimeMock.stopPreview.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        e2bRuntimeMock.runCommand.mock.invocationCallOrder.at(-1) ?? 0,
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("reports a terminal dependency-install error instead of remaining on installing", async () => {
+    const projectId = "failed-workspace-install";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "package.json"), '{"name":"broken-install"}');
+    const installDone = deferred<PreviewExitResult>();
+    e2bRuntimeMock.runCommand.mockReturnValueOnce(installDone.promise);
+
+    const installing = installDependenciesIfNeeded(repoPath, projectId, 1);
+    await vi.waitFor(() => expect(e2bRuntimeMock.runCommand).toHaveBeenCalledOnce());
+    expect(getPreviewStatus(projectId)).toMatchObject({
+      stage: "installing",
+      message: "Running npm install in E2B",
+    });
+
+    installDone.resolve({
+      exitCode: 1,
+      stdout: "",
+      stderr: "package resolution failed",
+    });
+    await expect(installing).rejects.toThrow(
+      "npm install failed in the secure sandbox: package resolution failed",
+    );
+    expect(getPreviewStatus(projectId)).toMatchObject({
+      stage: "error",
+      message: "npm install failed in E2B",
+    });
+  });
+
+  it("does not let a stale finite command clear the current binding's preview", async () => {
+    const projectId = "stale-finite-command";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    rawSqlite
+      .prepare("UPDATE projects SET github_binding_generation = 2 WHERE id = ?")
+      .run(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoPath, "package.json"),
+      JSON.stringify({ scripts: { dev: "vite --host 0.0.0.0" } }),
+    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Preview is still starting"));
+
+    try {
+      const preview = await startDevPreview(projectId, repoPath, "npm run dev", 2);
+      const capability = issuePreviewCapability(projectId, preview.port);
+      const processBefore = getPreviewProcessInfo(projectId);
+      const statusBefore = getPreviewStatus(projectId);
+      const upstreamBefore = getPreviewUpstream(projectId, preview.port);
+      e2bRuntimeMock.stopPreview.mockClear();
+
+      await expect(installDependenciesIfNeeded(repoPath, projectId, 1)).rejects.toThrow(
+        "The project repository binding changed during E2B execution.",
+      );
+
+      expect(getPreviewProcessInfo(projectId)).toEqual(processBefore);
+      expect(getPreviewStatus(projectId)).toEqual(statusBefore);
+      expect(getPreviewUpstream(projectId, preview.port)).toEqual(upstreamBefore);
+      expect(resolveReservedPreviewCapabilityToken(capability.token)).toMatchObject({
+        ok: true,
+        projectId,
+        port: preview.port,
+      });
+      expect(e2bRuntimeMock.stopPreview).not.toHaveBeenCalled();
+      expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("reinstalls dependencies while holding the reset lock", async () => {
+    const projectId = "reset-dependency-reinstall";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "package.json"), '{"name":"reset-install"}');
+    e2bRuntimeMock.runCommand.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: "installed",
+      stderr: "",
+    });
+
+    await expect(reinstallProjectDependencies(projectId)).resolves.toBeUndefined();
+
+    expect(e2bRuntimeMock.destroyProject).toHaveBeenCalledWith({
+      projectId,
+      githubBindingGeneration: 1,
+    });
+    expect(e2bRuntimeMock.runCommand).toHaveBeenCalledOnce();
+    expect(e2bRuntimeMock.destroyProject.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      e2bRuntimeMock.runCommand.mock.invocationCallOrder.at(-1) ?? 0,
+    );
+    expect(getPreviewStatus(projectId)).toMatchObject({
+      stage: "idle",
+      message: "Project dependencies are ready",
+    });
   });
 
   it("does not publish stale process state when the preview exits while access is resolving", async () => {

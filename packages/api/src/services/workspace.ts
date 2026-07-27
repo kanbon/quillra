@@ -12,7 +12,7 @@ import {
 } from "./dev-engines.js";
 import type { E2BCommandResult } from "./e2b-adapter.js";
 import { E2B_PREVIEW_TARGET_MAX_PORT, E2B_PREVIEW_TARGET_MIN_PORT } from "./e2b-preview-relay.js";
-import { type E2BProjectFence, getDefaultE2BRuntime } from "./e2b-runtime.js";
+import { type E2BProjectFence, E2BProjectFenceError, getDefaultE2BRuntime } from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
   type GitCommitIdentity,
@@ -147,6 +147,13 @@ function projectFence(projectId: string, expectedBindingGeneration?: number): E2
     .get(projectId) as { github_binding_generation: number } | undefined;
   if (!row) throw new Error("Project not found");
   return { projectId, githubBindingGeneration: row.github_binding_generation };
+}
+
+function assertCurrentProjectFence(fence: E2BProjectFence): void {
+  const current = projectFence(fence.projectId);
+  if (current.githubBindingGeneration !== fence.githubBindingGeneration) {
+    throw new E2BProjectFenceError();
+  }
 }
 
 function projectWorkspaceBlocked(projectId: string): boolean {
@@ -468,27 +475,89 @@ export function packageInstallCommand(repoPath: string): string | null {
   }
 }
 
-export async function installDependenciesIfNeeded(
+type FiniteProjectCommandOptions = {
+  expectedBindingGeneration?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onStdout?: (chunk: string) => void | Promise<void>;
+  onStderr?: (chunk: string) => void | Promise<void>;
+  onPreviewStopped?: () => void | Promise<void>;
+};
+
+async function runFiniteProjectCommandWithLockHeld(
+  projectId: string,
+  repoPath: string,
+  command: string,
+  options: FiniteProjectCommandOptions = {},
+): Promise<E2BCommandResult> {
+  const fence = projectFence(projectId, options.expectedBindingGeneration);
+  await stopPreviewAndWait(projectId, fence.githubBindingGeneration);
+  await options.onPreviewStopped?.();
+  return getDefaultE2BRuntime().runCommand(fence, {
+    localRoot: repoPath,
+    command,
+    timeoutMs: options.timeoutMs,
+    signal: options.signal,
+    onStdout: options.onStdout,
+    onStderr: options.onStderr,
+  });
+}
+
+export function runFiniteProjectCommand(
+  projectId: string,
+  repoPath: string,
+  command: string,
+  options: FiniteProjectCommandOptions = {},
+): Promise<E2BCommandResult> {
+  return runInProjectLock(projectId, () =>
+    runFiniteProjectCommandWithLockHeld(projectId, repoPath, command, options),
+  );
+}
+
+async function installDependenciesWithRunner(
   repoPath: string,
   projectId: string,
   expectedBindingGeneration?: number,
+  runCommand: (
+    command: string,
+    options: FiniteProjectCommandOptions,
+  ) => Promise<E2BCommandResult> = (command, options) =>
+    runFiniteProjectCommand(projectId, repoPath, command, options),
 ): Promise<void> {
   const command = packageInstallCommand(repoPath);
   if (!command) return;
   const pm = getPackageManager(repoPath);
-  setPreviewStatus(projectId, "installing", `Running ${pm} install in E2B`);
-  const result = await getDefaultE2BRuntime().runCommand(
-    projectFence(projectId, expectedBindingGeneration),
-    {
-      localRoot: repoPath,
-      command,
+  let ownsPreviewStatus = false;
+  let result: E2BCommandResult;
+  try {
+    result = await runCommand(command, {
+      expectedBindingGeneration,
       timeoutMs: 30 * 60_000,
-    },
-  );
+      onPreviewStopped: () => {
+        ownsPreviewStatus = true;
+        setPreviewStatus(projectId, "installing", `Running ${pm} install in E2B`);
+      },
+    });
+  } catch (error) {
+    if (ownsPreviewStatus) {
+      setPreviewStatus(projectId, "error", `${pm} install could not run in E2B`);
+    }
+    throw error;
+  }
   if (result.exitCode !== 0) {
     const detail = (result.stderr || result.stdout).slice(-800);
+    setPreviewStatus(projectId, "error", `${pm} install failed in E2B`);
     throw new Error(`${pm} install failed in the secure sandbox: ${detail}`);
   }
+  setPreviewStatus(projectId, "idle", "Project dependencies are ready");
+}
+
+export function installDependenciesIfNeeded(
+  repoPath: string,
+  projectId: string,
+  expectedBindingGeneration?: number,
+): Promise<void> {
+  return installDependenciesWithRunner(repoPath, projectId, expectedBindingGeneration);
 }
 
 type DevCmd = { command: string; args: string[]; label: string };
@@ -821,7 +890,12 @@ export async function reinstallProjectDependencies(
       if (!fs.existsSync(dir)) throw new Error("Workspace not cloned");
       const fence = projectFence(projectId);
       await getDefaultE2BRuntime().destroyProject(fence);
-      await installDependenciesIfNeeded(dir, projectId, fence.githubBindingGeneration);
+      await installDependenciesWithRunner(
+        dir,
+        projectId,
+        fence.githubBindingGeneration,
+        (command, options) => runFiniteProjectCommandWithLockHeld(projectId, dir, command, options),
+      );
     });
   } finally {
     const remaining = (resettingProjects.get(projectId) ?? 1) - 1;
@@ -1105,7 +1179,6 @@ export async function ensureRepoCloned(
         console.warn(`[workspace] removing incomplete clone for ${projectId}`);
         await removeManagedProjectPath(dir);
       }
-      setPreviewStatus(projectId, "cloning", `Cloning ${access.fullName}`);
       fs.mkdirSync(path.dirname(dir), { recursive: true });
       await simpleGitForClone(access.token).clone(url, dir, [
         "--branch",
@@ -1136,16 +1209,29 @@ async function stopPreviewAndWait(
   projectId: string,
   expectedBindingGeneration?: number,
 ): Promise<void> {
+  if (expectedBindingGeneration !== undefined) {
+    assertCurrentProjectFence({
+      projectId,
+      githubBindingGeneration: expectedBindingGeneration,
+    });
+  }
   const process = previewProcesses.get(projectId);
   activePreviewLaunches.delete(projectId);
   previewProcesses.delete(projectId);
+  lastPreviewExits.delete(projectId);
   revokePreviewCapability(projectId);
   unregisterPreviewPort(projectId);
   unregisterPreviewUpstream(projectId);
+  setPreviewStatus(projectId, "idle", "Preview stopped while project files are being updated");
 
   const existingTermination = previewTerminationQueues.get(projectId);
   if (existingTermination) {
-    await existingTermination;
+    try {
+      await existingTermination;
+    } catch (error) {
+      setPreviewStatus(projectId, "error", "The preview could not be stopped safely");
+      throw error;
+    }
     return;
   }
 
@@ -1168,6 +1254,9 @@ async function stopPreviewAndWait(
   previewTerminationQueues.set(projectId, termination);
   try {
     await termination;
+  } catch (error) {
+    setPreviewStatus(projectId, "error", "The preview could not be stopped safely");
+    throw error;
   } finally {
     if (previewTerminationQueues.get(projectId) === termination) {
       previewTerminationQueues.delete(projectId);
@@ -1189,9 +1278,10 @@ async function startDevPreviewNow(
 ): Promise<{ port: number; label: string }> {
   assertProjectWorkspaceAvailable(projectId);
   const previous = previewProcesses.get(projectId);
-  if (previous) {
-    await stopPreviewAndWait(projectId, previous.githubBindingGeneration);
-  }
+  await stopPreviewAndWait(
+    projectId,
+    expectedBindingGeneration ?? previous?.githubBindingGeneration,
+  );
   assertProjectWorkspaceAvailable(projectId);
   const port = await reserveAvailablePreviewPort(projectId, true);
   assertProjectWorkspaceAvailable(projectId);

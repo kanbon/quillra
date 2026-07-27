@@ -79,9 +79,10 @@ afterEach(() => {
 
 async function createPreviewApp() {
   vi.resetModules();
-  const [{ rawSqlite }, { previewRouter }] = await Promise.all([
+  const [{ rawSqlite }, { previewRouter }, previewStatus] = await Promise.all([
     import("../../db/index.js"),
     import("./preview.js"),
+    import("../../services/preview-status.js"),
   ]);
   openDatabase = rawSqlite;
   const now = Date.now();
@@ -122,12 +123,12 @@ async function createPreviewApp() {
     await next();
   });
   app.route("/projects", previewRouter);
-  return app;
+  return { app, previewStatus };
 }
 
 describe("preview start", () => {
   it("skips the redundant workspace install and lets the isolated preview install once", async () => {
-    const app = await createPreviewApp();
+    const { app } = await createPreviewApp();
 
     const response = await app.request("/projects/project-1/preview", { method: "POST" });
 
@@ -157,7 +158,7 @@ describe("preview start", () => {
   });
 
   it("reports an in-progress preview so reopening the editor does not restart it", async () => {
-    const app = await createPreviewApp();
+    const { app } = await createPreviewApp();
 
     const response = await app.request("/projects/project-1/preview-meta");
 
@@ -170,5 +171,42 @@ describe("preview start", () => {
       port: 4_321,
       previewLabel: "-",
     });
+  });
+
+  it("preserves a terminal preview error reported by the lifecycle owner", async () => {
+    const { app, previewStatus } = await createPreviewApp();
+    workspaceMocks.startDevPreview.mockImplementationOnce(async () => {
+      previewStatus.setPreviewStatus("project-1", "error", "Dev server exited with code 1");
+      throw new Error("The E2B dev server exited during startup with code 1.");
+    });
+
+    const response = await app.request("/projects/project-1/preview", { method: "POST" });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "The E2B dev server exited during startup with code 1.",
+    });
+    expect(previewStatus.getPreviewStatus("project-1")).toMatchObject({
+      stage: "error",
+      message: "Dev server exited with code 1",
+    });
+  });
+
+  it("does not let a stale request overwrite the replacement preview status", async () => {
+    const { app, previewStatus } = await createPreviewApp();
+    previewStatus.setPreviewStatus("project-1", "ready", "Current preview");
+    workspaceMocks.runInProjectLock.mockRejectedValueOnce(
+      new Error("The project GitHub repository changed while this request was running."),
+    );
+
+    const response = await app.request("/projects/project-1/preview", { method: "POST" });
+
+    expect(response.status).toBe(500);
+    expect(previewStatus.getPreviewStatus("project-1")).toMatchObject({
+      stage: "ready",
+      message: "Current preview",
+    });
+    expect(workspaceMocks.ensureRepoCloned).not.toHaveBeenCalled();
+    expect(workspaceMocks.startDevPreview).not.toHaveBeenCalled();
   });
 });

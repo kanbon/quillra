@@ -83,6 +83,13 @@ export class E2BProjectFenceError extends Error {
   }
 }
 
+export class E2BActivePreviewError extends Error {
+  constructor() {
+    super("The active preview must be stopped before accessing the E2B project workspace.");
+    this.name = "E2BActivePreviewError";
+  }
+}
+
 function readRuntimeConfig(): E2BRuntimeConfig {
   if (getInstanceSetting("E2B_ENABLED") !== "true") {
     throw new E2BRuntimeConfigurationError(
@@ -480,6 +487,7 @@ export class E2BRuntime {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ entries: number; bytes: number }> {
     return this.runProjectOperation(fence, async () => {
+      await this.assertNoActivePreview(fence);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
       await this.prepareForWorkspaceAccess(record, sandbox);
       return syncLocalWorkspaceToE2B({
@@ -498,6 +506,7 @@ export class E2BRuntime {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ entries: number; bytes: number }> {
     return this.runProjectOperation(fence, async () => {
+      await this.assertNoActivePreview(fence);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
       await this.prepareForWorkspaceAccess(record, sandbox);
       return syncE2BWorkspaceToLocal({
@@ -525,6 +534,7 @@ export class E2BRuntime {
       const command = validateCommand(options.command);
       const timeoutMs = validateCommandTimeout(options.timeoutMs);
       const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot);
+      await this.assertNoActivePreview(fence);
       const { sandbox, record } = await this.ensureConnected(fence, options.signal);
 
       // A previous finite command or preview may have daemonized descendants.
@@ -1057,6 +1067,14 @@ export class E2BRuntime {
     await sandbox.makeDir(E2B_PREVIEW_ROOT, signal);
   }
 
+  private async assertNoActivePreview(fence: E2BProjectFence): Promise<void> {
+    await this.store.assertFence(fence);
+    const record = this.store.get(fence.projectId);
+    if (record && (record.previewPid !== null || record.previewPort !== null)) {
+      throw new E2BActivePreviewError();
+    }
+  }
+
   private async quarantinePreviewFailure(
     record: E2BProjectSandboxRecord,
     sandbox: E2BSandboxHandle,
@@ -1083,6 +1101,9 @@ export class E2BRuntime {
     record: E2BProjectSandboxRecord,
     sandbox: E2BSandboxHandle,
   ): Promise<void> {
+    if (record.previewPid !== null || record.previewPort !== null) {
+      throw new E2BActivePreviewError();
+    }
     this.previewLaunches.delete(record.projectId);
     unregisterPreviewUpstream(record.projectId);
     try {

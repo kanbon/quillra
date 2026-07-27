@@ -18,6 +18,7 @@ vi.mock("./e2b-workspace-sync.js", () => ({
 import type { E2BAdapter, E2BCommandResult, E2BProcess, E2BSandboxHandle } from "./e2b-adapter.js";
 import { E2BTrustedEnvironmentError } from "./e2b-preview-relay.js";
 import {
+  E2BActivePreviewError,
   type E2BProjectFence,
   E2BProjectFenceError,
   type E2BProjectSandboxRecord,
@@ -230,13 +231,12 @@ describe("E2B runtime", () => {
     });
   });
 
-  it("quiesces daemons and disables preview ingress before sync and again before writeback", async () => {
+  it("quiesces daemons before a finite command and again before writeback", async () => {
     const commandDone = deferred<E2BCommandResult>();
     const sandbox = fakeSandbox(commandDone.promise);
-    const { runtime, store } = runtimeFixture(sandbox);
+    const { runtime } = runtimeFixture(sandbox);
     const fence = { projectId: "project-a", githubBindingGeneration: 1 };
     await runtime.ensureProject(fence);
-    store.setPreview(fence.projectId, sandbox.sandboxId, { pid: 99, port: 4_321 });
     vi.clearAllMocks();
 
     const execution = runtime.runCommand(fence, {
@@ -245,7 +245,6 @@ describe("E2B runtime", () => {
     });
     await vi.waitFor(() => expect(sandbox.startCommand).toHaveBeenCalledOnce());
 
-    expect(store.get(fence.projectId)?.previewPid).toBeNull();
     expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
     expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
     const firstQuiesce =
@@ -266,6 +265,33 @@ describe("E2B runtime", () => {
     const syncFrom = sync.from.mock.invocationCallOrder[0] ?? 0;
     expect(commandStart).toBeLessThan(secondQuiesce);
     expect(secondQuiesce).toBeLessThan(syncFrom);
+  });
+
+  it("refuses direct workspace access while a managed preview is active", async () => {
+    const sandbox = fakeSandbox();
+    const { runtime, adapter, store } = runtimeFixture(sandbox);
+    const fence = { projectId: "project-a", githubBindingGeneration: 1 };
+    await runtime.ensureProject(fence);
+    store.setPreview(fence.projectId, sandbox.sandboxId, { pid: 99, port: 4_321 });
+    vi.clearAllMocks();
+
+    await expect(
+      runtime.runCommand(fence, {
+        localRoot,
+        command: "build-without-owner-stop",
+      }),
+    ).rejects.toBeInstanceOf(E2BActivePreviewError);
+
+    expect(store.get(fence.projectId)).toMatchObject({
+      previewPid: 99,
+      previewPort: 4_321,
+    });
+    expect(adapter.connect).not.toHaveBeenCalled();
+    expect(sandbox.quiesceProjectProcesses).not.toHaveBeenCalled();
+    expect(sandbox.stopPreviewRelay).not.toHaveBeenCalled();
+    expect(sandbox.startCommand).not.toHaveBeenCalled();
+    expect(sync.to).not.toHaveBeenCalled();
+    expect(sync.from).not.toHaveBeenCalled();
   });
 
   it("quarantines the sandbox and skips writeback when descendant quiescence fails", async () => {
@@ -423,28 +449,26 @@ describe("E2B runtime", () => {
     expect(store.get("project-a")).toBeNull();
   });
 
-  it("stabilizes a direct workspace sync and clears stale preview state first", async () => {
+  it("refuses a direct workspace sync while a managed preview is active", async () => {
     const sandbox = fakeSandbox();
-    const { runtime, store } = runtimeFixture(sandbox);
+    const { runtime, adapter, store } = runtimeFixture(sandbox);
     const fence = { projectId: "project-a", githubBindingGeneration: 1 };
     await runtime.ensureProject(fence);
     store.setPreview(fence.projectId, sandbox.sandboxId, { pid: 99, port: 4_321 });
     vi.clearAllMocks();
 
-    sync.to.mockImplementationOnce(async () => {
-      expect(store.get(fence.projectId)?.previewPid).toBeNull();
-      return { entries: 1, bytes: 1 };
-    });
-    await runtime.syncToSandbox(fence, localRoot);
+    await expect(runtime.syncToSandbox(fence, localRoot)).rejects.toBeInstanceOf(
+      E2BActivePreviewError,
+    );
 
-    expect(sandbox.quiesceProjectProcesses).toHaveBeenCalledOnce();
-    expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce();
-    expect(vi.mocked(sandbox.quiesceProjectProcesses).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(sandbox.stopPreviewRelay).mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(vi.mocked(sandbox.stopPreviewRelay).mock.invocationCallOrder[0]).toBeLessThan(
-      sync.to.mock.invocationCallOrder[0] ?? 0,
-    );
+    expect(store.get(fence.projectId)).toMatchObject({
+      previewPid: 99,
+      previewPort: 4_321,
+    });
+    expect(adapter.connect).not.toHaveBeenCalled();
+    expect(sandbox.quiesceProjectProcesses).not.toHaveBeenCalled();
+    expect(sandbox.stopPreviewRelay).not.toHaveBeenCalled();
+    expect(sync.to).not.toHaveBeenCalled();
   });
 
   it("runs preview from its isolated copy, never writes it back, and reports exit", async () => {

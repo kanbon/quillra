@@ -9,8 +9,7 @@ import {
   writeProjectFile,
 } from "../lib/project-files.js";
 import { buildCanUseTool } from "./agent-permissions.js";
-import { getDefaultE2BRuntime } from "./e2b-runtime.js";
-import { QUILLRA_TEMP_DIR } from "./workspace.js";
+import { QUILLRA_TEMP_DIR, runFiniteProjectCommand } from "./workspace.js";
 
 const BASH_TOOL_NAME = "mcp__quillra-execution__bash";
 const PROMOTE_TOOL_NAME = "mcp__quillra-execution__promote_attachment";
@@ -168,18 +167,11 @@ export function buildAgentExecutionMcpServer(params: AgentExecutionParams) {
         };
       }
       try {
-        const result = await getDefaultE2BRuntime().runCommand(
-          {
-            projectId: params.projectId,
-            githubBindingGeneration: params.githubBindingGeneration,
-          },
-          {
-            localRoot: params.repoPath,
-            command,
-            timeoutMs: timeout,
-            signal: params.signal,
-          },
-        );
+        const result = await runFiniteProjectCommand(params.projectId, params.repoPath, command, {
+          expectedBindingGeneration: params.githubBindingGeneration,
+          timeoutMs: timeout,
+          signal: params.signal,
+        });
         return {
           content: [{ type: "text", text: commandResultText(result) }],
           isError: result.exitCode !== 0,
