@@ -11,7 +11,10 @@ const e2bRuntimeMock = vi.hoisted(() => ({
     headers: { "e2b-traffic-access-token": "test-preview-token" },
   })),
   runCommand: vi.fn(),
-  startPreview: vi.fn(async () => ({ pid: 42, port: 4321 })),
+  startPreview: vi.fn(async (_fence: unknown, _options: { command: string }) => ({
+    pid: 42,
+    port: 4321,
+  })),
   stopPreview: vi.fn(async () => undefined),
 }));
 
@@ -43,6 +46,7 @@ vi.mock("./e2b-runtime.js", () => ({
 }));
 
 import { rawSqlite } from "../db/index.js";
+import { getPreviewStatus } from "./preview-status.js";
 import {
   beginProjectWriterAuthorizationChange,
   cancelAndWaitForProjectWriters,
@@ -131,6 +135,7 @@ describe("project workspace lifecycle", () => {
     expect(fs.existsSync(staleFile)).toBe(false);
     expect(fs.existsSync(path.join(repoPath, ".git"))).toBe(true);
     expect(fs.readFileSync(path.join(repoPath, "package.json"), "utf8")).toContain("fresh");
+    expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
   });
 
   it("waits for repository work, blocks new work, and removes the whole project directory", async () => {
@@ -575,5 +580,62 @@ describe("project workspace lifecycle", () => {
     });
     expect(getPreviewProcessInfo(projectId).running).toBe(false);
     expect(fs.existsSync(repoPath)).toBe(false);
+  });
+
+  it("installs once in the isolated preview and starts only after a successful install", async () => {
+    const projectId = "preview-install";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoPath, "package.json"),
+      JSON.stringify({
+        scripts: { dev: "vite --host 0.0.0.0" },
+        devDependencies: { vite: "latest" },
+      }),
+    );
+
+    await startDevPreview(projectId, repoPath, null, 1);
+
+    expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
+    expect(e2bRuntimeMock.startPreview).toHaveBeenCalledOnce();
+    const options = e2bRuntimeMock.startPreview.mock.calls[0]?.[1];
+    expect(options?.command).toContain("npm install --include=dev");
+    expect(options?.command).toContain(" && exec ");
+    expect(options?.command.indexOf("npm install --include=dev")).toBeLessThan(
+      options?.command.indexOf(" && exec ") ?? -1,
+    );
+
+    await clearProjectRepoClone(projectId);
+  });
+
+  it("keeps probing a slow preview until the running process becomes ready", async () => {
+    const projectId = "slow-preview-ready";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+
+    vi.useFakeTimers();
+    let probeCount = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      probeCount += 1;
+      if (probeCount <= 121) throw new Error("Still starting");
+      return { status: 200 } as Response;
+    });
+
+    try {
+      await startDevPreview(projectId, repoPath, "npm run dev", 1);
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      expect(probeCount).toBe(122);
+      expect(getPreviewStatus(projectId).stage).toBe("ready");
+    } finally {
+      await clearProjectRepoClone(projectId);
+      fetchSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

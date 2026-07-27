@@ -76,8 +76,10 @@ export function previewBootHtml(
 (function() {
   var stages = ['cloning', 'installing', 'starting', 'ready'];
   var steps = document.querySelectorAll('.step');
-  var attempts = 0;
-  var pollId = 0;
+  var currentStage = '';
+  var stagePolls = 0;
+  var pollTimer = 0;
+  var stopped = false;
   var errored = false;
 
   function setStage(stage) {
@@ -95,7 +97,7 @@ export function previewBootHtml(
   function showError(label, detail) {
     if (errored) return;
     errored = true;
-    if (pollId) { clearInterval(pollId); pollId = 0; }
+    stopPolling();
     document.getElementById('label').textContent = label || 'Preview unavailable';
     document.getElementById('detail').textContent = detail || 'Something went wrong while starting your preview.';
     document.getElementById('retry').classList.remove('hidden');
@@ -108,33 +110,61 @@ export function previewBootHtml(
     }
   }
 
-  function tick() {
+  function showSlow(stage) {
     if (errored) return;
-    attempts++;
+    document.getElementById('label').textContent =
+      stage === 'installing' ? 'Still setting things up' : 'Still starting your preview';
+    document.getElementById('detail').textContent =
+      'The first setup can take a few minutes. This page will open automatically when it is ready.';
+  }
+
+  function stopPolling() {
+    stopped = true;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = 0; }
+  }
+
+  function scheduleNextPoll() {
+    if (stopped) return;
+    var delay = stagePolls >= 30 ? 5000 : 1500;
+    pollTimer = setTimeout(function() {
+      pollTimer = 0;
+      tick();
+    }, delay);
+  }
+
+  function tick() {
+    if (stopped) return;
     fetch(${JSON.stringify(statusUrl)}, { credentials: ${JSON.stringify(credentials)} })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
-        if (errored || !data) return;
+        if (stopped || !data) return;
         if (data.stage === 'error') {
           showError(data.label, data.detail);
           return;
         }
-        if (data.detail) document.getElementById('detail').textContent = data.detail;
+        if (data.stage !== currentStage) {
+          currentStage = data.stage;
+          stagePolls = 0;
+        }
+        stagePolls++;
         setStage(data.stage);
         if (data.stage === 'ready') {
-          if (pollId) { clearInterval(pollId); pollId = 0; }
+          stopPolling();
           steps.forEach(function(s) { s.classList.remove('active', 'failed'); s.classList.add('done'); });
           setTimeout(function() { window.location.reload(); }, 400);
+        } else if (stagePolls >= 30) {
+          // A slow package install is not a failure. The backend lifecycle is
+          // authoritative, so keep polling until it reports ready or error.
+          showSlow(data.stage);
+        } else {
+          if (data.label) document.getElementById('label').textContent = data.label;
+          if (data.detail) document.getElementById('detail').textContent = data.detail;
         }
       })
-      .catch(function() {});
-
-    if (attempts >= 30) {
-      showError('Taking longer than expected', 'Your preview is still starting up. You can wait or retry.');
-    }
+      .catch(function() {})
+      .then(scheduleNextPoll);
   }
   tick();
-  pollId = setInterval(tick, 1500);
 })();
 </script>
 </body>
