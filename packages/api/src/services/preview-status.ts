@@ -3,6 +3,7 @@
  * page can show what's happening (cloning, installing, starting…) instead
  * of a generic "Bad gateway" or vague spinner.
  */
+import { isE2BPreviewRelayUnavailable } from "./e2b-preview-relay.js";
 import { previewUpstreamUrl } from "./preview-upstream.js";
 
 export type PreviewStage = "idle" | "cloning" | "installing" | "starting" | "ready" | "error";
@@ -135,7 +136,7 @@ export async function readPreviewStatus(projectId: string, port: number) {
         signal: AbortSignal.timeout(1_500),
         redirect: "manual",
       });
-      if (probe.status > 0) {
+      if (probe.status > 0 && !isE2BPreviewRelayUnavailable(probe)) {
         return { stage: "ready" as const, label: "Ready", detail: "Loading your site…" };
       }
     } catch {

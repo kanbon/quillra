@@ -12,7 +12,11 @@ import {
   validateProjectDevEngineVersionRange,
 } from "./dev-engines.js";
 import type { E2BCommandResult } from "./e2b-adapter.js";
-import { E2B_PREVIEW_TARGET_MAX_PORT, E2B_PREVIEW_TARGET_MIN_PORT } from "./e2b-preview-relay.js";
+import {
+  E2B_PREVIEW_TARGET_MAX_PORT,
+  E2B_PREVIEW_TARGET_MIN_PORT,
+  isE2BPreviewRelayUnavailable,
+} from "./e2b-preview-relay.js";
 import { type E2BProjectFence, E2BProjectFenceError, getDefaultE2BRuntime } from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
@@ -1452,7 +1456,7 @@ async function startDevPreviewNow(
           signal: AbortSignal.timeout(500),
           redirect: "manual",
         });
-        if (response.status > 0) {
+        if (response.status > 0 && !isE2BPreviewRelayUnavailable(response)) {
           markReady();
           return;
         }

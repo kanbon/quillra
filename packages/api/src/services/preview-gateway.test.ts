@@ -9,6 +9,7 @@ import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { E2B_RELAY_STATUS_HEADER, E2B_RELAY_UPSTREAM_UNAVAILABLE } from "./e2b-preview-relay.js";
 import {
   issuePreviewCapability,
   issuePreviewHandoff,
@@ -204,6 +205,12 @@ beforeAll(async () => {
       });
 
       const url = new URL(request.url ?? "/", "http://upstream.test");
+      if (url.pathname === "/relay-not-ready") {
+        response.statusCode = 502;
+        response.setHeader(E2B_RELAY_STATUS_HEADER, E2B_RELAY_UPSTREAM_UNAVAILABLE);
+        response.end("Preview upstream unavailable");
+        return;
+      }
       if (url.pathname === "/src/main.js") {
         response.setHeader("content-type", "text/javascript; charset=utf-8");
         response.end('fetch("/api/session"); import "/@vite/client";');
@@ -370,6 +377,60 @@ describe("host preview gateway integration", () => {
       stage: "starting",
       message: "Reconnecting to the preview…",
     });
+  });
+
+  it("keeps polling when an active preview is briefly missing its upstream route", async () => {
+    const cookie = await acquireAccessCookie();
+    setPreviewStatus(PROJECT_ID, "ready");
+    unregisterPreviewUpstream(PROJECT_ID, upstreamPort);
+
+    const navigation = await gatewayFetch("/", {
+      headers: { cookie, accept: "text/html" },
+    });
+
+    expect(navigation.status).toBe(200);
+    expect(await navigation.text()).toContain("Starting your preview");
+    expect(getPreviewStatus(PROJECT_ID)).toMatchObject({
+      stage: "starting",
+      message: "Connecting to the preview…",
+    });
+    expect(upstreamRequests).toHaveLength(0);
+
+    registerLoopbackPreviewUpstreamForTests(PROJECT_ID, upstreamPort, {
+      origin: `http://127.0.0.1:${upstreamPort}`,
+      headers: { [E2B_TRAFFIC_ACCESS_HEADER]: TRAFFIC_ACCESS_TOKEN },
+    });
+    const status = await gatewayFetch("/.quillra/preview-status", {
+      headers: { cookie },
+    });
+    await expect(status.json()).resolves.toMatchObject({ stage: "ready" });
+    await expect(
+      gatewayFetch("/", { headers: { cookie } }).then((response) => response.text()),
+    ).resolves.toContain('data-path="/"');
+  });
+
+  it("shows the boot page until the relay target responds instead of exposing its 502", async () => {
+    const cookie = await acquireAccessCookie();
+    setPreviewStatus(PROJECT_ID, "ready");
+
+    const navigation = await gatewayFetch("/relay-not-ready", {
+      headers: { cookie, accept: "text/html" },
+    });
+
+    expect(navigation.status).toBe(200);
+    expect(await navigation.text()).toContain("Starting your preview");
+    expect(getPreviewStatus(PROJECT_ID)).toMatchObject({
+      stage: "starting",
+      message: "Waiting for the preview to respond…",
+    });
+
+    const status = await gatewayFetch("/.quillra/preview-status", {
+      headers: { cookie },
+    });
+    await expect(status.json()).resolves.toMatchObject({ stage: "ready" });
+    await expect(
+      gatewayFetch("/", { headers: { cookie } }).then((response) => response.text()),
+    ).resolves.toContain('data-path="/"');
   });
 
   it("never accepts a handoff or path capability as the host session cookie", async () => {

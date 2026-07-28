@@ -3,6 +3,7 @@ import type { Context, MiddlewareHandler, Next } from "hono";
 import { getCookie } from "hono/cookie";
 import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import { WebSocket as UpstreamWebSocket } from "ws";
+import { isE2BPreviewRelayUnavailable } from "./e2b-preview-relay.js";
 import { previewBootHtml } from "./preview-boot.js";
 import {
   consumeReservedPreviewHandoff,
@@ -103,6 +104,15 @@ function closeUpstreamWebSocket(
 
 function messageByteLength(data: string | ArrayBuffer | Uint8Array): number {
   return typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+}
+
+function isPreviewNavigation(c: Context<PreviewGatewayEnv>): boolean {
+  return (
+    c.req.method === "GET" &&
+    (c.req.header("sec-fetch-dest") === "iframe" ||
+      c.req.header("sec-fetch-dest") === "document" ||
+      (c.req.header("accept") ?? "").includes("text/html"))
+  );
 }
 
 export function createPreviewGateway<RawWebSocket>(
@@ -411,7 +421,25 @@ export function createPreviewGateway<RawWebSocket>(
       requestUrl.pathname,
       requestUrl.search,
     );
-    if (!upstreamAccess) return c.text("Preview upstream is unavailable", 503);
+    if (!upstreamAccess) {
+      setPreviewStatus(active.projectId, "starting", "Connecting to the preview…");
+      if (!isPreviewNavigation(c)) return c.text("Preview upstream is unavailable", 503);
+      const statusUrl = "/.quillra/preview-status";
+      const editorUrl = new URL(
+        `/p/${encodeURIComponent(active.projectId)}`,
+        config.controlOrigins[0],
+      ).toString();
+      return secureHostPreviewResponse(
+        new Response(previewBootHtml(active.port, "", statusUrl, "include", editorUrl), {
+          status: 200,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        }),
+        publicUrl.toString(),
+        active.port,
+        config.controlOrigins,
+        config.accessCookieName,
+      );
+    }
     const headers = sanitizeHostPreviewRequestHeaders(c.req.raw.headers, config.accessCookieName);
     for (const [name, value] of Object.entries(upstreamAccess.headers)) {
       headers.set(name, value);
@@ -440,6 +468,25 @@ export function createPreviewGateway<RawWebSocket>(
       };
       if (init.body) init.duplex = "half";
       const upstream = await fetch(upstreamAccess.url, init);
+      if (isE2BPreviewRelayUnavailable(upstream)) {
+        setPreviewStatus(active.projectId, "starting", "Waiting for the preview to respond…");
+        if (!isPreviewNavigation(c)) return c.text("Preview upstream unavailable", 502);
+        const statusUrl = "/.quillra/preview-status";
+        const editorUrl = new URL(
+          `/p/${encodeURIComponent(active.projectId)}`,
+          config.controlOrigins[0],
+        ).toString();
+        return secureHostPreviewResponse(
+          new Response(previewBootHtml(active.port, "", statusUrl, "include", editorUrl), {
+            status: 200,
+            headers: { "content-type": "text/html; charset=UTF-8" },
+          }),
+          publicUrl.toString(),
+          active.port,
+          config.controlOrigins,
+          config.accessCookieName,
+        );
+      }
       const withCss = await injectPreviewToolbarCss(upstream);
       return secureHostPreviewResponse(
         withCss,
@@ -453,12 +500,7 @@ export function createPreviewGateway<RawWebSocket>(
       console.warn(
         `[preview-http] ${c.req.method} ${requestUrl.pathname} failed for project ${active.projectId} on port ${active.port}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      const isNavigation =
-        c.req.method === "GET" &&
-        (c.req.header("sec-fetch-dest") === "iframe" ||
-          c.req.header("sec-fetch-dest") === "document" ||
-          (c.req.header("accept") ?? "").includes("text/html"));
-      if (!isNavigation) return c.text("Preview upstream unavailable", 502);
+      if (!isPreviewNavigation(c)) return c.text("Preview upstream unavailable", 502);
       // The route may recover after a transient provider hiccup, so retain its
       // capability and let the boot-page status probe test it again. Clearing
       // the tracked ready state is essential: otherwise the ready fast path

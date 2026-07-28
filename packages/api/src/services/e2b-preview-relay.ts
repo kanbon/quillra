@@ -15,6 +15,12 @@ export const E2B_RELAY_BIN_ROOT = `${E2B_RELAY_RUNTIME_ROOT}/bin`;
 export const E2B_RELAY_STAGING_ROOT = `${E2B_RELAY_RUNTIME_ROOT}/staging`;
 export const E2B_RELAY_INSTALL_PATH = `${E2B_RELAY_BIN_ROOT}/quillra-preview-relay.mjs`;
 export const E2B_RELAY_NODE_PATH = `${E2B_RELAY_BIN_ROOT}/node`;
+export const E2B_RELAY_STATUS_HEADER = "x-quillra-relay-status";
+export const E2B_RELAY_UPSTREAM_UNAVAILABLE = "upstream-unavailable";
+
+export function isE2BPreviewRelayUnavailable(response: Pick<Response, "headers">): boolean {
+  return response.headers.get(E2B_RELAY_STATUS_HEADER) === E2B_RELAY_UPSTREAM_UNAVAILABLE;
+}
 
 export type E2BTrustedEnvironmentStage =
   | "bootstrap"
@@ -71,6 +77,8 @@ import { readFileSync } from "node:fs";
 
 const trafficHeader = "e2b-traffic-access-token";
 const relayHeaderPrefix = "x-quillra-relay-";
+const relayStatusHeader = "${E2B_RELAY_STATUS_HEADER}";
+const relayUpstreamUnavailable = "${E2B_RELAY_UPSTREAM_UNAVAILABLE}";
 const relayPort = ${E2B_PREVIEW_RELAY_PORT};
 const envdPort = ${E2B_ENVD_PORT};
 const minTargetPort = ${E2B_PREVIEW_TARGET_MIN_PORT};
@@ -262,16 +270,18 @@ function validRequestTarget(value) {
   return value === "*" || value.startsWith("/");
 }
 
-function failHttp(response, status, body) {
+function failHttp(response, status, body, relayStatus) {
   if (response.headersSent) {
     response.destroy();
     return;
   }
-  response.writeHead(status, {
+  const headers = {
     "cache-control": "no-store",
     "content-type": "text/plain; charset=utf-8",
     "content-length": Buffer.byteLength(body),
-  });
+  };
+  if (relayStatus) headers[relayStatusHeader] = relayStatus;
+  response.writeHead(status, headers);
   response.end(body);
 }
 
@@ -318,7 +328,9 @@ function handleHttpRequest(request, response) {
     },
   );
   upstream.setTimeout(120000, () => upstream.destroy());
-  upstream.on("error", () => failHttp(response, 502, "Preview upstream unavailable"));
+  upstream.on("error", () =>
+    failHttp(response, 502, "Preview upstream unavailable", relayUpstreamUnavailable)
+  );
   request.on("aborted", () => upstream.destroy());
   request.on("error", () => upstream.destroy());
   request.pipe(upstream);

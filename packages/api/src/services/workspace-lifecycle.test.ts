@@ -85,6 +85,7 @@ vi.mock("./e2b-runtime.js", () => ({
 }));
 
 import { rawSqlite } from "../db/index.js";
+import { E2B_RELAY_STATUS_HEADER, E2B_RELAY_UPSTREAM_UNAVAILABLE } from "./e2b-preview-relay.js";
 import {
   issuePreviewCapability,
   resolveActivePreviewCapabilityToken,
@@ -1067,7 +1068,7 @@ describe("project workspace lifecycle", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       probeCount += 1;
       if (probeCount <= 121) throw new Error("Still starting");
-      return { status: 200 } as Response;
+      return new Response("ready", { status: 200 });
     });
 
     try {
@@ -1075,6 +1076,47 @@ describe("project workspace lifecycle", () => {
       await vi.advanceTimersByTimeAsync(65_000);
 
       expect(probeCount).toBe(122);
+      expect(getPreviewStatus(projectId).stage).toBe("ready");
+    } finally {
+      await clearProjectRepoClone(projectId);
+      fetchSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not activate a preview on the relay's synthetic not-ready response", async () => {
+    const projectId = "relay-target-not-ready";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+
+    vi.useFakeTimers();
+    let probeCount = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      probeCount += 1;
+      if (probeCount === 1) {
+        return new Response("Preview upstream unavailable", {
+          status: 502,
+          headers: {
+            [E2B_RELAY_STATUS_HEADER]: E2B_RELAY_UPSTREAM_UNAVAILABLE,
+          },
+        });
+      }
+      return new Response("ready", { status: 200 });
+    });
+
+    try {
+      await startDevPreview(projectId, repoPath, "npm run dev", 1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(probeCount).toBe(1);
+      expect(getPreviewStatus(projectId).stage).toBe("starting");
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(probeCount).toBe(2);
       expect(getPreviewStatus(projectId).stage).toBe("ready");
     } finally {
       await clearProjectRepoClone(projectId);

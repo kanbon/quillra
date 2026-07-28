@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { E2B_RELAY_STATUS_HEADER, E2B_RELAY_UPSTREAM_UNAVAILABLE } from "./e2b-preview-relay.js";
 import {
   isPreviewRoutable,
   markPreviewPortActive,
@@ -54,5 +55,29 @@ describe("routable preview status", () => {
       detail: "Loading your site…",
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps waiting when the trusted relay says its target is not ready", async () => {
+    expect(registerPreviewPort(PORT, PROJECT_ID)).toBe(true);
+    registerLoopbackPreviewUpstreamForTests(PROJECT_ID, PORT, {
+      origin: `http://127.0.0.1:${PORT}`,
+      headers: { "e2b-traffic-access-token": "traffic-token" },
+    });
+    expect(markPreviewPortActive(PROJECT_ID, PORT)).toBe(true);
+    setPreviewStatus(PROJECT_ID, "starting", "Waiting for Vite");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Preview upstream unavailable", {
+        status: 502,
+        headers: {
+          [E2B_RELAY_STATUS_HEADER]: E2B_RELAY_UPSTREAM_UNAVAILABLE,
+        },
+      }),
+    );
+
+    await expect(readPreviewStatus(PROJECT_ID, PORT)).resolves.toEqual({
+      stage: "starting",
+      label: "Starting the preview",
+      detail: "Waiting for Vite",
+    });
   });
 });

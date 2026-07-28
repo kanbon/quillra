@@ -19,6 +19,8 @@ import {
   E2B_PREVIEW_RELAY_SOURCE,
   E2B_PREVIEW_TARGET_MAX_PORT,
   E2B_PREVIEW_TARGET_MIN_PORT,
+  E2B_RELAY_STATUS_HEADER,
+  E2B_RELAY_UPSTREAM_UNAVAILABLE,
   E2B_RELAY_USER,
 } from "./e2b-preview-relay.js";
 
@@ -290,6 +292,7 @@ describe.sequential("E2B preview relay", () => {
           });
           response.setHeader(PROVIDER_TOKEN_HEADER, "upstream-response-secret");
           response.setHeader("x-quillra-relay-internal", "upstream-response-secret");
+          response.setHeader(E2B_RELAY_STATUS_HEADER, E2B_RELAY_UPSTREAM_UNAVAILABLE);
           response.setHeader("x-safe-response", "visible");
           if (request.url === "/stream") {
             response.write("first-");
@@ -392,6 +395,7 @@ describe.sequential("E2B preview relay", () => {
     expect(streamed.chunks.length).toBeGreaterThanOrEqual(2);
     expect(streamed.headers["x-safe-response"]).toBe("visible");
     expect(streamed.headers[PROVIDER_TOKEN_HEADER]).toBeUndefined();
+    expect(streamed.headers[E2B_RELAY_STATUS_HEADER]).toBeUndefined();
     expect(
       Object.keys(streamed.headers).filter((name) => name.startsWith(RELAY_HEADER_PREFIX)),
     ).toEqual([]);
@@ -444,5 +448,19 @@ describe.sequential("E2B preview relay", () => {
     socket.close(1_000, "done");
     await closed;
     activeClient = undefined;
+  });
+
+  it("marks only the relay's own unavailable response after the target stops", async () => {
+    await closeServer(upstreamServer);
+    upstreamServer = undefined;
+
+    const unavailable = await relayHttpRequest({
+      path: "/not-ready",
+      headers: relayHeaders(),
+    });
+
+    expect(unavailable.status).toBe(502);
+    expect(Buffer.concat(unavailable.chunks).toString()).toBe("Preview upstream unavailable");
+    expect(unavailable.headers[E2B_RELAY_STATUS_HEADER]).toBe(E2B_RELAY_UPSTREAM_UNAVAILABLE);
   });
 });
