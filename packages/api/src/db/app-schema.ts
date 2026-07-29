@@ -448,11 +448,69 @@ export const messages = sqliteTable(
   (table) => [index("messages_project_idx").on(table.projectId)],
 );
 
+/**
+ * Durable, display-safe transcript events.
+ *
+ * `messages` remains the compact user/assistant compatibility history. This
+ * ledger preserves the richer transcript the editor renders (thinking blocks,
+ * humanized tool activity, questions, checkpoints, and errors) so a reload or
+ * another device can reconstruct the same completed conversation.
+ *
+ * Raw tool inputs, commands, and paths never belong here. The WebSocket handler
+ * only writes the already-humanized payloads it is willing to send to a user.
+ */
+export const chatEvents = sqliteTable(
+  "chat_events",
+  {
+    /** Monotonic durable cursor used for ordered catch-up. */
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Stable public identifier used to merge/replay without duplicates. */
+    eventId: text("event_id").notNull().unique(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    /** One user message and the complete agent response share a turn id. */
+    turnId: text("turn_id").notNull(),
+    /** Explicit order within a turn; `id` orders events across turns. */
+    turnSequence: integer("turn_sequence").notNull(),
+    kind: text("kind")
+      .notNull()
+      .$type<
+        | "user"
+        | "assistant"
+        | "thinking"
+        | "tool_call"
+        | "tool"
+        | "ask"
+        | "continue_prompt"
+        | "checkpoint"
+        | "done"
+        | "error"
+      >(),
+    /** Plain display text when the event has one. */
+    content: text("content"),
+    /** JSON metadata such as attachments, options, duration, or cost. */
+    payload: text("payload"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [
+    index("chat_events_project_idx").on(table.projectId),
+    index("chat_events_conversation_cursor_idx").on(table.conversationId, table.id),
+    uniqueIndex("chat_events_turn_sequence_unique").on(table.turnId, table.turnSequence),
+  ],
+);
+
 export const projectsRelations = relations(projects, ({ many }) => ({
   members: many(projectMembers),
   invites: many(projectInvites),
   conversations: many(conversations),
   messages: many(messages),
+  chatEvents: many(chatEvents),
 }));
 
 export const conversationsRelations = relations(conversations, ({ one, many }) => ({
@@ -461,6 +519,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
     references: [projects.id],
   }),
   messages: many(messages),
+  chatEvents: many(chatEvents),
 }));
 
 export const projectMembersRelations = relations(projectMembers, ({ one }) => ({
@@ -493,5 +552,16 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   user: one(user, {
     fields: [messages.userId],
     references: [user.id],
+  }),
+}));
+
+export const chatEventsRelations = relations(chatEvents, ({ one }) => ({
+  project: one(projects, {
+    fields: [chatEvents.projectId],
+    references: [projects.id],
+  }),
+  conversation: one(conversations, {
+    fields: [chatEvents.conversationId],
+    references: [conversations.id],
   }),
 }));

@@ -178,6 +178,23 @@ function bootstrapCoreSchema() {
         created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
       );
       CREATE INDEX IF NOT EXISTS messages_project_idx ON messages(project_id);
+
+      CREATE TABLE IF NOT EXISTS chat_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL,
+        turn_sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        content TEXT,
+        payload TEXT,
+        created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+        UNIQUE(turn_id, turn_sequence)
+      );
+      CREATE INDEX IF NOT EXISTS chat_events_project_idx ON chat_events(project_id);
+      CREATE INDEX IF NOT EXISTS chat_events_conversation_cursor_idx
+        ON chat_events(conversation_id, id);
     `);
   })();
 }

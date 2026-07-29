@@ -29,6 +29,7 @@ vi.mock("e2b", () => {
 
 import {
   BOUNDED_TREE_SCANNER,
+  type E2BProcessMonitorError,
   E2BSdkAdapter,
   SEALED_RELAY_RUNTIME_VALIDATION_SCRIPT,
   SEAL_RELAY_NODE_SCRIPT,
@@ -78,6 +79,8 @@ function fakeSdkSandbox() {
     commands: {
       run,
       kill: vi.fn(async () => false),
+      list: vi.fn(async (): Promise<Array<{ pid: number }>> => []),
+      connect: vi.fn(),
     },
     getHost: vi.fn(() => "4321-sandbox.e2b.app"),
     pause: vi.fn(async () => true),
@@ -676,6 +679,143 @@ describe("E2B SDK adapter", () => {
         requestTimeoutMs: 60_000,
       }),
     );
+  });
+
+  it("keeps an unlimited preview stream while bounding only its start handshake", async () => {
+    const sandbox = fakeSdkSandbox();
+    const commandHandle = {
+      pid: 77,
+      wait: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+      kill: vi.fn(async () => true),
+    };
+    sdk.create.mockResolvedValue(sandbox);
+    const handle = await new E2BSdkAdapter().create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    sandbox.commands.run.mockResolvedValueOnce(commandHandle);
+
+    await handle.startCommand("npm run dev", {
+      cwd: `${E2B_PROJECT_HOME}/quillra-preview`,
+      timeoutMs: 0,
+    });
+
+    expect(sandbox.commands.run).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        background: true,
+        timeoutMs: 0,
+        requestTimeoutMs: 60_000,
+      }),
+    );
+  });
+
+  it("reconnects an unlimited command monitor by PID after a stream failure", async () => {
+    const sandbox = fakeSdkSandbox();
+    const firstHandle = {
+      pid: 77,
+      wait: vi.fn(async () => {
+        throw new Error("stream disconnected");
+      }),
+      kill: vi.fn(async () => true),
+    };
+    const secondHandle = {
+      pid: 77,
+      wait: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+      kill: vi.fn(async () => true),
+    };
+    sdk.create.mockResolvedValue(sandbox);
+    const handle = await new E2BSdkAdapter().create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    sandbox.commands.run.mockImplementation(
+      async (command: string, options?: { background?: boolean }) =>
+        options?.background
+          ? firstHandle
+          : {
+              exitCode: 0,
+              stdout: command.includes("/usr/bin/head -c") ? "ready" : "",
+              stderr: "",
+            },
+    );
+    sandbox.commands.list.mockResolvedValueOnce([{ pid: 77 }]);
+    sandbox.commands.connect.mockResolvedValueOnce(secondHandle);
+
+    const process = await handle.startCommand("npm run dev", {
+      cwd: `${E2B_PROJECT_HOME}/quillra-preview`,
+      timeoutMs: 0,
+    });
+
+    await expect(process.wait()).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: "ready",
+      stderr: "ready",
+    });
+    expect(sandbox.commands.list).toHaveBeenCalledOnce();
+    expect(sandbox.commands.connect).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({
+        timeoutMs: 0,
+        requestTimeoutMs: 60_000,
+      }),
+    );
+    expect(secondHandle.wait).toHaveBeenCalledOnce();
+  });
+
+  it("reports a missing PID as a monitor failure instead of inventing exit code 1", async () => {
+    const sandbox = fakeSdkSandbox();
+    const commandHandle = {
+      pid: 77,
+      wait: vi.fn(async () => {
+        throw new Error("stream disconnected");
+      }),
+      kill: vi.fn(async () => true),
+    };
+    sdk.create.mockResolvedValue(sandbox);
+    const handle = await new E2BSdkAdapter().create({
+      apiKey: "e2b_key",
+      templateId: "base",
+      projectId: "project-a",
+      timeoutMs: 900_000,
+      requestTimeoutMs: 60_000,
+    });
+    sandbox.commands.run.mockClear();
+    sandbox.commands.run.mockImplementation(
+      async (command: string, options?: { background?: boolean }) =>
+        options?.background
+          ? commandHandle
+          : {
+              exitCode: 0,
+              stdout: command.includes("/usr/bin/head -c") ? "last output" : "",
+              stderr: "",
+            },
+    );
+    sandbox.commands.list.mockResolvedValueOnce([]);
+    const onStdout = vi.fn();
+
+    const process = await handle.startCommand("npm run dev", {
+      cwd: `${E2B_PROJECT_HOME}/quillra-preview`,
+      timeoutMs: 0,
+      onStdout,
+    });
+
+    await expect(process.wait()).rejects.toMatchObject({
+      name: "E2BProcessMonitorError",
+      reason: "process-missing",
+      stdout: "last output",
+      causeName: "Error",
+    } satisfies Partial<E2BProcessMonitorError>);
+    expect(onStdout).toHaveBeenCalledWith("last output");
+    expect(sandbox.commands.connect).not.toHaveBeenCalled();
   });
 
   it("rejects an output cap that is too large before starting the command", async () => {

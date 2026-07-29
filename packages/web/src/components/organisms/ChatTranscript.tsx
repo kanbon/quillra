@@ -38,7 +38,11 @@ function ThinkingCard({
   const { t } = useT();
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
-  const [expanded, setExpanded] = useState(true);
+  // Historical thoughts hydrate collapsed. Only a thought that is actively
+  // streaming opens automatically and receives the short post-stream grace
+  // period, avoiding a large expand/collapse layout jump on every reload.
+  const [expanded, setExpanded] = useState(Boolean(streaming));
+  const wasStreaming = useRef(Boolean(streaming));
   // Remember whether the user manually clicked the row after the thought
   // finished, if they did, we respect that choice and never auto-collapse
   // (or re-expand) behind their back.
@@ -54,9 +58,15 @@ function ThinkingCard({
   // Auto-collapse shortly after the thought ends. Gives the user a beat
   // to notice the final content before the row quietly folds away.
   useEffect(() => {
-    if (streaming) return;
-    if (userToggled) return;
-    const timer = setTimeout(() => setExpanded(false), THINKING_AUTO_COLLAPSE_MS);
+    if (streaming) {
+      wasStreaming.current = true;
+      return;
+    }
+    if (!wasStreaming.current || userToggled) return;
+    const timer = setTimeout(() => {
+      wasStreaming.current = false;
+      setExpanded(false);
+    }, THINKING_AUTO_COLLAPSE_MS);
     return () => clearTimeout(timer);
   }, [streaming, userToggled]);
 
@@ -350,6 +360,28 @@ export function ChatTranscript({ lines, busy, onSend, onAskOther }: Props) {
               onPick={(ans) => onSend?.(ans)}
               onPickOther={() => onAskOther?.(entry.id)}
             />
+          );
+        }
+        if (entry.kind === "error") {
+          return (
+            <output
+              key={entry.id}
+              className="flex animate-[fadeIn_0.2s_ease-out] items-start gap-2.5 rounded-xl border border-red-200/80 bg-red-50/70 px-3 py-2.5 text-[12px] leading-relaxed text-red-700"
+            >
+              <svg
+                className="mt-0.5 h-4 w-4 shrink-0 text-red-500"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.8}
+                strokeLinecap="round"
+                aria-hidden
+              >
+                <circle cx="10" cy="10" r="8" />
+                <path d="M10 6v4M10 13.5h.01" />
+              </svg>
+              <span>{entry.message}</span>
+            </output>
           );
         }
         return null;

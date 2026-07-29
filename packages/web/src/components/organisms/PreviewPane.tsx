@@ -46,8 +46,8 @@ export function PreviewPane({
   // Poll the preview status only while the iframe is actually shown.
   // Saves a request/5s on the empty state where the user hasn't clicked
   // Start Preview yet.
-  const status = usePreviewStatus(projectId, hasFrame);
-  const errored = isPreviewErrored(status);
+  const status = usePreviewStatus(projectId, hasFrame, src);
+  const errored = !starting && isPreviewErrored(status);
   const [bannerDismissed, setBannerDismissed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("quillra:preview-banner-dismissed") === "1";

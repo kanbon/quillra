@@ -60,7 +60,7 @@ export function EditorPage() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [mobilePreviewOpen, setMobilePreviewOpen] = useState(false);
-  const initialConvSelected = useRef(false);
+  const initialConvSelectedForProject = useRef<string | null>(null);
   const composerRef = useRef<ChatComposerHandle>(null);
 
   useEditorPaste(composerRef);
@@ -101,13 +101,19 @@ export function EditorPage() {
       }>(`/api/team/projects/${id}/members`),
   });
 
-  // Auto-select the most recent conversation on initial load only
+  // Resume this viewer's most recent conversation on initial load. Team
+  // members can inspect somebody else's chat from History, but opening the
+  // editor must never silently resume a colleague's or client's agent session.
   useEffect(() => {
-    if (convList?.conversations?.length && !initialConvSelected.current) {
-      initialConvSelected.current = true;
-      setConversationId(convList.conversations[0].id);
+    if (!convList || !("user" in me) || initialConvSelectedForProject.current === id) {
+      return;
     }
-  }, [convList]);
+    const latestOwnConversation = convList.conversations.find(
+      (conversation) => conversation.createdByUserId === me.user.id,
+    );
+    initialConvSelectedForProject.current = id;
+    setConversationId(latestOwnConversation?.id ?? null);
+  }, [convList, id, me]);
 
   const {
     previewSrc,
@@ -115,6 +121,7 @@ export function EditorPage() {
     previewLabel,
     previewError,
     startLabel,
+    applyLatestChanges,
     refreshPreview,
     startPreview,
     starting,
@@ -148,7 +155,7 @@ export function EditorPage() {
   const { lines, busy, error, send } = useProjectChat(
     id || undefined,
     conversationId,
-    refreshPreview,
+    applyLatestChanges,
     handleConversationCreated,
     handleMigrationComplete,
   );

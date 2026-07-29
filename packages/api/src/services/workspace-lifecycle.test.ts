@@ -9,15 +9,25 @@ type PreviewExitResult = {
   stderr: string;
 };
 
+type PreviewMonitorFailure = {
+  reason: "process-missing" | "monitor-unavailable";
+  message: string;
+  stdout: string;
+  stderr: string;
+  causeName: string;
+};
+
 type PreviewStartOptions = {
   setupCommand?: string;
   setupCacheKey?: string;
+  setupTimeoutMs?: number;
   command: string;
   port: number;
   defaultNodeRuntime?: boolean;
   onSetupStart?: () => void | Promise<void>;
   onSetupComplete?: () => void | Promise<void>;
   onExit?: (result: PreviewExitResult) => void | Promise<void>;
+  onMonitorFailure?: (failure: PreviewMonitorFailure) => void | Promise<void>;
 };
 
 function previewStartResult(port: number, pid = 42) {
@@ -93,6 +103,7 @@ import {
 } from "./preview-capability.js";
 import { getPreviewStatus, markPreviewPortActive } from "./preview-status.js";
 import { getPreviewUpstream } from "./preview-upstream.js";
+import { assertProjectGithubBinding } from "./project-github-token.js";
 import {
   beginProjectWriterAuthorizationChange,
   cancelAndWaitForProjectWriters,
@@ -124,6 +135,8 @@ beforeEach(() => {
   process.env.WORKSPACE_DIR = path.join(tempDirectory, "workspaces");
   vi.stubEnv("BETTER_AUTH_SECRET", "workspace-lifecycle-test-secret");
   cloneMock.mockReset();
+  vi.mocked(assertProjectGithubBinding).mockReset();
+  vi.mocked(assertProjectGithubBinding).mockResolvedValue(undefined);
   for (const mock of Object.values(e2bRuntimeMock)) mock.mockClear();
 });
 
@@ -194,6 +207,84 @@ describe("project workspace lifecycle", () => {
     expect(fs.existsSync(path.join(repoPath, ".git"))).toBe(true);
     expect(fs.readFileSync(path.join(repoPath, "package.json"), "utf8")).toContain("fresh");
     expect(e2bRuntimeMock.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("shares an exact concurrent repository preparation but refreshes again later", async () => {
+    const projectId = "coalesced-repository-preparation";
+    cleanupProjectIds.add(projectId);
+    const repoPath = projectRepoPath(projectId);
+    const cloneStarted = deferred<void>();
+    const releaseClone = deferred<void>();
+    let cloneCount = 0;
+
+    cloneMock.mockImplementation(async (_url: string, destination: string) => {
+      cloneCount += 1;
+      if (cloneCount === 1) {
+        cloneStarted.resolve();
+        await releaseClone.promise;
+      }
+      fs.mkdirSync(path.join(destination, ".git", "info"), { recursive: true });
+    });
+
+    const preparations = Array.from({ length: 4 }, () =>
+      ensureRepoCloned(projectId, "example/site", "main", {
+        expectedBindingGeneration: 1,
+      }),
+    );
+
+    await cloneStarted.promise;
+    expect(cloneMock).toHaveBeenCalledOnce();
+    releaseClone.resolve();
+
+    await expect(Promise.all(preparations)).resolves.toEqual([
+      repoPath,
+      repoPath,
+      repoPath,
+      repoPath,
+    ]);
+    expect(cloneMock).toHaveBeenCalledOnce();
+    expect(assertProjectGithubBinding).toHaveBeenCalledTimes(5);
+
+    fs.rmSync(repoPath, { recursive: true, force: true });
+    await expect(
+      ensureRepoCloned(projectId, "example/site", "main", {
+        expectedBindingGeneration: 1,
+      }),
+    ).resolves.toBe(repoPath);
+
+    expect(cloneMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks the repository binding for callers joining an in-flight preparation", async () => {
+    const projectId = "coalesced-repository-binding-fence";
+    cleanupProjectIds.add(projectId);
+    const cloneStarted = deferred<void>();
+    const releaseClone = deferred<void>();
+
+    cloneMock.mockImplementation(async (_url: string, destination: string) => {
+      cloneStarted.resolve();
+      await releaseClone.promise;
+      fs.mkdirSync(path.join(destination, ".git", "info"), { recursive: true });
+    });
+
+    const firstPreparation = ensureRepoCloned(projectId, "example/site", "main", {
+      expectedBindingGeneration: 1,
+    });
+    const joinedPreparation = ensureRepoCloned(projectId, "example/site", "main", {
+      expectedBindingGeneration: 1,
+    });
+
+    await cloneStarted.promise;
+    expect(cloneMock).toHaveBeenCalledOnce();
+    vi.mocked(assertProjectGithubBinding).mockRejectedValue(
+      new Error("The project repository binding changed."),
+    );
+    releaseClone.resolve();
+
+    await expect(Promise.all([firstPreparation, joinedPreparation])).rejects.toThrow(
+      "repository binding changed",
+    );
+    expect(cloneMock).toHaveBeenCalledOnce();
   });
 
   it("waits for repository work, blocks new work, and removes the whole project directory", async () => {
@@ -679,6 +770,7 @@ describe("project workspace lifecycle", () => {
     expect(lifecycleStages).toEqual(["cloning", "installing", "starting"]);
     const options = e2bRuntimeMock.startPreview.mock.calls[0]?.[1];
     expect(options?.defaultNodeRuntime).toBe(true);
+    expect(options?.setupTimeoutMs).toBe(30 * 60_000);
     expect(options?.setupCommand).toContain("'corepack' 'pnpm' 'install' '--prod=false'");
     expect(options?.setupCacheKey).toMatch(/^v\d+:[a-f0-9]{64}$/);
     expect(options?.command).not.toContain("--include=dev");
@@ -686,8 +778,37 @@ describe("project workspace lifecycle", () => {
       /export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS='p-[a-f0-9]{40}\.preview\.example\.test'/,
     );
     expect(options?.command).toContain("exec ");
+    expect(getPreviewStatus(projectId).mode).toBe("cold");
 
     await clearProjectRepoClone(projectId);
+  });
+
+  it("marks a cached preview wake as warm when dependency setup is skipped", async () => {
+    const projectId = "preview-warm-cache";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoPath, "package.json"),
+      JSON.stringify({
+        scripts: { dev: "vite --host 0.0.0.0" },
+        devDependencies: { vite: "latest" },
+      }),
+    );
+    e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
+      // A setup-cache hit calls only completion; onSetupStart is reserved for
+      // a real install.
+      await options.onSetupComplete?.();
+      return previewStartResult(options.port);
+    });
+
+    await startDevPreview(projectId, repoPath, null, 1);
+
+    expect(getPreviewStatus(projectId)).toMatchObject({
+      stage: "starting",
+      mode: "warm",
+    });
   });
 
   it("coalesces concurrent preview starts instead of restarting the same project twice", async () => {
@@ -977,6 +1098,48 @@ describe("project workspace lifecycle", () => {
       expect(getPreviewUpstream(projectId, port)).toBeNull();
       expect(resolveActivePreviewCapabilityToken(capability.token).ok).toBe(false);
       expect(resolveReservedPreviewCapabilityToken(capability.token).ok).toBe(true);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("shows a monitor failure without fabricating a dev-server exit code", async () => {
+    const projectId = "preview-monitor-failure";
+    cleanupProjectIds.add(projectId);
+    ensureProjectRow(projectId);
+    const repoPath = projectRepoPath(projectId);
+    fs.mkdirSync(repoPath, { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "index.html"), "preview");
+
+    let onMonitorFailure: PreviewStartOptions["onMonitorFailure"];
+    e2bRuntimeMock.startPreview.mockImplementationOnce(async (_fence, options) => {
+      onMonitorFailure = options.onMonitorFailure;
+      return previewStartResult(options.port);
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Preview is still starting"));
+
+    try {
+      await startDevPreview(projectId, repoPath, "npm run dev", 1);
+      await onMonitorFailure?.({
+        reason: "monitor-unavailable",
+        message: "The secure preview connection was lost.",
+        stdout: "",
+        stderr: "",
+        causeName: "ConnectError",
+      });
+
+      expect(getPreviewProcessInfo(projectId)).toEqual({
+        running: false,
+        pid: 42,
+        exitCode: null,
+        signalCode: null,
+      });
+      expect(getPreviewStatus(projectId)).toMatchObject({
+        stage: "error",
+        message: "The secure preview connection was lost.",
+      });
     } finally {
       fetchSpy.mockRestore();
     }

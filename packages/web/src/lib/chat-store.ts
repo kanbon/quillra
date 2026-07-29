@@ -40,7 +40,8 @@ export type ChatLine =
   // A structured multiple-choice question from the agent. The frontend
   // always appends an "Other" option that bypasses the options and focuses
   // the composer input, never sent from the server.
-  | { id: string; kind: "ask"; question: string; options: string[] };
+  | { id: string; kind: "ask"; question: string; options: string[] }
+  | { id: string; kind: "error"; message: string };
 
 type Listener = () => void;
 type FocusComposerListener = () => void;
@@ -60,6 +61,9 @@ type Internal = {
   ws: WebSocket | null;
   thinkingStart: number;
   historyLoaded: boolean;
+  historyLoading: Promise<void> | null;
+  historyGeneration: number;
+  historyReloadRequested: boolean;
   /** Wall-clock start of the current turn. Set when `sendMessage` opens
    *  the WS so we can fall back to a locally-measured duration if the
    *  server's `done` payload is missing `durationMs`. */
@@ -92,7 +96,15 @@ function getSnap(k: string): ChatSnapshot {
 function getInternal(k: string): Internal {
   let i = internals.get(k);
   if (!i) {
-    i = { ws: null, thinkingStart: 0, historyLoaded: false, turnStartedAt: 0 };
+    i = {
+      ws: null,
+      thinkingStart: 0,
+      historyLoaded: false,
+      historyLoading: null,
+      historyGeneration: 0,
+      historyReloadRequested: false,
+      turnStartedAt: 0,
+    };
     internals.set(k, i);
   }
   return i;
@@ -183,73 +195,255 @@ export function clearNewChat(projectId: string) {
   if (subs) for (const fn of subs) fn();
 }
 
-export async function loadHistory(projectId: string, conversationId: string | null) {
+type StoredMessage = {
+  id: number;
+  role: string;
+  content: string;
+  conversationId?: string;
+  createdAt: number;
+  attachments?: { path: string; originalName: string; kind?: "image" | "content" }[];
+};
+
+type StoredEvent = {
+  id: string;
+  cursor: number;
+  turnId: string;
+  sequence: number;
+  kind: string;
+  content: string | null;
+  payload: Record<string, unknown> | null;
+  createdAt: number;
+};
+
+type HistoryResponse = {
+  messages: StoredMessage[];
+  events: StoredEvent[];
+  nextCursor: number;
+  hasMore: boolean;
+};
+
+function mapAttachments(projectId: string, raw: unknown): Attachment[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const attachments: Attachment[] = [];
+  for (const value of raw) {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("path" in value) ||
+      typeof value.path !== "string" ||
+      !("originalName" in value) ||
+      typeof value.originalName !== "string"
+    ) {
+      continue;
+    }
+    const suppliedKind =
+      "kind" in value && (value.kind === "image" || value.kind === "content")
+        ? value.kind
+        : undefined;
+    const ext = value.path.split(".").pop()?.toLowerCase() ?? "";
+    const kind =
+      suppliedKind ??
+      (["jpg", "jpeg", "png", "webp", "gif", "svg", "avif"].includes(ext) ? "image" : "content");
+    attachments.push({
+      path: value.path,
+      originalName: value.originalName,
+      kind,
+      previewUrl:
+        kind === "image"
+          ? `/api/projects/${projectId}/file?path=${encodeURIComponent(value.path)}`
+          : undefined,
+    });
+  }
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function finitePayloadNumber(payload: Record<string, unknown> | null, keyName: string): number {
+  const value = payload?.[keyName];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function mapStoredHistory(
+  projectId: string,
+  messages: StoredMessage[],
+  events: StoredEvent[],
+): { lines: ChatLine[]; cumulativeCostUsd: number } {
+  const lines: ChatLine[] = [];
+  const firstEventAt = events[0]?.createdAt;
+  const legacyCutoff = firstEventAt === undefined ? undefined : firstEventAt - 5_000;
+
+  // Conversations created before the durable event ledger retain their plain
+  // user/assistant history. Once rich events begin, they become authoritative
+  // so compatibility message rows do not render a second copy.
+  for (const message of messages) {
+    if (legacyCutoff !== undefined && message.createdAt >= legacyCutoff) continue;
+    if (message.role === "user") {
+      const attachments = mapAttachments(projectId, message.attachments);
+      lines.push({
+        id: `legacy-${message.id}`,
+        kind: "user",
+        text: message.content,
+        ...(attachments ? { attachments } : {}),
+      });
+    } else if (message.role === "assistant") {
+      lines.push({
+        id: `legacy-${message.id}`,
+        kind: "assistant",
+        text: message.content,
+        streaming: false,
+      });
+    }
+  }
+
+  const turnsWithCheckpoint = new Set(
+    events.filter((event) => event.kind === "checkpoint").map((event) => event.turnId),
+  );
+  let cumulativeCostUsd = 0;
+  for (const event of events) {
+    const content = event.content ?? "";
+    if (event.kind === "user") {
+      // A later user message answers/dismisses any previous inline question or
+      // continue affordance. Keep the historical work, not stale buttons.
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        if (lines[index]?.kind === "ask" || lines[index]?.kind === "continue_prompt") {
+          lines.splice(index, 1);
+        }
+      }
+      const attachments = mapAttachments(projectId, event.payload?.attachments);
+      lines.push({
+        id: event.id,
+        kind: "user",
+        text: content,
+        ...(attachments ? { attachments } : {}),
+      });
+    } else if (event.kind === "assistant") {
+      lines.push({ id: event.id, kind: "assistant", text: content, streaming: false });
+    } else if (event.kind === "thinking") {
+      lines.push({
+        id: event.id,
+        kind: "thinking",
+        text: content,
+        durationMs: finitePayloadNumber(event.payload, "durationMs"),
+        streaming: false,
+      });
+    } else if (event.kind === "tool_call") {
+      if (content) lines.push({ id: event.id, kind: "tool_call", label: content });
+    } else if (event.kind === "tool") {
+      if (content) lines.push({ id: event.id, kind: "tool", detail: content });
+    } else if (event.kind === "ask") {
+      const options = Array.isArray(event.payload?.options)
+        ? event.payload.options.filter((option): option is string => typeof option === "string")
+        : [];
+      lines.push({ id: event.id, kind: "ask", question: content, options });
+    } else if (event.kind === "continue_prompt") {
+      lines.push({ id: event.id, kind: "continue_prompt" });
+    } else if (event.kind === "checkpoint") {
+      const costUsd = finitePayloadNumber(event.payload, "costUsd");
+      cumulativeCostUsd += costUsd;
+      lines.push({
+        id: event.id,
+        kind: "checkpoint",
+        costUsd,
+        durationMs: finitePayloadNumber(event.payload, "durationMs"),
+        cumulativeCostUsd,
+      });
+    } else if (event.kind === "done" && !turnsWithCheckpoint.has(event.turnId)) {
+      // Paused/error turns consume tokens but intentionally have no visual
+      // "Done" card. Carry their cost into the next visible cumulative total.
+      cumulativeCostUsd += finitePayloadNumber(event.payload, "costUsd");
+    } else if (event.kind === "error") {
+      lines.push({
+        id: event.id,
+        kind: "error",
+        message: content || "The assistant could not complete this turn.",
+      });
+    }
+  }
+  return { lines, cumulativeCostUsd };
+}
+
+export async function loadHistory(
+  projectId: string,
+  conversationId: string | null,
+  options: { force?: boolean } = {},
+) {
+  if (!conversationId) return;
   const k = key(projectId, conversationId);
   const internal = getInternal(k);
-  if (internal.historyLoaded) return;
-  internal.historyLoaded = true;
-  try {
-    const query = conversationId ? `?conversationId=${conversationId}` : "";
-    const res = await apiJson<{
-      messages: {
-        id: number;
-        role: string;
-        content: string;
-        conversationId?: string;
-        createdAt: number;
-        attachments?: { path: string; originalName: string; kind?: "image" | "content" }[];
-      }[];
-    }>(`/api/projects/${projectId}/messages${query}`);
-    const mapped: ChatLine[] = [];
-    for (const m of res.messages) {
-      if (m.role === "user") {
-        const atts: Attachment[] | undefined = m.attachments?.map((a) => {
-          // If kind isn't stored, infer from extension
-          const ext = a.path.split(".").pop()?.toLowerCase() ?? "";
-          const inferredKind: "image" | "content" =
-            a.kind ??
-            (["jpg", "jpeg", "png", "webp", "gif", "svg", "avif"].includes(ext)
-              ? "image"
-              : "content");
-          return {
-            path: a.path,
-            originalName: a.originalName,
-            kind: inferredKind,
-            previewUrl:
-              inferredKind === "image"
-                ? `/api/projects/${projectId}/file?path=${encodeURIComponent(a.path)}`
-                : undefined,
-          };
+  if (internal.historyLoading) {
+    if (options.force) internal.historyReloadRequested = true;
+    return internal.historyLoading;
+  }
+  if (internal.historyLoaded && !options.force) return;
+  if (getSnap(k).busy && options.force) return;
+
+  const historyGeneration = internal.historyGeneration;
+  const request = (async () => {
+    try {
+      let after = 0;
+      let messages: StoredMessage[] = [];
+      const events: StoredEvent[] = [];
+      let complete = false;
+      for (let page = 0; page < 100; page += 1) {
+        const query = new URLSearchParams({
+          conversationId,
+          after: String(after),
+          limit: "500",
         });
-        mapped.push({
-          id: `h-${m.id}`,
-          kind: "user",
-          text: m.content,
-          ...(atts && atts.length > 0 ? { attachments: atts } : {}),
-        });
-      } else if (m.role === "assistant") {
-        mapped.push({ id: `h-${m.id}`, kind: "assistant", text: m.content, streaming: false });
+        const response = await apiJson<HistoryResponse>(
+          `/api/projects/${projectId}/messages?${query.toString()}`,
+        );
+        if (page === 0) messages = response.messages;
+        events.push(...response.events);
+        if (!response.hasMore) {
+          complete = true;
+          break;
+        }
+        if (!Number.isSafeInteger(response.nextCursor) || response.nextCursor <= after) {
+          throw new Error("Chat history cursor did not advance.");
+        }
+        after = response.nextCursor;
       }
-    }
-    update(k, { lines: mapped, conversationId });
-    // Seed the "this chat" running total from the backend so the cost
-    // checkpoint card doesn't reset to $0 on every reload. Best-effort: if
-    // it fails, we just start counting from zero for this session.
-    if (conversationId) {
+      if (!complete) throw new Error("Chat history exceeds the supported page limit.");
+      if (historyGeneration !== internal.historyGeneration) return;
+
+      const mapped = mapStoredHistory(projectId, messages, events);
+      let cumulativeCostUsd = Math.max(mapped.cumulativeCostUsd, getSnap(k).cumulativeCostUsd);
       try {
         const totalRes = await apiJson<{ totalCostUsd: number }>(
           `/api/projects/${projectId}/conversations/${conversationId}/cost-total`,
         );
-        if (typeof totalRes.totalCostUsd === "number") {
-          update(k, { cumulativeCostUsd: totalRes.totalCostUsd });
+        if (typeof totalRes.totalCostUsd === "number" && Number.isFinite(totalRes.totalCostUsd)) {
+          cumulativeCostUsd = Math.max(cumulativeCostUsd, totalRes.totalCostUsd);
         }
       } catch {
-        /* non-fatal */
+        /* rich done events remain a reliable display fallback */
+      }
+      if (historyGeneration !== internal.historyGeneration) return;
+      internal.historyLoaded = true;
+      update(k, {
+        lines: mapped.lines,
+        conversationId,
+        cumulativeCostUsd,
+        error: null,
+      });
+    } catch {
+      if (historyGeneration === internal.historyGeneration) {
+        update(k, { error: "Could not load history" });
       }
     }
-  } catch {
-    update(k, { error: "Could not load history" });
-  }
+  })();
+
+  const completion: Promise<void> = request
+    .finally(() => {
+      if (internal.historyLoading === completion) internal.historyLoading = null;
+    })
+    .then(async () => {
+      if (!internal.historyReloadRequested) return;
+      internal.historyReloadRequested = false;
+      await loadHistory(projectId, conversationId, { force: true });
+    });
+  internal.historyLoading = completion;
+  return completion;
 }
 
 function finalizeThinking(lines: ChatLine[], internal: Internal): ChatLine[] {
@@ -290,6 +484,10 @@ export function sendMessage(
   const snap = getSnap(k);
   const internal = getInternal(k);
   if (snap.busy) return;
+  // Any response already in flight describes the transcript before this
+  // optimistic turn. Let it finish for transport cleanup, but never allow it
+  // to replace live content; `done` queues one authoritative reload.
+  internal.historyGeneration += 1;
 
   const userLine: ChatLine = {
     id: crypto.randomUUID(),
@@ -332,6 +530,11 @@ export function sendMessage(
   };
 
   ws.onmessage = (evt) => {
+    // A closed socket can still deliver queued callbacks after the user has
+    // started a replacement turn. Never let those stale frames mutate the
+    // replacement socket's transcript.
+    if (internal.ws !== ws) return;
+
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(String(evt.data));
@@ -348,7 +551,14 @@ export function sendMessage(
       const oldK = k;
       const newK = key(projectId, newConvId);
       const currentSnap = getSnap(oldK);
-      snapshots.set(newK, { ...currentSnap, conversationId: newConvId });
+      const userEventId =
+        typeof data.userEventId === "string" && data.userEventId ? data.userEventId : null;
+      const lines = userEventId
+        ? currentSnap.lines.map((line) =>
+            line.kind === "user" && line.id === userLine.id ? { ...line, id: userEventId } : line,
+          )
+        : currentSnap.lines;
+      snapshots.set(newK, { ...currentSnap, lines, conversationId: newConvId });
       // Mark history as loaded so the useEffect-driven loadHistory call
       // (triggered by the conversationId change in the parent component)
       // doesn't overwrite the live in-memory state and wipe attachments.
@@ -379,11 +589,26 @@ export function sendMessage(
     })();
     const snap = getSnap(currentK);
 
+    if (type === "turn_accepted" && typeof data.userEventId === "string" && data.userEventId) {
+      update(currentK, {
+        lines: snap.lines.map((line) =>
+          line.kind === "user" && line.id === userLine.id
+            ? { ...line, id: data.userEventId as string }
+            : line,
+        ),
+      });
+    }
+
     if (type === "thinking_start") {
       let updated = finalizeStreaming(snap.lines);
       updated = finalizeThinking(updated, internal);
       internal.thinkingStart = Date.now();
-      updated.push({ id: crypto.randomUUID(), kind: "thinking", text: "", streaming: true });
+      updated.push({
+        id: typeof data.eventId === "string" && data.eventId ? data.eventId : crypto.randomUUID(),
+        kind: "thinking",
+        text: "",
+        streaming: true,
+      });
       update(currentK, { lines: updated });
     }
 
@@ -399,14 +624,17 @@ export function sendMessage(
     if (type === "stream" && data.text) {
       let updated = finalizeThinking(snap.lines, internal);
       const current = updated[updated.length - 1];
-      if (current?.kind === "assistant" && current.streaming) {
+      const eventId =
+        typeof data.eventId === "string" && data.eventId ? data.eventId : crypto.randomUUID();
+      if (current?.kind === "assistant" && current.streaming && current.id === eventId) {
         updated = [...updated];
         updated[updated.length - 1] = { ...current, text: current.text + (data.text as string) };
       } else {
+        updated = finalizeStreaming(updated);
         updated = [
           ...updated,
           {
-            id: crypto.randomUUID(),
+            id: eventId,
             kind: "assistant" as const,
             text: data.text as string,
             streaming: true,
@@ -436,7 +664,7 @@ export function sendMessage(
       updated = finalizeThinking(updated, internal);
       updated = updated.filter((l) => l.kind !== "tool_active");
       updated.push({
-        id: crypto.randomUUID(),
+        id: typeof data.eventId === "string" && data.eventId ? data.eventId : crypto.randomUUID(),
         kind: "tool_call",
         label: data.label,
       });
@@ -447,7 +675,11 @@ export function sendMessage(
       let updated: ChatLine[] = snap.lines.filter((l) => l.kind !== "tool_active");
       updated = finalizeStreaming(updated);
       updated = finalizeThinking(updated, internal);
-      updated.push({ id: crypto.randomUUID(), kind: "tool", detail: data.detail as string });
+      updated.push({
+        id: typeof data.eventId === "string" && data.eventId ? data.eventId : crypto.randomUUID(),
+        kind: "tool",
+        detail: data.detail as string,
+      });
       update(currentK, { lines: updated });
     }
 
@@ -456,7 +688,14 @@ export function sendMessage(
       // Surface a visible "Continue" button so the user can resume with
       // one click instead of typing.
       update(currentK, {
-        lines: [...snap.lines, { id: crypto.randomUUID(), kind: "continue_prompt" }],
+        lines: [
+          ...snap.lines,
+          {
+            id:
+              typeof data.eventId === "string" && data.eventId ? data.eventId : crypto.randomUUID(),
+            kind: "continue_prompt",
+          },
+        ],
       });
     }
 
@@ -496,9 +735,13 @@ export function sendMessage(
       const durationMs = serverMs > 0 ? serverMs : localMs;
       const nextCumulative = snap.cumulativeCostUsd + costUsd;
       const pausedForQuestion = data.pausedForQuestion === true;
-      if (!pausedForQuestion) {
+      const checkpointEventId =
+        typeof data.checkpointEventId === "string" && data.checkpointEventId
+          ? data.checkpointEventId
+          : null;
+      if (!pausedForQuestion && checkpointEventId) {
         updated.push({
-          id: crypto.randomUUID(),
+          id: checkpointEventId,
           kind: "checkpoint",
           costUsd,
           durationMs,
@@ -510,13 +753,17 @@ export function sendMessage(
       // Cumulative cost still counts even when we don't render the card,
       // so the next checkpoint picks up an accurate running total.
       update(currentK, { lines: updated, busy: false, cumulativeCostUsd: nextCumulative });
-      // Always reload the preview when streaming finishes, the agent
-      // may have edited files and the iframe should reflect the result.
-      onRefreshPreview?.();
+      const completedConversationId = getSnap(currentK).conversationId;
+      if (completedConversationId) {
+        void loadHistory(projectId, completedConversationId, { force: true });
+      }
       ws.close();
     }
 
     if (type === "refresh_preview") {
+      // This is intentionally separate from `done`: the server only emits it
+      // when the durable workspace may have changed, and the editor replaces
+      // the isolated E2B snapshot instead of merely reloading stale bytes.
       onRefreshPreview?.();
     }
 
@@ -529,26 +776,27 @@ export function sendMessage(
 
     if (type === "error") {
       const errMsg = (data.message as string) ?? "Error";
-      const last = snap.lines[snap.lines.length - 1];
-      let lines: ChatLine[];
-      if (last?.kind === "assistant" && last.streaming) {
-        lines = [
-          ...snap.lines.slice(0, -1),
-          { ...last, streaming: false, text: `${last.text}\n\n_${errMsg}_` },
-        ];
-      } else {
-        lines = [
-          ...snap.lines,
-          { id: crypto.randomUUID(), kind: "assistant", text: `_${errMsg}_`, streaming: false },
-        ];
-      }
-      internal.ws = null;
-      update(currentK, { lines, busy: false, error: errMsg });
-      ws.close();
+      let lines = finalizeStreaming(snap.lines);
+      lines = finalizeThinking(lines, internal);
+      lines = lines.filter((line) => line.kind !== "tool_active");
+      lines.push({
+        id: typeof data.eventId === "string" && data.eventId ? data.eventId : crypto.randomUUID(),
+        kind: "error",
+        message: errMsg,
+      });
+      const durableTurnContinues = typeof data.turnId === "string" && data.turnId.length > 0;
+      if (!durableTurnContinues) internal.ws = null;
+      update(currentK, {
+        lines,
+        busy: durableTurnContinues,
+        error: errMsg,
+      });
+      if (!durableTurnContinues) ws.close();
     }
   };
 
   ws.onerror = () => {
+    if (internal.ws !== ws) return;
     const currentK = (() => {
       for (const [ik, iv] of internals) {
         if (iv === internal) return ik;

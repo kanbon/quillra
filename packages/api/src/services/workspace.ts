@@ -17,7 +17,12 @@ import {
   E2B_PREVIEW_TARGET_MIN_PORT,
   isE2BPreviewRelayUnavailable,
 } from "./e2b-preview-relay.js";
-import { type E2BProjectFence, E2BProjectFenceError, getDefaultE2BRuntime } from "./e2b-runtime.js";
+import {
+  type E2BPreviewMonitorFailure,
+  type E2BProjectFence,
+  E2BProjectFenceError,
+  getDefaultE2BRuntime,
+} from "./e2b-runtime.js";
 import { detectFromManifest, getFrameworkById } from "./framework-registry.js";
 import {
   type GitCommitIdentity,
@@ -71,7 +76,7 @@ const previewProcesses = new Map<
 const activePreviewLaunches = new Map<string, symbol>();
 const lastPreviewExits = new Map<
   string,
-  { launchToken: symbol; pid: number | null; exitCode: number }
+  { launchToken: symbol; pid: number | null; exitCode: number | null }
 >();
 type PreviewStartResult = { port: number; label: string };
 const previewStartQueues = new Map<string, Promise<PreviewStartResult>>();
@@ -708,6 +713,10 @@ function previewExitError(result: E2BCommandResult): Error {
   return new Error(`The E2B dev server exited during startup with code ${result.exitCode}.`);
 }
 
+function previewMonitorError(failure: E2BPreviewMonitorFailure): Error {
+  return new Error(failure.message);
+}
+
 function finalizeUnexpectedPreviewExit(
   projectId: string,
   launchToken: symbol,
@@ -731,6 +740,29 @@ function finalizeUnexpectedPreviewExit(
   // fail-closed while the boot document can still display the real error.
   deactivatePreviewPort(projectId, port);
   setPreviewStatus(projectId, "error", `Dev server exited with code ${result.exitCode}`);
+  return true;
+}
+
+function finalizePreviewMonitorFailure(
+  projectId: string,
+  launchToken: symbol,
+  port: number,
+  pid: number | null,
+  failure: E2BPreviewMonitorFailure,
+): boolean {
+  if (activePreviewLaunches.get(projectId) !== launchToken) return false;
+
+  activePreviewLaunches.delete(projectId);
+  const current = previewProcesses.get(projectId);
+  if (current?.launchToken === launchToken) previewProcesses.delete(projectId);
+  lastPreviewExits.set(projectId, {
+    launchToken,
+    pid: current?.pid ?? pid,
+    exitCode: null,
+  });
+  unregisterPreviewUpstream(projectId, port);
+  deactivatePreviewPort(projectId, port);
+  setPreviewStatus(projectId, "error", failure.message);
   return true;
 }
 
@@ -985,6 +1017,7 @@ function sweepStaleGitLocks(repoPath: string): void {
  * as soon as the next op attaches.
  */
 const repoOpQueue = new Map<string, Promise<unknown>>();
+const repoPreparationRequests = new Map<string, Promise<string>>();
 type RepoLockContext = {
   projectId: string;
   active: boolean;
@@ -1161,7 +1194,7 @@ export async function authenticatedGitForProject(
   return simpleGitForNetwork(repoPath, access.token);
 }
 
-export async function ensureRepoCloned(
+async function prepareProjectRepository(
   projectId: string,
   githubRepoFullName: string,
   branch: string,
@@ -1216,6 +1249,61 @@ export async function ensureRepoCloned(
     // Register .quillra-temp/ with git's local exclude so chat
     // attachments never show up in a diff, a status, or a commit.
     ensureQuillraTempIgnored(dir);
+  });
+  return dir;
+}
+
+/**
+ * Editor load makes several independent requests that all need the same
+ * repository snapshot. Share only concurrently active preparations for the
+ * exact project binding; settled requests are discarded so later calls still
+ * fetch normally.
+ */
+export async function ensureRepoCloned(
+  projectId: string,
+  githubRepoFullName: string,
+  branch: string,
+  opts: {
+    /** Monotonic binding epoch captured with the caller's project row. */
+    expectedBindingGeneration: number;
+  },
+): Promise<string> {
+  assertProjectWorkspaceAvailable(projectId);
+  const requestKey = JSON.stringify([
+    projectId,
+    githubRepoFullName,
+    branch,
+    opts.expectedBindingGeneration,
+  ]);
+
+  let request = repoPreparationRequests.get(requestKey);
+  if (!request) {
+    request = prepareProjectRepository(projectId, githubRepoFullName, branch, opts);
+    repoPreparationRequests.set(requestKey, request);
+    request.then(
+      () => {
+        if (repoPreparationRequests.get(requestKey) === request) {
+          repoPreparationRequests.delete(requestKey);
+        }
+      },
+      () => {
+        if (repoPreparationRequests.get(requestKey) === request) {
+          repoPreparationRequests.delete(requestKey);
+        }
+      },
+    );
+  }
+
+  const dir = await request;
+
+  // Each joined caller still gets its own final workspace and binding fence.
+  // This prevents a deletion or repository rebind that happened while the
+  // shared network request was running from leaking the prepared workspace.
+  assertProjectWorkspaceAvailable(projectId);
+  await assertProjectGithubBinding(projectId, {
+    githubRepoFullName,
+    defaultBranch: branch,
+    githubBindingGeneration: opts.expectedBindingGeneration,
   });
   return dir;
 }
@@ -1351,6 +1439,7 @@ async function startDevPreviewNow(
     projectId,
     install ? "cloning" : "starting",
     install ? "Preparing the isolated project" : "Launching dev server",
+    "warm",
   );
 
   clearPreviewLogs(projectId);
@@ -1358,6 +1447,7 @@ async function startDevPreviewNow(
   activePreviewLaunches.set(projectId, launchToken);
   lastPreviewExits.delete(projectId);
   let exitResult: E2BCommandResult | null = null;
+  let monitorFailure: E2BPreviewMonitorFailure | null = null;
   let startedPid: number | null = null;
   try {
     const remote = await getDefaultE2BRuntime().startPreview(fence, {
@@ -1366,7 +1456,7 @@ async function startDevPreviewNow(
       setupCacheKey,
       command,
       port,
-      timeoutMs: 30 * 60_000,
+      setupTimeoutMs: 30 * 60_000,
       defaultNodeRuntime: true,
       onStdout: (chunk) => appendLog(projectId, "stdout", chunk),
       onStderr: (chunk) => appendLog(projectId, "stderr", chunk),
@@ -1376,6 +1466,7 @@ async function startDevPreviewNow(
             projectId,
             "installing",
             `Running ${packageManager.name} install in the E2B preview`,
+            "cold",
           );
         }
       },
@@ -1388,6 +1479,10 @@ async function startDevPreviewNow(
         exitResult = result;
         finalizeUnexpectedPreviewExit(projectId, launchToken, port, startedPid, result);
       },
+      onMonitorFailure: (failure) => {
+        monitorFailure = failure;
+        finalizePreviewMonitorFailure(projectId, launchToken, port, startedPid, failure);
+      },
     });
     startedPid = remote.pid;
     if (exitResult) {
@@ -1396,6 +1491,13 @@ async function startDevPreviewNow(
         lastPreviewExits.set(projectId, { ...recordedExit, pid: remote.pid });
       }
       throw previewExitError(exitResult);
+    }
+    if (monitorFailure) {
+      const recordedExit = lastPreviewExits.get(projectId);
+      if (recordedExit?.launchToken === launchToken && recordedExit.pid === null) {
+        lastPreviewExits.set(projectId, { ...recordedExit, pid: remote.pid });
+      }
+      throw previewMonitorError(monitorFailure);
     }
     if (activePreviewLaunches.get(projectId) !== launchToken) {
       throw new Error("The preview start was stopped.");
@@ -1409,10 +1511,15 @@ async function startDevPreviewNow(
     });
     if (
       exitResult ||
+      monitorFailure ||
       activePreviewLaunches.get(projectId) !== launchToken ||
       previewProcesses.get(projectId)?.launchToken !== launchToken
     ) {
-      throw exitResult ? previewExitError(exitResult) : new Error("The preview start was stopped.");
+      throw exitResult
+        ? previewExitError(exitResult)
+        : monitorFailure
+          ? previewMonitorError(monitorFailure)
+          : new Error("The preview start was stopped.");
     }
     registerPreviewUpstream(projectId, port, remote.access);
   } catch (error) {

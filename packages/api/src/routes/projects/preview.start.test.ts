@@ -186,6 +186,45 @@ describe("preview start", () => {
     expect(workspaceMocks.startDevPreview).toHaveBeenCalledOnce();
   });
 
+  it("queues an AI refresh behind an in-flight start and acknowledges it immediately", async () => {
+    const { app } = await createPreviewApp();
+    let finishInitial: ((result: { port: number; label: string }) => void) | undefined;
+    let finishRefresh: ((result: { port: number; label: string }) => void) | undefined;
+    workspaceMocks.startDevPreview
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishInitial = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishRefresh = resolve;
+        }),
+      );
+
+    const initialRequest = app.request("/projects/project-1/preview", { method: "POST" });
+    await vi.waitFor(() => expect(workspaceMocks.startDevPreview).toHaveBeenCalledOnce());
+
+    const refreshResponse = await app.request("/projects/project-1/preview/refresh", {
+      method: "POST",
+    });
+
+    expect(refreshResponse.status).toBe(202);
+    await expect(refreshResponse.json()).resolves.toMatchObject({
+      accepted: true,
+      url: "https://preview.example.test",
+      previewMode: "host",
+      port: 4_321,
+    });
+    expect(workspaceMocks.startDevPreview).toHaveBeenCalledOnce();
+
+    finishInitial?.({ port: 4_321, label: "Vite" });
+    expect((await initialRequest).status).toBe(200);
+    await vi.waitFor(() => expect(workspaceMocks.startDevPreview).toHaveBeenCalledTimes(2));
+
+    finishRefresh?.({ port: 4_321, label: "Vite" });
+  });
+
   it.each(["cloning", "installing", "starting"] as const)(
     "reports the %s lifecycle stage as in progress before the child process starts",
     async (stage) => {

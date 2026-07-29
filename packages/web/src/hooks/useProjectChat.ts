@@ -34,7 +34,21 @@ export function useProjectChat(
   );
 
   useEffect(() => {
-    if (id && conversationId) loadHistory(id, conversationId);
+    if (!id || !conversationId) return;
+    void loadHistory(id, conversationId);
+    const refreshFromServer = () => {
+      if (document.visibilityState === "visible") {
+        void loadHistory(id, conversationId, { force: true });
+      }
+    };
+    window.addEventListener("focus", refreshFromServer);
+    window.addEventListener("online", refreshFromServer);
+    document.addEventListener("visibilitychange", refreshFromServer);
+    return () => {
+      window.removeEventListener("focus", refreshFromServer);
+      window.removeEventListener("online", refreshFromServer);
+      document.removeEventListener("visibilitychange", refreshFromServer);
+    };
   }, [id, conversationId]);
 
   const send = useCallback(

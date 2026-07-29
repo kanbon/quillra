@@ -1,9 +1,21 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gt } from "drizzle-orm";
 import { Hono } from "hono";
 import { user } from "../../db/auth-schema.js";
 import { db, rawSqlite } from "../../db/index.js";
-import { conversations, messages } from "../../db/schema.js";
+import { chatEvents, conversations, messages } from "../../db/schema.js";
 import { type Variables, memberForProject, requireUser } from "./shared.js";
+
+function parseEventPayload(payload: string | null): Record<string, unknown> | null {
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 export const chatRouter = new Hono<{ Variables: Variables }>()
   .get("/:id/conversations", async (c) => {
@@ -79,34 +91,109 @@ export const chatRouter = new Hono<{ Variables: Variables }>()
     const m = await memberForProject(r.user.id, projectId);
     if (!m) return c.json({ error: "Not found" }, 404);
     const conversationId = c.req.query("conversationId");
+    const rawAfter = c.req.query("after");
+    const parsedAfter = rawAfter === undefined ? 0 : Number.parseInt(rawAfter, 10);
+    const after = Number.isSafeInteger(parsedAfter) && parsedAfter >= 0 ? parsedAfter : 0;
     const projectMessageWhere = conversationId
       ? and(eq(messages.projectId, projectId), eq(messages.conversationId, conversationId))
       : eq(messages.projectId, projectId);
+
+    // A selected conversation is its own pagination boundary, return its full
+    // compatibility history in chronological order. The old project-wide
+    // fallback remains capped because it can span every conversation. Cursor
+    // pages after the first carry only events so legacy rows are not repeated
+    // on every 500-event page.
     const rows =
-      m.role === "client"
-        ? (
-            await db
-              .select({ message: messages })
-              .from(messages)
-              .innerJoin(
-                conversations,
-                and(
-                  eq(conversations.id, messages.conversationId),
-                  eq(conversations.projectId, projectId),
-                ),
+      after > 0
+        ? []
+        : conversationId
+          ? m.role === "client"
+            ? (
+                await db
+                  .select({ message: messages })
+                  .from(messages)
+                  .innerJoin(
+                    conversations,
+                    and(
+                      eq(conversations.id, messages.conversationId),
+                      eq(conversations.projectId, projectId),
+                    ),
+                  )
+                  .where(and(projectMessageWhere, eq(conversations.createdByUserId, r.user.id)))
+                  .orderBy(asc(messages.id))
+              ).map(({ message }) => message)
+            : await db.select().from(messages).where(projectMessageWhere).orderBy(asc(messages.id))
+          : m.role === "client"
+            ? (
+                await db
+                  .select({ message: messages })
+                  .from(messages)
+                  .innerJoin(
+                    conversations,
+                    and(
+                      eq(conversations.id, messages.conversationId),
+                      eq(conversations.projectId, projectId),
+                    ),
+                  )
+                  .where(and(projectMessageWhere, eq(conversations.createdByUserId, r.user.id)))
+                  .orderBy(desc(messages.id))
+                  .limit(100)
               )
-              .where(and(projectMessageWhere, eq(conversations.createdByUserId, r.user.id)))
-              .orderBy(desc(messages.id))
-              .limit(100)
-          ).map(({ message }) => message)
-        : await db
-            .select()
-            .from(messages)
-            .where(projectMessageWhere)
-            .orderBy(desc(messages.id))
-            .limit(100);
+                .map(({ message }) => message)
+                .reverse()
+            : (
+                await db
+                  .select()
+                  .from(messages)
+                  .where(projectMessageWhere)
+                  .orderBy(desc(messages.id))
+                  .limit(100)
+              ).reverse();
+
+    const rawLimit = c.req.query("limit");
+    const parsedLimit = rawLimit === undefined ? null : Number.parseInt(rawLimit, 10);
+    const eventLimit =
+      parsedLimit !== null && Number.isSafeInteger(parsedLimit) && parsedLimit > 0
+        ? Math.min(parsedLimit, 500)
+        : null;
+
+    // Rich events are conversation-scoped. Returning no project-wide event
+    // firehose keeps the existing no-conversation endpoint bounded while a
+    // selected conversation can hydrate completely or catch up from a cursor.
+    const eventWhere = conversationId
+      ? and(
+          eq(chatEvents.projectId, projectId),
+          eq(chatEvents.conversationId, conversationId),
+          gt(chatEvents.id, after),
+        )
+      : null;
+    const allEventRows = await (async () => {
+      if (!eventWhere) return [];
+      if (m.role === "client") {
+        const query = db
+          .select({ event: chatEvents })
+          .from(chatEvents)
+          .innerJoin(
+            conversations,
+            and(
+              eq(conversations.id, chatEvents.conversationId),
+              eq(conversations.projectId, projectId),
+            ),
+          )
+          .where(and(eventWhere, eq(conversations.createdByUserId, r.user.id)))
+          .orderBy(asc(chatEvents.id));
+        const result = eventLimit === null ? await query : await query.limit(eventLimit + 1);
+        return result.map(({ event }) => event);
+      }
+      const query = db.select().from(chatEvents).where(eventWhere).orderBy(asc(chatEvents.id));
+      return eventLimit === null ? await query : await query.limit(eventLimit + 1);
+    })();
+    const selectedEventRows =
+      eventLimit === null ? allEventRows : allEventRows.slice(0, eventLimit);
+    const hasMore = eventLimit !== null && allEventRows.length > selectedEventRows.length;
+
     return c.json({
-      messages: rows.reverse().map((x) => {
+      messages: rows.map((x) => {
         let attachments: { path: string; originalName: string }[] | undefined;
         if (x.attachments) {
           try {
@@ -124,6 +211,18 @@ export const chatRouter = new Hono<{ Variables: Variables }>()
           attachments,
         };
       }),
+      events: selectedEventRows.map((event) => ({
+        id: event.eventId,
+        cursor: event.id,
+        turnId: event.turnId,
+        sequence: event.turnSequence,
+        kind: event.kind,
+        content: event.content,
+        payload: parseEventPayload(event.payload),
+        createdAt: event.createdAt.getTime(),
+      })),
+      nextCursor: selectedEventRows.at(-1)?.id ?? after,
+      hasMore,
     });
   })
   /**

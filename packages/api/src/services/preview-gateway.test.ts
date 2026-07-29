@@ -343,13 +343,14 @@ describe("host preview gateway integration", () => {
     expect(status.status).toBe(200);
     await expect(status.json()).resolves.toEqual({
       stage: "error",
+      mode: "warm",
       label: "Something went wrong",
       detail: "Dev server exited with code 1",
     });
 
     const navigation = await gatewayFetch("/", { headers: { cookie } });
     expect(navigation.status).toBe(200);
-    expect(await navigation.text()).toContain("Starting your preview");
+    expect(await navigation.text()).toContain("Waking your preview");
     const write = await gatewayFetch("/submit", {
       method: "POST",
       headers: { cookie },
@@ -372,7 +373,7 @@ describe("host preview gateway integration", () => {
     });
 
     expect(navigation.status).toBe(200);
-    expect(await navigation.text()).toContain("Starting your preview");
+    expect(await navigation.text()).toContain("Waking your preview");
     expect(getPreviewStatus(PROJECT_ID)).toMatchObject({
       stage: "starting",
       message: "Reconnecting to the preview…",
@@ -389,7 +390,7 @@ describe("host preview gateway integration", () => {
     });
 
     expect(navigation.status).toBe(200);
-    expect(await navigation.text()).toContain("Starting your preview");
+    expect(await navigation.text()).toContain("Waking your preview");
     expect(getPreviewStatus(PROJECT_ID)).toMatchObject({
       stage: "starting",
       message: "Connecting to the preview…",
@@ -418,7 +419,7 @@ describe("host preview gateway integration", () => {
     });
 
     expect(navigation.status).toBe(200);
-    expect(await navigation.text()).toContain("Starting your preview");
+    expect(await navigation.text()).toContain("Waking your preview");
     expect(getPreviewStatus(PROJECT_ID)).toMatchObject({
       stage: "starting",
       message: "Waiting for the preview to respond…",

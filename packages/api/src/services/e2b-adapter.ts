@@ -21,6 +21,8 @@ import {
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const ABSOLUTE_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS = 60_000;
+const PROCESS_MONITOR_REQUEST_TIMEOUT_MS = 10_000;
+const PROCESS_MONITOR_RETRY_DELAYS_MS = [0, 200, 1_000] as const;
 const PROCESS_LOG_ROOT = `${E2B_PROJECT_HOME}/.quillra-processes`;
 const MAX_FILE_CHUNK_BYTES = 256 * 1024;
 const ABSOLUTE_MAX_DIRECTORY_ENTRIES = 20_000;
@@ -88,6 +90,30 @@ export type E2BCommandResult = {
   error?: string;
 };
 
+export type E2BProcessMonitorFailureReason = "process-missing" | "monitor-unavailable";
+
+/**
+ * A command stream ending is not proof that its process exited. This error is
+ * reserved for cases where E2B did not return a real exit result and Quillra
+ * either confirmed that the PID disappeared or could not re-establish a
+ * trustworthy monitor after bounded liveness checks.
+ */
+export class E2BProcessMonitorError extends Error {
+  constructor(
+    readonly reason: E2BProcessMonitorFailureReason,
+    readonly stdout: string,
+    readonly stderr: string,
+    readonly causeName: string,
+  ) {
+    super(
+      reason === "process-missing"
+        ? "The E2B process stopped without returning an exit result."
+        : "Quillra could not re-establish the E2B process monitor.",
+    );
+    this.name = "E2BProcessMonitorError";
+  }
+}
+
 export type E2BProcess = {
   pid: number;
   wait(): Promise<E2BCommandResult>;
@@ -96,6 +122,7 @@ export type E2BProcess = {
 
 export type E2BCommandOptions = {
   cwd: string;
+  /** `0` keeps the E2B command event stream open without a deadline. */
   timeoutMs: number;
   signal?: AbortSignal;
   envs?: Record<string, string>;
@@ -1797,7 +1824,7 @@ class SdkSandboxHandle implements E2BSandboxHandle {
       ],
       { user: E2B_PROJECT_USER, signal: options.signal },
     );
-    const handle = await this.sandbox.commands.run(
+    let handle = await this.sandbox.commands.run(
       boundedCommandWrapper({
         command,
         logDirectory,
@@ -1810,7 +1837,13 @@ class SdkSandboxHandle implements E2BSandboxHandle {
         user: "root",
         cwd: options.cwd,
         timeoutMs: options.timeoutMs,
-        requestTimeoutMs: Math.min(options.timeoutMs, BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS),
+        // `timeoutMs: 0` intentionally leaves the long-lived event stream
+        // unlimited. The separate request timeout still bounds the initial
+        // handshake before E2B returns the PID.
+        requestTimeoutMs:
+          options.timeoutMs === 0
+            ? BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS
+            : Math.min(options.timeoutMs, BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS),
         signal: options.signal,
         envs: TRUSTED_LAUNCH_ENV,
         // Deliberately no stdout/stderr callbacks. The wrapped command redirects
@@ -1845,26 +1878,81 @@ class SdkSandboxHandle implements E2BSandboxHandle {
         })
         .catch(() => undefined);
     };
+    const readAndForwardLogs = async (): Promise<{ stdout: string; stderr: string }> => {
+      const [stdout, stderr] = await Promise.all([
+        readBoundedLog(stdoutFile).catch(() => ""),
+        readBoundedLog(stderrFile).catch(() => ""),
+      ]);
+      if (options.onStdout && stdout) await options.onStdout(stdout);
+      if (options.onStderr && stderr) await options.onStderr(stderr);
+      return { stdout, stderr };
+    };
+    const monitorCauseName = (error: unknown): string =>
+      error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,100}$/.test(error.name)
+        ? error.name
+        : "UnknownError";
+    const monitorFailure = async (
+      reason: E2BProcessMonitorFailureReason,
+      error: unknown,
+    ): Promise<never> => {
+      const logs = await readAndForwardLogs();
+      throw new E2BProcessMonitorError(reason, logs.stdout, logs.stderr, monitorCauseName(error));
+    };
+    const recoverMonitor = async (error: unknown): Promise<void> => {
+      let lastError = error;
+      for (const delayMs of PROCESS_MONITOR_RETRY_DELAYS_MS) {
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        }
+        try {
+          const processes = await this.sandbox.commands.list({
+            requestTimeoutMs: PROCESS_MONITOR_REQUEST_TIMEOUT_MS,
+            signal: options.signal,
+          });
+          if (!processes.some((process) => process.pid === handle.pid)) {
+            return monitorFailure("process-missing", error);
+          }
+          // A finite command has reached an ambiguous state and will be
+          // contained by its caller. Only deliberately unlimited preview
+          // streams are safe to reconnect and continue monitoring.
+          if (options.timeoutMs !== 0) {
+            return monitorFailure("monitor-unavailable", error);
+          }
+          handle = await this.sandbox.commands.connect(handle.pid, {
+            timeoutMs: 0,
+            requestTimeoutMs: BACKGROUND_COMMAND_REQUEST_TIMEOUT_MS,
+            signal: options.signal,
+          });
+          return;
+        } catch (reconnectError) {
+          if (reconnectError instanceof E2BProcessMonitorError) throw reconnectError;
+          lastError = reconnectError;
+        }
+      }
+      return monitorFailure("monitor-unavailable", lastError);
+    };
     const result: E2BProcess = {
       pid: handle.pid,
       wait: () => {
         waitPromise ??= (async () => {
-          let commandResult: E2BCommandResult;
-          try {
-            commandResult = await handle.wait();
-          } catch (error) {
-            const normalized = normalizeCommandFailure(error);
-            if (!normalized) throw error;
-            commandResult = normalized;
+          let commandResult: E2BCommandResult | undefined;
+          while (!commandResult) {
+            try {
+              commandResult = await handle.wait();
+            } catch (error) {
+              const normalized = normalizeCommandFailure(error);
+              if (normalized) {
+                commandResult = normalized;
+              } else {
+                await recoverMonitor(error);
+              }
+            }
           }
           // Never signal the numeric process group after wait has observed its
           // leader exit: Linux may already have reused that PID for a newer
           // preview. Runtime callers quiesce the whole project UID before
           // writeback, restart, or relay teardown.
-          const stdout = await readBoundedLog(stdoutFile);
-          const stderr = await readBoundedLog(stderrFile);
-          if (options.onStdout && stdout) await options.onStdout(stdout);
-          if (options.onStderr && stderr) await options.onStderr(stderr);
+          const { stdout, stderr } = await readAndForwardLogs();
           return { ...commandResult, stdout, stderr };
         })().finally(async () => {
           await this.sandbox.files

@@ -15,6 +15,8 @@
  *   - agent-stream-mapper.ts, SDK message → WS event
  *   - agent-diagnostics-tools.ts, in-process MCP server
  */
+import fs from "node:fs";
+import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ProjectRole } from "../db/app-schema.js";
 import { buildAgentDiagnosticsMcpServer } from "./agent-diagnostics-tools.js";
@@ -30,7 +32,7 @@ import { type RoleName, getRolePrompt } from "./role-prompts.js";
 
 export { mapSdkMessageToClient } from "./agent-stream-mapper.js";
 
-/** Raw usage summary yielded once per successful run. The numbers come
+/** Raw usage summary yielded once per terminal run. The numbers come
  *  straight from the SDK's result envelope so the caller persists what
  *  Anthropic actually billed, not our own approximation. */
 export type AgentRunUsage = {
@@ -67,12 +69,29 @@ export type ProjectAgentParams = {
    *  tool permissions and the Astro migration skill is appended to
    *  the system prompt. See services/astro-migration-skill.ts. */
   migrationMode?: boolean;
-  /** Fired exactly once per successful run, right before the `done`
-   *  message is yielded. The WS chat handler uses this to persist an
-   *  agent_runs row for the Usage tab. On error/abort the callback
-   *  does not fire. */
+  /** Fired exactly once per terminal SDK result, before its `done` or
+   *  `error` message is yielded. The WS chat handler uses this to persist
+   *  an agent_runs row for the Usage tab. Thrown startup errors and aborts
+   *  that have no SDK result envelope cannot report usage. */
   onResult?: (usage: AgentRunUsage) => void;
 };
+
+/**
+ * Keep resumable Claude transcripts beside Quillra's SQLite database. That
+ * directory is already required to live on the persistent API data volume in
+ * production, unlike the container user's HOME. The fixed instance-level
+ * directory deliberately contains no project/user identifiers or credentials;
+ * Claude namespaces individual sessions below it.
+ */
+function ensureClaudeConfigDirectory(): string {
+  const rawUrl = process.env.DATABASE_URL ?? "file:./data/cms.sqlite";
+  const filePath = rawUrl.startsWith("file:") ? rawUrl.slice("file:".length) : rawUrl;
+  const databasePath = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+  const configDirectory = path.join(path.dirname(databasePath), "claude-agent");
+  fs.mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(configDirectory, 0o700);
+  return configDirectory;
+}
 
 export async function* runProjectAgent(
   params: ProjectAgentParams,
@@ -194,6 +213,7 @@ async function* runRegisteredProjectAgent(
   async function* run(sessionId: string | null): AsyncGenerator<Record<string, unknown>> {
     const diagnosticsServer = buildDiagnosticsForThisQuery();
     const executionServer = buildExecutionForThisQuery();
+    const claudeConfigDirectory = ensureClaudeConfigDirectory();
     const q = query({
       prompt: params.prompt,
       options: {
@@ -201,10 +221,21 @@ async function* runRegisteredProjectAgent(
         model,
         abortController,
         ...(sessionId ? { resume: sessionId } : {}),
-        systemPrompt: { type: "preset", preset: "claude_code", append: systemPromptText },
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: systemPromptText,
+          // The SDK moves cwd/git/memory metadata into the first user message,
+          // leaving the shared system prefix stable enough to cache across
+          // projects, users, and replicas.
+          excludeDynamicSections: true,
+        },
         env: createSafeSdkEnv({
           ANTHROPIC_API_KEY: anthropicApiKey,
           CLAUDE_AGENT_SDK_CLIENT_APP: "quillra/cms",
+          // Session transcripts must survive container replacement. This is
+          // control-plane state only and is never forwarded to project code.
+          CLAUDE_CONFIG_DIR: claudeConfigDirectory,
           // The SDK requires its container marker when Quillra supplies the
           // non-interactive permission callback below. This describes the
           // control-plane runtime; repository shell execution still happens
@@ -260,10 +291,10 @@ async function* runRegisteredProjectAgent(
         params.onSessionId?.(msg.session_id);
       }
       // Intercept the SDK's terminal `result` envelope to surface the
-      // per-run usage/cost before handing it to the mapper. Only fire
-      // onResult on success, the caller shouldn't bill the user for
-      // a run that failed halfway.
-      if (msg.type === "result" && msg.subtype === "success") {
+      // per-run usage/cost before handing it to the mapper. Anthropic may
+      // report billable usage on failed runs too, so every terminal SDK
+      // result contributes to accounting.
+      if (msg.type === "result") {
         try {
           const modelUsage = (msg as { modelUsage?: Record<string, unknown> }).modelUsage ?? {};
           let inputTokens = 0;

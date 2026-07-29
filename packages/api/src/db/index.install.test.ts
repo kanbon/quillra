@@ -143,6 +143,63 @@ describe("fresh-install database constraints", () => {
     expect(sqlite.pragma("foreign_key_check")).toEqual([]);
   });
 
+  it("enforces stable chat event ids, turn order, and conversation cleanup", async () => {
+    const sqlite = await loadFreshDatabase();
+    const now = Date.now();
+    sqlite
+      .prepare(
+        `INSERT INTO user
+          (id, name, email, emailVerified, instance_role, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("member-1", "Member", "member@example.com", 1, "member", now, now);
+    sqlite
+      .prepare("INSERT INTO projects (id, name, github_repo_full_name) VALUES (?, ?, ?)")
+      .run("project-1", "First site", "example/first-site");
+    sqlite
+      .prepare(
+        `INSERT INTO conversations
+          (id, project_id, created_by_user_id, title, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("conversation-1", "project-1", "member-1", "History", now, now);
+    const insertEvent = sqlite.prepare(
+      `INSERT INTO chat_events
+        (event_id, project_id, conversation_id, turn_id, turn_sequence, kind, content)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertEvent.run("event-1", "project-1", "conversation-1", "turn-1", 0, "user", "First");
+
+    expect(() =>
+      insertEvent.run(
+        "event-1",
+        "project-1",
+        "conversation-1",
+        "turn-1",
+        1,
+        "assistant",
+        "Duplicate id",
+      ),
+    ).toThrow(/UNIQUE constraint failed/);
+    expect(() =>
+      insertEvent.run(
+        "event-2",
+        "project-1",
+        "conversation-1",
+        "turn-1",
+        0,
+        "assistant",
+        "Duplicate sequence",
+      ),
+    ).toThrow(/UNIQUE constraint failed/);
+
+    sqlite.prepare("DELETE FROM conversations WHERE id = ?").run("conversation-1");
+    expect(sqlite.prepare("SELECT count(*) AS count FROM chat_events").get()).toEqual({
+      count: 0,
+    });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+  });
+
   it("bootstraps immutable GitHub bindings and user-scoped OAuth tables", async () => {
     const sqlite = await loadFreshDatabase();
     const now = Date.now();

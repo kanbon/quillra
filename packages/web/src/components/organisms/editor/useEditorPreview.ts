@@ -25,9 +25,18 @@ type PreviewMeta = {
   url: string;
   previewLabel: string;
   previewMode: "host" | "path";
+  accepted?: boolean;
   previewActive?: boolean;
   previewStarting?: boolean;
 };
+
+type ProjectPreviewMeta = PreviewMeta & { projectId: string };
+
+function withCacheBuster(rawUrl: string): string {
+  const url = new URL(rawUrl, window.location.href);
+  url.searchParams.set("t", String(Date.now()));
+  return url.toString();
+}
 
 export function useEditorPreview(projectId: string, autoStart = true) {
   const { t } = useT();
@@ -37,15 +46,33 @@ export function useEditorPreview(projectId: string, autoStart = true) {
   const [previewMode, setPreviewMode] = useState<"host" | "path" | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewStarted = useRef(false);
+  const activeProjectId = useRef(id);
 
-  const { mutate: startPreview, isPending: previewStarting } = useMutation({
-    mutationFn: async () => {
-      return apiJson<PreviewMeta>(`/api/projects/${id}/preview`, {
+  // React Router can keep this hook mounted while only the route parameter
+  // changes. Clear every project-owned value before the auto-start effect
+  // below runs, otherwise the next project can inherit the previous iframe
+  // URL and `previewStarted` guard.
+  useEffect(() => {
+    activeProjectId.current = id;
+    previewStarted.current = false;
+    setPreviewSrc(null);
+    setPreviewLabel("");
+    setPreviewMode(null);
+    setPreviewError(null);
+  }, [id]);
+
+  const { mutate: startPreviewMutation, isPending: previewStarting } = useMutation({
+    mutationFn: async (requestProjectId: string) => {
+      const response = await apiJson<PreviewMeta>(`/api/projects/${requestProjectId}/preview`, {
         method: "POST",
       });
+      return { ...response, projectId: requestProjectId } satisfies ProjectPreviewMeta;
     },
-    onMutate: () => setPreviewError(null),
+    onMutate: (requestProjectId) => {
+      if (requestProjectId === activeProjectId.current) setPreviewError(null);
+    },
     onSuccess: (res) => {
+      if (res.projectId !== activeProjectId.current) return;
       // /preview-meta already painted an authenticated boot URL. The start
       // response contains a freshly minted one-time handoff for callers that
       // did not fetch metadata first; replacing an existing URL here would
@@ -54,20 +81,53 @@ export function useEditorPreview(projectId: string, autoStart = true) {
       setPreviewLabel(res.previewLabel);
       setPreviewMode(res.previewMode);
     },
-    onError: (e: Error) => setPreviewError(e.message),
+    onError: (error: Error, requestProjectId) => {
+      if (requestProjectId === activeProjectId.current) setPreviewError(error.message);
+    },
   });
+  const startPreview = useCallback(() => startPreviewMutation(id), [id, startPreviewMutation]);
+
+  const { mutate: refreshPreviewMutation, isPending: previewRefreshing } = useMutation({
+    mutationFn: async (requestProjectId: string) => {
+      const response = await apiJson<PreviewMeta>(
+        `/api/projects/${requestProjectId}/preview/refresh`,
+        { method: "POST" },
+      );
+      return { ...response, projectId: requestProjectId } satisfies ProjectPreviewMeta;
+    },
+    onMutate: (requestProjectId) => {
+      if (requestProjectId === activeProjectId.current) setPreviewError(null);
+    },
+    onSuccess: (res) => {
+      if (res.projectId !== activeProjectId.current) return;
+      // The refresh endpoint revokes the stale route before acknowledging.
+      // Navigating now therefore lands on the authenticated warm-start page,
+      // which follows the replacement until the changed site is ready.
+      setPreviewSrc(withCacheBuster(res.url));
+      setPreviewLabel(res.previewLabel);
+      setPreviewMode(res.previewMode);
+    },
+    onError: (error: Error, requestProjectId) => {
+      if (requestProjectId === activeProjectId.current) setPreviewError(error.message);
+    },
+  });
+  const applyLatestChanges = useCallback(
+    () => refreshPreviewMutation(id),
+    [id, refreshPreviewMutation],
+  );
 
   const refreshPreview = useCallback(() => {
-    void apiJson<PreviewMeta>(`/api/projects/${id}/preview-meta`)
+    const requestProjectId = id;
+    void apiJson<PreviewMeta>(`/api/projects/${requestProjectId}/preview-meta`)
       .then((meta) => {
-        const url = new URL(meta.url, window.location.href);
-        url.searchParams.set("t", String(Date.now()));
-        setPreviewSrc(url.toString());
+        if (requestProjectId !== activeProjectId.current) return;
+        setPreviewSrc(withCacheBuster(meta.url));
         setPreviewLabel(meta.previewLabel);
         setPreviewMode(meta.previewMode);
         if (!meta.previewActive && !meta.previewStarting && !previewStarting) startPreview();
       })
       .catch(() => {
+        if (requestProjectId !== activeProjectId.current) return;
         setPreviewSrc((value) => {
           if (!value) return null;
           const url = new URL(value, window.location.href);
@@ -94,9 +154,11 @@ export function useEditorPreview(projectId: string, autoStart = true) {
     if (!id || !autoStart || previewStarted.current) return;
     previewStarted.current = true;
     void (async () => {
+      const requestedProjectId = id;
       let shouldStart = true;
       try {
         const meta = await apiJson<PreviewMeta>(`/api/projects/${id}/preview-meta`);
+        if (requestedProjectId !== activeProjectId.current) return;
         setPreviewLabel(meta.previewLabel);
         setPreviewSrc(meta.url);
         setPreviewMode(meta.previewMode);
@@ -104,6 +166,7 @@ export function useEditorPreview(projectId: string, autoStart = true) {
       } catch {
         /* not critical */
       }
+      if (requestedProjectId !== activeProjectId.current) return;
       if (shouldStart) startPreview();
     })();
   }, [autoStart, id, startPreview]);
@@ -119,8 +182,9 @@ export function useEditorPreview(projectId: string, autoStart = true) {
     previewMode,
     previewError,
     startLabel,
+    applyLatestChanges,
     refreshPreview,
     startPreview,
-    starting: previewStarting,
+    starting: previewStarting || previewRefreshing,
   };
 }

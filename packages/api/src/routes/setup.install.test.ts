@@ -8,6 +8,7 @@ import type { SessionUser } from "../lib/auth.js";
 const EXPECTED_TABLES = [
   "account",
   "agent_runs",
+  "chat_events",
   "client_login_codes",
   "client_sessions",
   "conversations",

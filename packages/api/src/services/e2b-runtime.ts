@@ -4,6 +4,8 @@ import {
   type E2BAdapter,
   type E2BCommandResult,
   type E2BProcess,
+  E2BProcessMonitorError,
+  type E2BProcessMonitorFailureReason,
   type E2BSandboxHandle,
   E2BSdkAdapter,
 } from "./e2b-adapter.js";
@@ -56,6 +58,14 @@ export type E2BPreviewStartResult = {
   pid: number;
   port: number;
   access: E2BPreviewAccess;
+};
+
+export type E2BPreviewMonitorFailure = {
+  reason: E2BProcessMonitorFailureReason;
+  message: string;
+  stdout: string;
+  stderr: string;
+  causeName: string;
 };
 
 export type E2BRuntimeConfig = {
@@ -355,6 +365,89 @@ function truncateUtf8(value: string, maxBytes = MAX_OUTPUT_BYTES_PER_STREAM): st
   const encoded = Buffer.from(value, "utf8");
   if (encoded.byteLength <= maxBytes) return value;
   return `${encoded.subarray(0, maxBytes).toString("utf8")}\n[output truncated by Quillra]`;
+}
+
+const PREVIEW_RAILWAY_LOG_TAIL_BYTES = 2 * 1024;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: strips ANSI color escapes from untrusted process output
+const ANSI_ESCAPE_PATTERN = /\u001b\[[0-9;]*m/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: removes non-printing control bytes before structured logging
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
+function sanitizedPreviewLogTail(value: string): string {
+  const encoded = Buffer.from(value, "utf8");
+  const tail =
+    encoded.byteLength <= PREVIEW_RAILWAY_LOG_TAIL_BYTES
+      ? value
+      : encoded.subarray(encoded.byteLength - PREVIEW_RAILWAY_LOG_TAIL_BYTES).toString("utf8");
+  return tail
+    .replaceAll(ANSI_ESCAPE_PATTERN, "")
+    .replaceAll(CONTROL_CHARACTER_PATTERN, "")
+    .replaceAll(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|e2b_[A-Za-z0-9_-]{12,})\b/g, "[redacted]")
+    .replaceAll(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replaceAll(
+      /((?:api[_-]?key|token|secret|password|authorization|cookie)\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted]",
+    )
+    .replaceAll(/(https?:\/\/[^\s?#]+)\?[^\s]*/gi, "$1?[redacted]");
+}
+
+function safeErrorName(error: unknown): string {
+  return error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,100}$/.test(error.name)
+    ? error.name
+    : "UnknownError";
+}
+
+function logPreviewLifecycle(
+  level: "info" | "error",
+  event: string,
+  fields: {
+    projectId: string;
+    sandboxId: string;
+    pid: number | null;
+    port: number;
+    cause: string;
+    exitCode?: number;
+    stdout?: string;
+    stderr?: string;
+  },
+): void {
+  const payload = {
+    event,
+    projectId: fields.projectId,
+    sandboxId: fields.sandboxId,
+    pid: fields.pid,
+    port: fields.port,
+    cause: fields.cause,
+    ...(fields.exitCode === undefined ? {} : { exitCode: fields.exitCode }),
+    tails: {
+      stdout: sanitizedPreviewLogTail(fields.stdout ?? ""),
+      stderr: sanitizedPreviewLogTail(fields.stderr ?? ""),
+    },
+  };
+  // biome-ignore lint/suspicious/noConsole: Railway captures this sanitized lifecycle event
+  console[level](`[e2b-preview] ${JSON.stringify(payload)}`);
+}
+
+function normalizePreviewMonitorFailure(error: unknown): E2BPreviewMonitorFailure {
+  if (error instanceof E2BProcessMonitorError) {
+    return {
+      reason: error.reason,
+      message:
+        error.reason === "process-missing"
+          ? "The secure preview process stopped unexpectedly."
+          : "The secure preview connection was lost.",
+      stdout: error.stdout,
+      stderr: error.stderr,
+      causeName: error.causeName,
+    };
+  }
+  return {
+    reason: "monitor-unavailable",
+    message: "The secure preview connection was lost.",
+    stdout: "",
+    stderr: "",
+    causeName: safeErrorName(error),
+  };
 }
 
 function setupFailure(result: E2BCommandResult): Error {
@@ -944,11 +1037,12 @@ export class E2BRuntime {
       localRoot: string;
       command: string;
       port: number;
-      timeoutMs?: number;
+      setupTimeoutMs?: number;
       signal?: AbortSignal;
       onStdout?: (chunk: string) => void | Promise<void>;
       onStderr?: (chunk: string) => void | Promise<void>;
       onExit?: (result: E2BCommandResult) => void | Promise<void>;
+      onMonitorFailure?: (failure: E2BPreviewMonitorFailure) => void | Promise<void>;
       setupCommand?: string;
       setupCacheKey?: string;
       onSetupStart?: () => void | Promise<void>;
@@ -974,7 +1068,7 @@ export class E2BRuntime {
       const setupCommand =
         options.setupCommand === undefined ? undefined : validateCommand(options.setupCommand);
       const setupCacheKey = validateSetupCacheKey(options.setupCacheKey);
-      const timeoutMs = validateCommandTimeout(options.timeoutMs);
+      const setupTimeoutMs = validateCommandTimeout(options.setupTimeoutMs);
       const nodeRuntime = await resolveProjectE2BNodeRuntime(options.localRoot, {
         defaultWhenMissing: options.defaultNodeRuntime,
       });
@@ -1015,7 +1109,7 @@ export class E2BRuntime {
             setupCommand,
             setupCacheKey,
             nodeRuntime,
-            timeoutMs,
+            timeoutMs: setupTimeoutMs,
             signal,
             onStdout: options.onStdout,
             onStderr: options.onStderr,
@@ -1028,7 +1122,10 @@ export class E2BRuntime {
         await sandbox.startPreviewRelay(options.port, signal);
         process = await sandbox.startCommand(command, {
           cwd: E2B_PREVIEW_ROOT,
-          timeoutMs,
+          // E2B's command timeout is also the lifetime of the SDK event
+          // stream. A dev server is intentionally long-lived, so keep that
+          // stream unlimited and recover it by PID if the transport drops.
+          timeoutMs: 0,
           signal,
           maxOutputBytes: MAX_OUTPUT_BYTES_PER_STREAM,
           envs: {
@@ -1061,17 +1158,23 @@ export class E2BRuntime {
         sandboxId: sandbox.sandboxId,
         pid: process.pid,
       });
+      logPreviewLifecycle("info", "started", {
+        projectId: fence.projectId,
+        sandboxId: sandbox.sandboxId,
+        pid: process.pid,
+        port: options.port,
+        cause: "preview-started",
+      });
       void process
         .wait()
-        .catch(
-          (): E2BCommandResult => ({
-            exitCode: 1,
-            stdout: "",
-            stderr: "",
-            error: "The E2B preview process ended unexpectedly.",
+        .then(
+          (result) => ({ kind: "exit" as const, result }),
+          (error) => ({
+            kind: "monitor-failure" as const,
+            failure: normalizePreviewMonitorFailure(error),
           }),
         )
-        .then(async (result) => {
+        .then(async (termination) => {
           const launch = this.previewLaunches.get(fence.projectId);
           if (
             launch?.token !== launchToken ||
@@ -1086,8 +1189,34 @@ export class E2BRuntime {
             // cleanup can block.
             unregisterPreviewUpstream(fence.projectId);
           }
+          if (termination.kind === "exit") {
+            logPreviewLifecycle("error", "stopped", {
+              projectId: fence.projectId,
+              sandboxId: sandbox.sandboxId,
+              pid: process.pid,
+              port: options.port,
+              cause: "process-exit",
+              exitCode: termination.result.exitCode,
+              stdout: termination.result.stdout,
+              stderr: termination.result.stderr,
+            });
+          } else {
+            logPreviewLifecycle("error", "monitor-failed", {
+              projectId: fence.projectId,
+              sandboxId: sandbox.sandboxId,
+              pid: process.pid,
+              port: options.port,
+              cause: `${termination.failure.reason}:${termination.failure.causeName}`,
+              stdout: termination.failure.stdout,
+              stderr: termination.failure.stderr,
+            });
+          }
           try {
-            await options.onExit?.(result);
+            if (termination.kind === "exit") {
+              await options.onExit?.(termination.result);
+            } else {
+              await options.onMonitorFailure?.(termination.failure);
+            }
           } finally {
             await this.runProjectOperation(fence, async () => {
               if (this.previewLaunches.get(fence.projectId)?.token !== launchToken) return;
@@ -1100,7 +1229,14 @@ export class E2BRuntime {
                 await sandbox.quiesceProjectProcesses();
                 await sandbox.stopPreviewRelay();
                 this.store.setPreview(fence.projectId, sandbox.sandboxId, null);
-              } catch {
+              } catch (error) {
+                logPreviewLifecycle("error", "cleanup-failed", {
+                  projectId: fence.projectId,
+                  sandboxId: sandbox.sandboxId,
+                  pid: process.pid,
+                  port: options.port,
+                  cause: safeErrorName(error),
+                });
                 await this.quarantinePreviewFailure(current, sandbox);
               }
             });

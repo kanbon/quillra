@@ -18,7 +18,7 @@ const PORT = 4_321;
 
 afterEach(() => {
   vi.restoreAllMocks();
-  setPreviewStatus(PROJECT_ID, "idle");
+  setPreviewStatus(PROJECT_ID, "idle", undefined, "warm");
   unregisterPreviewPort(PROJECT_ID);
   unregisterPreviewUpstream(PROJECT_ID);
 });
@@ -51,6 +51,7 @@ describe("routable preview status", () => {
 
     await expect(readPreviewStatus(PROJECT_ID, PORT)).resolves.toEqual({
       stage: "ready",
+      mode: "warm",
       label: "Ready",
       detail: "Loading your site…",
     });
@@ -76,8 +77,21 @@ describe("routable preview status", () => {
 
     await expect(readPreviewStatus(PROJECT_ID, PORT)).resolves.toEqual({
       stage: "starting",
+      mode: "warm",
       label: "Starting the preview",
       detail: "Waiting for Vite",
+    });
+  });
+
+  it("keeps the cold-start mode for the rest of the same launch", async () => {
+    setPreviewStatus(PROJECT_ID, "starting", "Preparing the sandbox", "warm");
+    setPreviewStatus(PROJECT_ID, "installing", "Installing packages", "cold");
+    setPreviewStatus(PROJECT_ID, "starting", "Launching Vite");
+
+    await expect(readPreviewStatus(PROJECT_ID, PORT)).resolves.toMatchObject({
+      stage: "starting",
+      mode: "cold",
+      detail: "Launching Vite",
     });
   });
 });

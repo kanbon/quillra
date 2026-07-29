@@ -15,7 +15,13 @@ vi.mock("./e2b-workspace-sync.js", () => ({
   syncE2BWorkspaceToLocal: sync.from,
 }));
 
-import type { E2BAdapter, E2BCommandResult, E2BProcess, E2BSandboxHandle } from "./e2b-adapter.js";
+import {
+  type E2BAdapter,
+  type E2BCommandResult,
+  type E2BProcess,
+  E2BProcessMonitorError,
+  type E2BSandboxHandle,
+} from "./e2b-adapter.js";
 import { E2BTrustedEnvironmentError } from "./e2b-preview-relay.js";
 import {
   E2BActivePreviewError,
@@ -70,10 +76,12 @@ class MemoryStore implements E2BProjectSandboxStore {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function completedProcess(
@@ -852,6 +860,7 @@ describe("E2B runtime", () => {
       "npm run dev",
       expect.objectContaining({
         cwd: "/home/quillra-project/quillra-preview",
+        timeoutMs: 0,
         envs: { HOST: "127.0.0.1", PORT: "4321" },
       }),
     );
@@ -861,6 +870,62 @@ describe("E2B runtime", () => {
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(result));
     await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
     expect(sync.from).not.toHaveBeenCalled();
+  });
+
+  it("reports a monitor failure separately from a confirmed process exit and fails closed", async () => {
+    const previewDone = deferred<E2BCommandResult>();
+    const sandbox = fakeSandbox(previewDone.promise);
+    const { runtime, store } = runtimeFixture(sandbox);
+    const onExit = vi.fn();
+    const onMonitorFailure = vi.fn();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await runtime.startPreview(
+      { projectId: "project-a", githubBindingGeneration: 1 },
+      {
+        localRoot,
+        command: "npm run dev",
+        port: 4_321,
+        onExit,
+        onMonitorFailure,
+      },
+    );
+
+    previewDone.reject(
+      new E2BProcessMonitorError(
+        "monitor-unavailable",
+        "token=should-not-leak",
+        "Bearer secret-value",
+        "ConnectError",
+      ),
+    );
+
+    await vi.waitFor(() =>
+      expect(onMonitorFailure).toHaveBeenCalledWith({
+        reason: "monitor-unavailable",
+        message: "The secure preview connection was lost.",
+        stdout: "token=should-not-leak",
+        stderr: "Bearer secret-value",
+        causeName: "ConnectError",
+      }),
+    );
+    expect(onExit).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(sandbox.stopPreviewRelay).toHaveBeenCalledOnce());
+    expect(store.get("project-a")).toMatchObject({
+      previewPid: null,
+      previewPort: null,
+    });
+    expect(getPreviewUpstream("project-a", 4_321)).toBeNull();
+    const monitorLog = errorLog.mock.calls
+      .flat()
+      .find((value) => typeof value === "string" && value.includes('"event":"monitor-failed"'));
+    expect(monitorLog).toContain('"projectId":"project-a"');
+    expect(monitorLog).toContain('"pid":42');
+    expect(monitorLog).toContain('"port":4321');
+    expect(monitorLog).toContain('"cause":"monitor-unavailable:ConnectError"');
+    expect(monitorLog).toContain("[redacted]");
+    expect(monitorLog).not.toContain("should-not-leak");
+    expect(monitorLog).not.toContain("secret-value");
   });
 
   it("finishes preview setup before opening the relay and starting the dev server", async () => {

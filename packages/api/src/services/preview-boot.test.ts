@@ -6,6 +6,7 @@ type PreviewStage = "cloning" | "installing" | "starting";
 
 type PollResponse = {
   stage: PreviewStage | "ready" | "error";
+  mode?: "cold" | "warm";
   label?: string;
   detail?: string;
 };
@@ -69,23 +70,34 @@ function createHarness(
     dataset: { stage },
     textContent: "",
   }));
-  const elements: Record<"detail" | "label" | "retry", FakeElement> = {
-    detail: {
-      classList: new FakeClassList("detail"),
-      dataset: {},
-      textContent: "Getting things ready…",
-    },
-    label: {
-      classList: new FakeClassList(),
-      dataset: {},
-      textContent: "Starting your preview",
-    },
-    retry: {
-      classList: new FakeClassList("retry", "hidden"),
-      dataset: {},
-      textContent: "Retry",
-    },
-  };
+  const elements: Record<"cold-steps" | "detail" | "label" | "retry" | "warm-state", FakeElement> =
+    {
+      "cold-steps": {
+        classList: new FakeClassList("steps", "hidden"),
+        dataset: {},
+        textContent: "",
+      },
+      detail: {
+        classList: new FakeClassList("detail"),
+        dataset: {},
+        textContent: "This prepared project should be ready in a moment.",
+      },
+      label: {
+        classList: new FakeClassList(),
+        dataset: {},
+        textContent: "Waking your preview",
+      },
+      retry: {
+        classList: new FakeClassList("retry", "hidden"),
+        dataset: {},
+        textContent: "Retry",
+      },
+      "warm-state": {
+        classList: new FakeClassList("warm-state"),
+        dataset: {},
+        textContent: "",
+      },
+    };
 
   const document = {
     getElementById(id: string): FakeElement | null {
@@ -253,7 +265,7 @@ describe("preview boot document", () => {
     expect(harness.steps[1]?.classList.contains("active")).toBe(true);
     expect(harness.steps.every((step) => !step.classList.contains("failed"))).toBe(true);
     expect(harness.elements.retry.classList.contains("hidden")).toBe(true);
-    expect(harness.elements.label.textContent).toMatch(/still setting things up/i);
+    expect(harness.elements.label.textContent).toMatch(/finishing the one-time setup/i);
     expect(harness.elements.detail.textContent).toBe("Installing dependencies");
     expect(harness.pendingTimerDelays()).toEqual([5_000]);
 
@@ -308,7 +320,8 @@ describe("preview boot document", () => {
     expect(harness.elements.label.textContent).toBe("Preview status unavailable");
     expect(harness.elements.detail.textContent).toMatch(/could not check the preview status/i);
     expect(harness.elements.retry.classList.contains("hidden")).toBe(false);
-    expect(harness.steps.filter((step) => step.classList.contains("failed"))).toHaveLength(1);
+    expect(harness.elements["warm-state"].classList.contains("failed")).toBe(true);
+    expect(harness.steps.filter((step) => step.classList.contains("failed"))).toHaveLength(0);
   });
 
   it("does not schedule another poll after a real backend error", async () => {
@@ -377,18 +390,43 @@ describe("preview boot document", () => {
 
     await harness.respond({
       stage: "starting",
+      mode: "warm",
       detail: "Waiting for the dev server",
     });
+    expect(harness.elements["warm-state"].classList.contains("hidden")).toBe(false);
+    expect(harness.elements["cold-steps"].classList.contains("hidden")).toBe(true);
     expect(harness.pendingTimerDelays()).toEqual([250]);
 
     harness.runTimer(250);
-    await harness.respond({ stage: "ready" });
+    await harness.respond({ stage: "ready", mode: "warm" });
     expect(harness.pendingTimerDelays()).toEqual([50]);
 
     harness.runTimer(50);
     expect(harness.replace).toHaveBeenCalledWith("https://preview.example.com/");
     expect(harness.reload).not.toHaveBeenCalled();
     expect(harness.pendingTimerDelays()).toEqual([]);
+  });
+
+  it("switches from a warm wake to the real one-time setup without stale stage ordering", async () => {
+    const harness = createHarness();
+
+    await harness.respond({
+      stage: "starting",
+      mode: "warm",
+      detail: "Checking the prepared project",
+    });
+    harness.runTimer(250);
+    await harness.respond({
+      stage: "installing",
+      mode: "cold",
+      detail: "Installing a changed dependency set",
+    });
+
+    expect(harness.elements["warm-state"].classList.contains("hidden")).toBe(true);
+    expect(harness.elements["cold-steps"].classList.contains("hidden")).toBe(false);
+    expect(harness.steps[0]?.classList.contains("done")).toBe(true);
+    expect(harness.steps[1]?.classList.contains("active")).toBe(true);
+    expect(harness.elements.detail.textContent).toBe("Installing a changed dependency set");
   });
 
   it("asks the authorized editor parent for a fresh start when retry is selected", async () => {
@@ -407,7 +445,7 @@ describe("preview boot document", () => {
     );
     expect(harness.reload).not.toHaveBeenCalled();
     expect(harness.elements.retry.classList.contains("hidden")).toBe(true);
-    expect(harness.elements.label.textContent).toBe("Retrying your preview");
+    expect(harness.elements.label.textContent).toBe("Restarting your preview");
     expect(harness.pendingTimerDelays()).toEqual([750]);
 
     harness.runTimer(750);

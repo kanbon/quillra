@@ -7,9 +7,11 @@ import { isE2BPreviewRelayUnavailable } from "./e2b-preview-relay.js";
 import { previewUpstreamUrl } from "./preview-upstream.js";
 
 export type PreviewStage = "idle" | "cloning" | "installing" | "starting" | "ready" | "error";
+export type PreviewStartupMode = "cold" | "warm";
 
 export type PreviewStatus = {
   stage: PreviewStage;
+  mode: PreviewStartupMode;
   message?: string;
   updatedAt: number;
 };
@@ -19,12 +21,28 @@ const portToProject = new Map<number, string>();
 const portByProject = new Map<string, number>();
 const activeProjects = new Set<string>();
 
-export function setPreviewStatus(projectId: string, stage: PreviewStage, message?: string) {
-  statusByProject.set(projectId, { stage, message, updatedAt: Date.now() });
+export function setPreviewStatus(
+  projectId: string,
+  stage: PreviewStage,
+  message?: string,
+  mode?: PreviewStartupMode,
+) {
+  statusByProject.set(projectId, {
+    stage,
+    mode: mode ?? statusByProject.get(projectId)?.mode ?? "warm",
+    message,
+    updatedAt: Date.now(),
+  });
 }
 
 export function getPreviewStatus(projectId: string): PreviewStatus {
-  return statusByProject.get(projectId) ?? { stage: "idle", updatedAt: Date.now() };
+  return (
+    statusByProject.get(projectId) ?? {
+      stage: "idle",
+      mode: "warm",
+      updatedAt: Date.now(),
+    }
+  );
 }
 
 export function registerPreviewPort(port: number, projectId: string) {
@@ -124,7 +142,12 @@ export async function readPreviewStatus(projectId: string, port: number) {
   // can use the tracked result immediately instead of paying another provider
   // round trip on every warm iframe load.
   if (status.stage === "ready" && isPreviewRoutable(projectId, port)) {
-    return { stage: "ready" as const, label: "Ready", detail: "Loading your site…" };
+    return {
+      stage: "ready" as const,
+      mode: status.mode,
+      label: "Ready",
+      detail: "Loading your site…",
+    };
   }
 
   if (isPreviewPortActive(projectId, port)) {
@@ -137,7 +160,12 @@ export async function readPreviewStatus(projectId: string, port: number) {
         redirect: "manual",
       });
       if (probe.status > 0 && !isE2BPreviewRelayUnavailable(probe)) {
-        return { stage: "ready" as const, label: "Ready", detail: "Loading your site…" };
+        return {
+          stage: "ready" as const,
+          mode: status.mode,
+          label: "Ready",
+          detail: "Loading your site…",
+        };
       }
     } catch {
       /* not reachable yet, fall through to the tracked lifecycle */
@@ -147,6 +175,7 @@ export async function readPreviewStatus(projectId: string, port: number) {
   const description = describeStage(status.stage);
   return {
     stage: status.stage,
+    mode: status.mode,
     label: description.label,
     detail: status.message ?? description.detail,
   };

@@ -262,6 +262,30 @@ describe("project-scoped client sessions", () => {
         "client-2",
         "99.00",
       );
+    rawSqlite
+      .prepare(
+        `INSERT INTO chat_events
+           (event_id, project_id, conversation_id, turn_id, turn_sequence, kind, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "own-event",
+        "project-1",
+        "own-conversation",
+        "own-turn",
+        0,
+        "user",
+        "own message",
+        now,
+        "other-event",
+        "project-1",
+        "other-conversation",
+        "other-turn",
+        0,
+        "user",
+        "other client's message",
+        now,
+      );
 
     const messages = await app.request("/projects/project-1/messages");
     expect(messages.status).toBe(200);
@@ -272,7 +296,24 @@ describe("project-scoped client sessions", () => {
     const otherMessages = await app.request(
       "/projects/project-1/messages?conversationId=other-conversation",
     );
-    await expect(otherMessages.json()).resolves.toEqual({ messages: [] });
+    await expect(otherMessages.json()).resolves.toMatchObject({ messages: [], events: [] });
+
+    const ownMessages = await app.request(
+      "/projects/project-1/messages?conversationId=own-conversation",
+    );
+    await expect(ownMessages.json()).resolves.toMatchObject({
+      messages: [{ content: "own message", conversationId: "own-conversation" }],
+      events: [
+        {
+          id: "own-event",
+          turnId: "own-turn",
+          sequence: 0,
+          kind: "user",
+          content: "own message",
+        },
+      ],
+      hasMore: false,
+    });
 
     const ownCost = await app.request(
       "/projects/project-1/conversations/own-conversation/cost-total",
@@ -282,6 +323,96 @@ describe("project-scoped client sessions", () => {
     expect(
       (await app.request("/projects/project-1/conversations/other-conversation/cost-total")).status,
     ).toBe(404);
+  });
+
+  it("returns complete conversation history and paginates durable events by cursor", async () => {
+    const { app, rawSqlite } = await createClientApp();
+    const now = Date.now();
+    rawSqlite
+      .prepare(
+        `INSERT INTO conversations
+           (id, project_id, created_by_user_id, title, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("long-conversation", "project-1", "client-1", "Long history", now, now);
+
+    const insertMessage = rawSqlite.prepare(
+      `INSERT INTO messages
+         (project_id, conversation_id, user_id, role, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const insertEvent = rawSqlite.prepare(
+      `INSERT INTO chat_events
+         (event_id, project_id, conversation_id, turn_id, turn_sequence, kind, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    rawSqlite.transaction(() => {
+      for (let index = 0; index < 105; index++) {
+        insertMessage.run(
+          "project-1",
+          "long-conversation",
+          "client-1",
+          "user",
+          `message-${index}`,
+          now + index,
+        );
+        insertEvent.run(
+          `event-${index}`,
+          "project-1",
+          "long-conversation",
+          "long-turn",
+          index,
+          "user",
+          `message-${index}`,
+          now + index,
+        );
+      }
+    })();
+
+    const completeResponse = await app.request(
+      "/projects/project-1/messages?conversationId=long-conversation",
+    );
+    expect(completeResponse.status).toBe(200);
+    const complete = (await completeResponse.json()) as {
+      messages: { content: string }[];
+      events: { cursor: number; sequence: number }[];
+      hasMore: boolean;
+    };
+    expect(complete.messages).toHaveLength(105);
+    expect(complete.events).toHaveLength(105);
+    expect(complete.messages.at(0)?.content).toBe("message-0");
+    expect(complete.messages.at(-1)?.content).toBe("message-104");
+    expect(complete.events.map((event) => event.sequence)).toEqual(
+      Array.from({ length: 105 }, (_, index) => index),
+    );
+    expect(complete.hasMore).toBe(false);
+
+    const firstPageResponse = await app.request(
+      "/projects/project-1/messages?conversationId=long-conversation&limit=40",
+    );
+    const firstPage = (await firstPageResponse.json()) as {
+      events: { cursor: number; sequence: number }[];
+      nextCursor: number;
+      hasMore: boolean;
+    };
+    expect(firstPage.events).toHaveLength(40);
+    expect(firstPage.events.at(-1)?.sequence).toBe(39);
+    expect(firstPage.nextCursor).toBe(firstPage.events.at(-1)?.cursor);
+    expect(firstPage.hasMore).toBe(true);
+
+    const secondPageResponse = await app.request(
+      `/projects/project-1/messages?conversationId=long-conversation&limit=40&after=${firstPage.nextCursor}`,
+    );
+    const secondPage = (await secondPageResponse.json()) as {
+      messages: { content: string }[];
+      events: { sequence: number }[];
+      hasMore: boolean;
+    };
+    expect(secondPage.messages).toEqual([]);
+    expect(secondPage.events).toHaveLength(40);
+    expect(secondPage.events.at(0)?.sequence).toBe(40);
+    expect(secondPage.events.at(-1)?.sequence).toBe(79);
+    expect(secondPage.hasMore).toBe(true);
   });
 
   it("uses the same project-pin predicate for WebSocket access", async () => {

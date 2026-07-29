@@ -48,14 +48,22 @@ type RawResponse = {
 export function usePreviewStatus(
   projectId: string | undefined,
   enabled = true,
+  revision?: string | null,
 ): PreviewStatus | null {
   const [status, setStatus] = useState<PreviewStatus | null>(null);
 
   useEffect(() => {
+    // `revision` intentionally restarts this effect even though only its
+    // identity matters; the URL itself is never sent to the debug endpoint.
+    void revision;
     if (!projectId || !enabled) {
       setStatus(null);
       return;
     }
+    // A changed iframe URL means a retry/replacement has started. Remove a
+    // terminal snapshot immediately so the previous error overlay cannot
+    // cover the new warm boot page until the next poll.
+    setStatus(null);
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -86,7 +94,7 @@ export function usePreviewStatus(
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [projectId, enabled]);
+  }, [projectId, enabled, revision]);
 
   return status;
 }

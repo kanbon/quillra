@@ -5,11 +5,12 @@ import { db } from "../../db/index.js";
 import { projects } from "../../db/schema.js";
 import { detectFramework } from "../../services/framework.js";
 import {
+  deactivatePreviewPort,
   getPreviewStatus,
   isPreviewRoutable,
   setPreviewStatus,
 } from "../../services/preview-status.js";
-import { previewUpstreamUrl } from "../../services/preview-upstream.js";
+import { previewUpstreamUrl, unregisterPreviewUpstream } from "../../services/preview-upstream.js";
 import { readProjectPackageJson } from "../../services/project-manifest.js";
 import {
   ensureRepoCloned,
@@ -29,6 +30,7 @@ import { type Variables, memberForProject, requireUser } from "./shared.js";
 
 type PreviewStartResult = { port: number; label: string };
 const previewStartRequests = new Map<string, Promise<PreviewStartResult>>();
+const previewRefreshRequests = new Map<string, Promise<PreviewStartResult>>();
 
 function coalescePreviewStart(
   projectId: string,
@@ -52,6 +54,74 @@ function coalescePreviewStart(
   return request;
 }
 
+type PreviewProject = typeof projects.$inferSelect;
+
+function launchProjectPreview(project: PreviewProject): Promise<PreviewStartResult> {
+  return runInProjectLock(
+    project.id,
+    async () => {
+      const checkoutReady = fs.existsSync(projectRepoPath(project.id));
+      setPreviewStatus(
+        project.id,
+        checkoutReady ? "starting" : "cloning",
+        checkoutReady
+          ? "Preparing the latest project files"
+          : `Fetching ${project.githubRepoFullName}`,
+        checkoutReady ? "warm" : "cold",
+      );
+      try {
+        const repoPath = await ensureRepoCloned(
+          project.id,
+          project.githubRepoFullName,
+          project.defaultBranch,
+          {
+            expectedBindingGeneration: project.githubBindingGeneration,
+          },
+        );
+        return await startDevPreview(
+          project.id,
+          repoPath,
+          project.previewDevCommand,
+          project.githubBindingGeneration,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to start preview";
+        if (getPreviewStatus(project.id).stage !== "error") {
+          setPreviewStatus(project.id, "error", message);
+        }
+        throw error;
+      }
+    },
+    project,
+  );
+}
+
+/**
+ * AI turns can finish while the initial preview is still starting. Queue one
+ * replacement after that launch instead of accidentally sharing its stale
+ * snapshot. Multiple browser tabs still coalesce onto the same replacement.
+ */
+function queuePreviewRefresh(project: PreviewProject): Promise<PreviewStartResult> {
+  const key = `${project.id}:${project.githubBindingGeneration}`;
+  const existing = previewRefreshRequests.get(key);
+  if (existing) return existing;
+
+  const precedingStart = previewStartRequests.get(key);
+  const request = (precedingStart ? precedingStart.catch(() => undefined) : Promise.resolve()).then(
+    () => launchProjectPreview(project),
+  );
+  previewRefreshRequests.set(key, request);
+  void request.then(
+    () => {
+      if (previewRefreshRequests.get(key) === request) previewRefreshRequests.delete(key);
+    },
+    () => {
+      if (previewRefreshRequests.get(key) === request) previewRefreshRequests.delete(key);
+    },
+  );
+  return request;
+}
+
 export const previewRouter = new Hono<{ Variables: Variables }>()
   .post("/:id/preview", async (c) => {
     const r = await requireUser(c);
@@ -63,30 +133,7 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
     if (!p) return c.json({ error: "Not found" }, 404);
     try {
       const { port, label } = await coalescePreviewStart(projectId, p.githubBindingGeneration, () =>
-        runInProjectLock(
-          projectId,
-          async () => {
-            setPreviewStatus(projectId, "cloning", `Fetching ${p.githubRepoFullName}`);
-            try {
-              const repoPath = await ensureRepoCloned(p.id, p.githubRepoFullName, p.defaultBranch, {
-                expectedBindingGeneration: p.githubBindingGeneration,
-              });
-              return await startDevPreview(
-                projectId,
-                repoPath,
-                p.previewDevCommand,
-                p.githubBindingGeneration,
-              );
-            } catch (error) {
-              const message = error instanceof Error ? error.message : "Failed to start preview";
-              if (getPreviewStatus(projectId).stage !== "error") {
-                setPreviewStatus(projectId, "error", message);
-              }
-              throw error;
-            }
-          },
-          p,
-        ),
+        launchProjectPreview(p),
       );
       const preview = getPreviewAddress(projectId, port);
       return c.json({ url: preview.url, previewMode: preview.mode, port, previewLabel: label });
@@ -94,6 +141,54 @@ export const previewRouter = new Hono<{ Variables: Variables }>()
       const message = e instanceof Error ? e.message : "Failed to start preview";
       return c.json({ error: message }, 500);
     }
+  })
+  /**
+   * Apply the control-plane checkout to an already-running isolated preview.
+   *
+   * This endpoint acknowledges immediately so the browser can swap to the
+   * authenticated boot document while the replacement is serialized behind
+   * the agent's project lock. The old E2B route is revoked first: users never
+   * see a stale preview presented as if it contained the new AI edits.
+   */
+  .post("/:id/preview/refresh", async (c) => {
+    const r = await requireUser(c);
+    if ("error" in r) return r.error;
+    const projectId = c.req.param("id");
+    const m = await memberForProject(r.user.id, projectId);
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!p) return c.json({ error: "Not found" }, 404);
+
+    const port = await reserveAvailablePreviewPort(projectId);
+    deactivatePreviewPort(projectId, port);
+    unregisterPreviewUpstream(projectId, port);
+    setPreviewStatus(projectId, "starting", "Applying the latest changes", "warm");
+
+    const request = queuePreviewRefresh(p);
+    void request.catch((error) => {
+      console.error("[preview-refresh] replacement failed", {
+        projectId,
+        githubBindingGeneration: p.githubBindingGeneration,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    const preview = getPreviewAddress(projectId, port);
+    let previewLabel = "-";
+    const repo = projectRepoPath(projectId);
+    if (readProjectPackageJson(repo)) {
+      previewLabel = resolveDevCommand(repo, port, p.previewDevCommand).label;
+    }
+    return c.json(
+      {
+        accepted: true,
+        url: preview.url,
+        previewMode: preview.mode,
+        port,
+        previewLabel,
+      },
+      202,
+    );
   })
   /**
    * Wipe node_modules and reinstall without re-cloning. Heals a project

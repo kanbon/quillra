@@ -4,7 +4,7 @@ import { SetupGate } from "@/components/templates/SetupGate";
 import { I18nProvider } from "@/i18n/i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense, lazy } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 
 const AcceptInvitePage = lazy(() =>
   import("@/pages/AcceptInvite").then((module) => ({ default: module.AcceptInvitePage })),
@@ -38,6 +38,11 @@ const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 });
 
+function ProjectEditorRoute() {
+  const { projectId = "" } = useParams<{ projectId: string }>();
+  return <EditorPage key={projectId} />;
+}
+
 export function App() {
   return (
     <QueryClientProvider client={qc}>
@@ -69,7 +74,7 @@ export function App() {
                   path="/p/:projectId"
                   element={
                     <RequireAuth>
-                      <EditorPage />
+                      <ProjectEditorRoute />
                     </RequireAuth>
                   }
                 />
